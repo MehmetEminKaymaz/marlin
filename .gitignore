@@ -1,0 +1,19 @@
+# CMake ve build dizinleri
+cmake-build-debug/
+cmake-build-release/
+build/
+
+# Derleyici çıktıları
+*.o
+*.a
+*.so
+
+# ANTLR ile otomatik üretilen kodlar
+generated/
+
+# CLion proje ayarları (Önemli: Eğer ortak çalışmıyorsan tutmana gerek yok)
+.idea/
+
+# İşletim sistemi çöpleri
+.DS_Store
+Thumbs.db
