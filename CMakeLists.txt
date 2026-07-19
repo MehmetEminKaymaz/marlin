@@ -59,6 +59,38 @@ set(ANTLR_GENERATED_SRC
         ${ANTLR_OUT_DIR}/minikVisitor.h
         ${ANTLR_OUT_DIR}/minikBaseVisitor.cpp
         ${ANTLR_OUT_DIR}/minikBaseVisitor.h
+
+)
+
+set(PROJECT_SOURCES
+        AST/ASTBuilder.cpp
+        AST/ASTBuilder.h
+        AST/ASTNode.cpp
+        AST/ASTNode.h
+        AST/ASTVisitor.cpp
+        AST/ASTVisitor.h
+        AST/Enums/StatementKind.cpp
+        AST/Enums/StatementKind.h
+        AST/Enums/ExperessionKind.cpp
+        AST/Enums/ExperessionKind.h
+        AST/Enums/TypeKind.cpp
+        AST/Enums/TypeKind.h
+        AST/ASTPrinter.cpp
+        AST/ASTPrinter.h
+        MLIRBackend/MLIRGenerator.cpp
+        MLIRBackend/MLIRGenerator.h
+        MLIRBackend/MLIRControlFlowManager.cpp
+        MLIRBackend/MLIRControlFlowManager.h
+        MLIRBackend/MLIRArithManager.cpp
+        MLIRBackend/MLIRArithManager.h
+        MLIRBackend/MLIRScopeManager.cpp
+        MLIRBackend/MLIRScopeManager.h
+        MLIRBackend/MLIRTypeManager.cpp
+        MLIRBackend/MLIRTypeManager.h
+        MLIRBackend/CodegenContext.cpp
+        MLIRBackend/CodegenContext.h
+        AST/ASTValidator.cpp
+        AST/ASTValidator.h
 )
 
 # 6. CMake'e bu dosyaları arka planda nasıl üreteceğini öğretiyoruz
@@ -79,6 +111,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_executable(minik_lang
         main.cpp
         ${ANTLR_GENERATED_SRC}
+        ${PROJECT_SOURCES}
 )
 
 # 8. ANTLR'ın ürettiği dosyaların ve bulduğumuz sistem başlıklarının yolunu projeye tanıt
@@ -92,7 +125,29 @@ target_link_libraries(minik_lang PRIVATE
         MLIRIR
         MLIRParser
         MLIRSupport
+        MLIRDialect
+
         LLVMCore
         LLVMSupport
+        LLVMAsmParser
+        LLVMIRReader
+        LLVMTransformUtils
+
+        MLIRFuncDialect
+        MLIRArithDialect
+        MLIRSCFDialect
+        MLIRMemRefDialect
+        MLIRLLVMDialect
+
+        MLIRToLLVMIRTranslationRegistration
+        MLIRFuncToLLVM
+        MLIRArithToLLVM
+        MLIRMemRefToLLVM
+        MLIRSCFToControlFlow
+        MLIRControlFlowToLLVM
+
+        MLIRPass
+        MLIRTransforms
+
         ${ANTLR4_LIBRARY}
 )

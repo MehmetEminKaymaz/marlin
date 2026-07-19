@@ -11,6 +11,7 @@ declaration
 
 statement
     : variableDefinition                                #VariableDefStatement
+    | assignmentStatement                               #AssignmentStmt
     | ifStatement                                       #IfStmt
     | whileStatement                                    #WhileStmt
     | forStatement                                      #ForStmt
@@ -23,6 +24,11 @@ statement
 
 block
     : '{' statement* '}'
+    ;
+
+assignmentStatement
+    : IDENTIFIER '=' expression ';'                    #DirectAssignment
+    | expression '[' expression ']' '=' expression ';' #ArrayElementAssignment
     ;
 
 functionDecl
@@ -39,6 +45,7 @@ param
 
 variableDefinition
     : variableType IDENTIFIER '=' expression ';'        #VariableTypeDefinitionWithExpression
+    | variableType IDENTIFIER ';'                       #VariableTypeDefinitionEmpty
     | 'let' IDENTIFIER '=' expression ';'               #VariableLetDefinitionWithExpression
     ;
 
