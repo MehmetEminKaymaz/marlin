@@ -62,7 +62,7 @@ int main() {
     "for sayi in dizi { total = total + sayi;}"
     "while total < 1000 { total = total + 1; }"
     "}"
-    "func myfunc() -> void { }"
+    "func myfunc() -> void { int total = 100; while total < 200 { total = total + 1; } string myNameIs = \"mehmet emin\"; }"
     ;
 
     std::cout << "--- Kaynak Kod ---\n" << sourceCode << "\n";

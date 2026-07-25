@@ -16,6 +16,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 class MLIRGenerator : public ASTVisitor {
     CodegenContext ctx;
@@ -105,15 +106,25 @@ public:
     void visit(Identifier* node) override {
         auto loc = ctx.getLoc(node->line, node->column);
         mlir::Value alloca = scopeManager.lookupVariable(node->name);
-        if (alloca) {
-            auto memRefType = mlir::dyn_cast<mlir::MemRefType>(alloca.getType());
-            if (memRefType && memRefType.getRank() > 0) {
-                // Dizi değişkeni → memref'in kendisi
+        if (!alloca) return;
+
+        // MemRef ise mevcut yöntem
+        if (auto memRefType = mlir::dyn_cast<mlir::MemRefType>(alloca.getType())) {
+            if (memRefType.getRank() > 0) {
                 lastValue = alloca;
             } else {
-                // Skaler → yükle
                 lastValue = ctx.builder.create<mlir::memref::LoadOp>(loc, alloca);
             }
+            return;
+        }
+
+        // LLVM alloca (örneğin string)
+        auto allocaOp = alloca.getDefiningOp<mlir::LLVM::AllocaOp>();
+        if (allocaOp) {
+            mlir::Type loadType = allocaOp.getElemType();   // <-- asıl tip buradan alınıyor
+            lastValue = ctx.builder.create<mlir::LLVM::LoadOp>(loc, loadType, alloca);
+        } else {
+            // Beklenmeyen durum: alloca LLVM değil
         }
     }
 
@@ -147,8 +158,6 @@ public:
             ctx.builder.create<mlir::memref::StoreOp>(loc, val, memref, mlir::ValueRange{index});
         }
     }
-
-
 
     void visit(ListLiteral* node) override {}
     void visit(ArrayAccessExpr* node) override {
@@ -195,7 +204,6 @@ public:
 
     void visit(VariableDecl* node) override {
         auto loc = ctx.getLoc(node->line, node->column);
-
         mlir::Value initVal;
         if (node->initializer) {
             node->initializer->accept(*this);
@@ -211,24 +219,47 @@ public:
                 } else if (defaultType.isInteger(1)) {
                     initVal = ctx.builder.create<mlir::arith::ConstantIntOp>(loc, 0, 1);
                 }
+                // String için varsayılan boş string (null pointer + 0) üretilebilir, şimdilik es geç.
             }
         }
 
         mlir::Type type = typeManager.convertType(node->type.get());
         if (!type && initVal) type = initVal.getType();
 
-        // Dizi ise boyutlu MemRef, değilse skalar (rank-0)
-        mlir::MemRefType memRefType;
-        if (node->type && node->type->arraySize > 0) {
-            memRefType = mlir::MemRefType::get({node->type->arraySize}, type);
+        // String tipini kontrol et
+        bool isString = node->type && node->type->kind == TypeKind::String;
+
+        mlir::Value alloca;
+        if (isString) {
+            // LLVM alloca kullan
+            mlir::OpBuilder::InsertionGuard guard(ctx.builder);
+            ctx.builder.setInsertionPointToStart(&ctx.builder.getInsertionBlock()->getParent()->front());
+
+            auto ptrType = mlir::LLVM::LLVMPointerType::get(&ctx.context);
+
+            // arraySize için sabit bir SSA değeri oluştur (tek eleman alloc ediyoruz)
+            mlir::Value arraySize = ctx.builder.create<mlir::arith::ConstantIntOp>(loc, 1, 64);
+
+            alloca = ctx.builder.create<mlir::LLVM::AllocaOp>(loc, ptrType, type, arraySize);
         } else {
-            memRefType = mlir::MemRefType::get({}, type);
+            // memref.alloca kullan
+            mlir::MemRefType memRefType;
+            if (node->type && node->type->arraySize > 0) {
+                memRefType = mlir::MemRefType::get({node->type->arraySize}, type);
+            } else {
+                memRefType = mlir::MemRefType::get({}, type);
+            }
+            alloca = ctx.builder.create<mlir::memref::AllocaOp>(loc, memRefType);
         }
 
-        mlir::Value alloca = ctx.builder.create<mlir::memref::AllocaOp>(loc, memRefType);
         if (initVal) {
-            ctx.builder.create<mlir::memref::StoreOp>(loc, initVal, alloca);
+            if (isString) {
+                ctx.builder.create<mlir::LLVM::StoreOp>(loc, initVal, alloca);
+            } else {
+                ctx.builder.create<mlir::memref::StoreOp>(loc, initVal, alloca);
+            }
         }
+
         scopeManager.declareVariable(node->name, alloca);
     }
 
@@ -302,8 +333,116 @@ public:
             [&]() { node->body->accept(*this); });
     }
 
-    void visit(ForRangeStmt* node) override {}
-    void visit(ForCollectionStmt* node) override {}
+    void visit(ForRangeStmt* node) override {
+        auto loc = ctx.getLoc(node->line, node->column);
+
+        // Alt ifadeleri hesapla
+        node->start->accept(*this);
+        mlir::Value startVal = lastValue;
+        node->end->accept(*this);
+        mlir::Value endVal = lastValue;
+        mlir::Value stepVal;
+        if (node->step) {
+            node->step->accept(*this);
+            stepVal = lastValue;
+        } else {
+            stepVal = ctx.builder.create<mlir::arith::ConstantIntOp>(loc, 1, 64);
+        }
+
+        // Index tipine dönüştür (scf.for index bekler)
+        auto idxType = mlir::IndexType::get(&ctx.context);
+        auto castToIndex = [&](mlir::Value v) -> mlir::Value {
+            if (v.getType() != idxType)
+                return ctx.builder.create<mlir::arith::IndexCastOp>(loc, idxType, v);
+            return v;
+        };
+        startVal = castToIndex(startVal);
+        endVal   = castToIndex(endVal);
+        stepVal  = castToIndex(stepVal);
+
+        // scf.for oluştur
+        auto forOp = ctx.builder.create<mlir::scf::ForOp>(
+            loc, startVal, endVal, stepVal, mlir::ValueRange{});
+
+        // Döngü gövdesini doldur
+        mlir::Block* bodyBlock = forOp.getBody();
+        mlir::OpBuilder::InsertionGuard guard(ctx.builder);
+        ctx.builder.setInsertionPointToStart(bodyBlock);
+
+        // İterator değişkenini tanımla (scf.for'un block argümanı)
+        mlir::Value loopVar = bodyBlock->getArgument(0);   // induction variable
+
+        // İterator için bir alloca oluştur (i32 tipinde, isteğe bağlı tip dönüşümü)
+        mlir::Type iterType = ctx.builder.getI32Type(); // iterator'ı int olarak sakla
+        auto iterAlloca = ctx.builder.create<mlir::memref::AllocaOp>(
+            loc, mlir::MemRefType::get({}, iterType));
+        // loopVar index tipinde, önce int'e çevirip store edelim
+        mlir::Value iterVal = ctx.builder.create<mlir::arith::IndexCastOp>(loc, iterType, loopVar);
+        ctx.builder.create<mlir::memref::StoreOp>(loc, iterVal, iterAlloca);
+
+        // Döngü gövdesi için yeni scope ve iterator değişkenini kaydet
+        scopeManager.pushScope();
+        scopeManager.declareVariable(node->iteratorName, iterAlloca);
+
+        // Döngü gövdesindeki deyimleri ziyaret et
+        for (auto& stmt : node->body->statements) {
+            stmt->accept(*this);
+        }
+
+        scopeManager.popScope();
+    }
+
+    void visit(ForCollectionStmt* node) override {
+        auto loc = ctx.getLoc(node->line, node->column);
+
+        // Koleksiyonu hesapla (memref olmalı)
+        node->collection->accept(*this);
+        mlir::Value collVal = lastValue;
+        auto memRefType = mlir::dyn_cast<mlir::MemRefType>(collVal.getType());
+        if (!memRefType) return; // Hata: koleksiyon bir dizi değil
+
+        // Boyutu al
+        mlir::Value sizeVal = ctx.builder.create<mlir::memref::DimOp>(loc, collVal, 0);
+        auto idxType = mlir::IndexType::get(&ctx.context);
+        if (sizeVal.getType() != idxType) {
+            sizeVal = ctx.builder.create<mlir::arith::IndexCastOp>(loc, idxType, sizeVal);
+        }
+
+        mlir::Value zero = ctx.builder.create<mlir::arith::ConstantIntOp>(loc, 0, 64);
+        zero = ctx.builder.create<mlir::arith::IndexCastOp>(loc, idxType, zero);
+        mlir::Value one = ctx.builder.create<mlir::arith::ConstantIntOp>(loc, 1, 64);
+        one = ctx.builder.create<mlir::arith::IndexCastOp>(loc, idxType, one);
+
+        auto forOp = ctx.builder.create<mlir::scf::ForOp>(
+            loc, zero, sizeVal, one, mlir::ValueRange{});
+
+        mlir::Block* bodyBlock = forOp.getBody();
+        mlir::OpBuilder::InsertionGuard guard(ctx.builder);
+        ctx.builder.setInsertionPointToStart(bodyBlock);
+
+        mlir::Value loopVar = bodyBlock->getArgument(0); // index
+
+        // Diziden elemanı yükle
+        mlir::Value elem = ctx.builder.create<mlir::memref::LoadOp>(loc, collVal, loopVar);
+
+        // Eleman için alloca oluştur ve store et
+        mlir::Type elemType = memRefType.getElementType();
+        auto elemAlloca = ctx.builder.create<mlir::memref::AllocaOp>(
+            loc, mlir::MemRefType::get({}, elemType));
+        ctx.builder.create<mlir::memref::StoreOp>(loc, elem, elemAlloca);
+
+        // Iterator değişkenini scope'a ekle
+        scopeManager.pushScope();
+        scopeManager.declareVariable(node->iteratorName, elemAlloca);
+
+        // Gövdeyi ziyaret et
+        for (auto& stmt : node->body->statements) {
+            stmt->accept(*this);
+        }
+
+        scopeManager.popScope();
+    }
+
     void visit(BreakStmt* node) override {}
     void visit(ContinueStmt* node) override {}
 
