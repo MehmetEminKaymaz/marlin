@@ -1,0 +1,10 @@
+// expect: 1
+// output: 7
+// stderr: calisma zamani hatasi (satir 8): bos listeden pop yapilamaz
+func main() -> void {
+    list<int> l = [];
+    push(l, 7);
+    print(pop(l));
+    pop(l);
+    print("sonra");
+}

@@ -78,9 +78,19 @@ set(PROJECT_SOURCES
         AST/ASTPrinter.cpp
         AST/ASTPrinter.h
         MLIRBackend/MLIRGenerator.cpp
+        MLIRBackend/MLIRGeneratorExpr.cpp
+        MLIRBackend/MLIRGeneratorStmt.cpp
         MLIRBackend/MLIRGenerator.h
         MLIRBackend/MLIRControlFlowManager.cpp
         MLIRBackend/MLIRControlFlowManager.h
+        MLIRBackend/MLIRMatrixManager.cpp
+        MLIRBackend/MLIRMatrixManager.h
+        MLIRBackend/MLIRGeneratorMatrix.cpp
+        MLIRBackend/MLIRListManager.cpp
+        MLIRBackend/MLIRListManager.h
+        MLIRBackend/MLIRRuntime.h
+        MLIRBackend/MLIRBuiltinManager.cpp
+        MLIRBackend/MLIRBuiltinManager.h
         MLIRBackend/MLIRArithManager.cpp
         MLIRBackend/MLIRArithManager.h
         MLIRBackend/MLIRScopeManager.cpp
@@ -89,8 +99,15 @@ set(PROJECT_SOURCES
         MLIRBackend/MLIRTypeManager.h
         MLIRBackend/CodegenContext.cpp
         MLIRBackend/CodegenContext.h
-        AST/ASTValidator.cpp
-        AST/ASTValidator.h
+        LLVMBackend/LLVMLowering.cpp
+        LLVMBackend/LLVMLowering.h
+        LLVMBackend/NativeCodegen.cpp
+        LLVMBackend/NativeCodegen.h
+        AST/Builtins.h
+        AST/SemType.h
+        AST/Sema.cpp
+        AST/SemaParallel.cpp
+        AST/Sema.h
 )
 
 # 6. CMake'e bu dosyaları arka planda nasıl üreteceğini öğretiyoruz
@@ -103,6 +120,9 @@ add_custom_command(
 # ==============================================================================
 
 include_directories(${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
+
+# "native": derleyicinin çalıştığı makinenin hedefi (kod üretici, asm yazıcı ...)
+llvm_map_components_to_libnames(LLVM_NATIVE_LIBS native passes target mc)
 add_definitions(${LLVM_DEFINITIONS})
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -113,6 +133,17 @@ add_executable(minik_lang
         ${ANTLR_GENERATED_SRC}
         ${PROJECT_SOURCES}
 )
+
+# Çalışma zamanı kütüphanesi: derlenen her minik programına bağlanır (print vb.).
+# Derleyiciyle aynı dizine üretilir; minik_lang onu yanında arar, bulamazsa
+# aşağıda gömülen yola bakar.
+add_library(minikrt STATIC runtime/minik_rt.c)
+add_dependencies(minik_lang minikrt)
+target_compile_definitions(minik_lang PRIVATE MINIK_RUNTIME_LIB="$<TARGET_FILE:minikrt>")
+
+# Paralel döngü içeren programlar MLIR'in iş parçacığı havuzuna
+# (libmlir_async_runtime.so) bağlanır; minik_lang onu bu dizinde arar.
+target_compile_definitions(minik_lang PRIVATE MINIK_LLVM_LIB_DIR="${LLVM_LIBRARY_DIR}")
 
 # 8. ANTLR'ın ürettiği dosyaların ve bulduğumuz sistem başlıklarının yolunu projeye tanıt
 target_include_directories(minik_lang PRIVATE
@@ -135,16 +166,43 @@ target_link_libraries(minik_lang PRIVATE
 
         MLIRFuncDialect
         MLIRArithDialect
+        MLIRMathDialect
         MLIRSCFDialect
+        MLIRControlFlowDialect
         MLIRMemRefDialect
         MLIRLLVMDialect
 
         MLIRToLLVMIRTranslationRegistration
         MLIRFuncToLLVM
         MLIRArithToLLVM
+        MLIRMathToLLVM
+        MLIRMathToLibm
+        MLIRMemRefTransforms
+
+        # Matrisler: tensor üzerinde linalg, bufferization ile belleğe yerleştirme
+        MLIRTensorDialect
+        MLIRLinalgDialect
+        MLIRBufferizationDialect
+        MLIRBufferizationTransforms
+        MLIRLinalgTransforms
+        MLIRTensorTransforms
+        MLIRArithTransforms
+        MLIRSCFTransforms
+        MLIRControlFlowTransforms
+
+        # Paralel döngüler: scf.parallel → async → coroutine'ler
+        MLIRAsyncDialect
+        MLIRAsyncTransforms
+        MLIRAsyncToLLVM
+        MLIRAffineDialect
+        MLIRAffineToStandard
         MLIRMemRefToLLVM
         MLIRSCFToControlFlow
         MLIRControlFlowToLLVM
+        MLIRReconcileUnrealizedCasts
+
+        # LLVM IR -> makine kodu: yerel hedef (X86) + optimizasyon hattı
+        ${LLVM_NATIVE_LIBS}
 
         MLIRPass
         MLIRTransforms

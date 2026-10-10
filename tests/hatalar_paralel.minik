@@ -1,0 +1,38 @@
+// Paralel döngüde yarışa yol açabilecek kullanımlar derlenmez.
+// error: paralel dongude dongu disinda tanimli 'toplam' degiskenine atama yapilamaz
+// error: paralel dongude 'a' elemanina yalnizca dongu degiskeni 'i' ile indekslenerek yazilabilir
+// error: 'b' bu paralel dongude yaziliyor
+// error: paralel dongude 'push' kullanilamaz
+// error: paralel dongunun icinden break ya da return ile cikilamaz
+// error: paralel dongude 'sayacArttir' cagrilamaz: global degisken 'sayac' uzerine yaziyor
+// error: paralel dongude 'dolayli' cagrilamaz: 'sayacArttir' fonksiyonunu cagiriyor
+// error: paralel dongude yalnizca adiyla tanimli fonksiyonlar cagrilabilir
+// error: 'parallel' yalnizca aralik dongusunde kullanilabilir
+// error: paralel dongude 'm' elemanlarina yazarken 'i' hep ayni konumda indeks olmali
+// error: paralel dongude 'diziyiBoz' cagrilamaz: parametre olarak aldigi 'd' dizisini degistiriyor
+int sayac = 0;
+
+func sayacArttir() -> void { sayac = sayac + 1; }
+func dolayli() -> void { sayacArttir(); }
+func diziyiBoz(int[10] d) -> void { d[0] = 1; }
+
+func main() -> void {
+    int toplam = 0;
+    int[10] a;
+    int[10] b;
+    list<int> l = [];
+    matrix<int> m = zeros(10, 10);
+    let f = (int x) -> int | x;
+
+    parallel for i in 0 .. 10 { toplam = toplam + i; }
+    parallel for i in 0 .. 10 { a[0] = i; }
+    parallel for i in 1 .. 10 { b[i] = b[i - 1] + 1; }
+    parallel for i in 0 .. 10 { push(l, i); }
+    parallel for i in 0 .. 10 { if i == 3 { break; } }
+    parallel for i in 0 .. 10 { sayacArttir(); }
+    parallel for i in 0 .. 10 { dolayli(); }
+    parallel for i in 0 .. 10 { a[i] = f(i); }
+    parallel for x in a { }
+    parallel for i in 0 .. 10 { m[i, 0] = 1; m[0, i] = 2; }
+    parallel for i in 0 .. 10 { diziyiBoz(b); }
+}

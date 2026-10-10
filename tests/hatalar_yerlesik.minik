@@ -1,0 +1,16 @@
+// Yerleşik fonksiyonların hatalı kullanımları.
+// error: 'sqrt' 1 arguman bekler (verilen: 2)
+// error: 'pow' 2 arguman bekler (verilen: 1)
+// error: 'sin' sayisal bir deger bekler (bulunan: bool)
+// error: bu tipte bir deger yazdirilamaz: int[3]
+// error: yerlesik fonksiyon 'print' yalnizca cagrilabilir
+// error: void donduren bir ifade degiskene atanamaz
+func main() -> void {
+    float64 a = sqrt(1.0, 2.0);
+    float64 b = pow(2.0);
+    float64 c = sin(true);
+    int[3] d = [1, 2, 3];
+    print(d);
+    let f = print;
+    let g = print(1);
+}

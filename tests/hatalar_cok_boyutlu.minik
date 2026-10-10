@@ -1,0 +1,30 @@
+// Boyut sayısıyla ilgili derleme hataları.
+// error: matrisin boyut sayisi 1 ya da daha buyuk bir tamsayi olmali
+// error: matrix<int, 3> icin 'zeros' 3 boyut uzunlugu bekler (verilen: 2)
+// error: matrislerin boyut sayilari farkli: matrix<int, 1> ve matrix<int>
+// error: tip uyusmazligi: beklenen matrix<int>, bulunan matrix<int, 1>
+// error: matrix<int, 1> 1 indeks bekler (verilen: 2)
+// error: 'transpose' iki boyutlu matris bekler (bulunan: matrix<int, 1>)
+// error: 'matmul' iki boyutlu matris bekler (bulunan: matrix<int, 1>)
+// error: matrix<int> icin boyut numarasi 0 ile 1 arasinda olmali
+// error: 'shape' boyut numarasi olarak sabit bir tamsayi bekler
+// error: matrix<int, 3> 3 seviye ic ice liste bekler
+// error: matrix<int, 1> icin fazla ic ice liste
+// error: 'rows' iki boyutlu matris bekler (bulunan: matrix<int, 1>)
+func main() -> void {
+    matrix<int, 0> sifir = zeros(1);
+    matrix<int, 3> b = zeros(2, 2);
+    matrix<int, 1> v = [1, 2];
+    matrix<int> m = [[1, 2]];
+    let c = v + m;
+    m = v;
+    print(v[0, 1]);
+    print(transpose(v));
+    print(matmul(v, m));
+    print(shape(m, 2));
+    int n = 0;
+    print(shape(m, n));
+    matrix<int, 3> x = [[1, 2], [3, 4]];
+    matrix<int, 1> y = [[1], [2]];
+    print(rows(v));
+}

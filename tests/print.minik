@@ -1,0 +1,48 @@
+// output: merhaba dunya
+// output: 42
+// output: -7 3000000000 200
+// output: 1.5 0.1 0.30000000000000004 2.0
+// output: true false
+// output: a
+// output: x = 5 y = 2.5 tamam: true
+// output:
+// output: satir1
+// output: satir2
+// output: 0 1 2
+// output: toplam 12
+int sayac = 3;
+
+func yaz(string etiket, int deger) -> void {
+    print(etiket, deger);
+}
+
+func main() -> void {
+    print("merhaba dunya");
+    print(42);
+
+    int64 buyuk = 3000000000;
+    uint8 kucuk = 200;
+    print(-7, buyuk, kucuk);                 // farklı genişlikler, işaretsiz
+
+    float f = 1.5;
+    float tek = 0.1;                         // float: 0.1 olarak yazılmalı (0.10000000149 değil)
+    print(f, tek, 0.1 + 0.2, 2.0);           // float64: en kısa tam gösterim
+
+    bool evet = true;
+    print(evet, !evet);
+    print('a');
+
+    int x = 5;
+    print("x =", x, "y =", x / 2.0, "tamam:", x > 3);
+
+    print();                                 // boş satır
+    print("satir1\nsatir2");                 // kaçış dizisi
+
+    int[3] d = [0, 1, 2];
+    print(d[0], d[1], d[2]);
+
+    // Yapısal döngünün içinden çağrı
+    int toplam = 0;
+    for i in 0 .. 4 { toplam = toplam + i * 2; }
+    yaz("toplam", toplam);
+}

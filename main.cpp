@@ -1,139 +1,312 @@
+#include <fstream>
 #include <iostream>
-#include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "llvm/Support/raw_ostream.h"
+#include <sstream>
+#include <string>
+
+#include "antlr4-runtime.h"
 #include "minikLexer.h"
 #include "minikParser.h"
-#include "minikBaseVisitor.h"
-#include "antlr4-runtime.h"
+
 #include "AST/ASTBuilder.h"
 #include "AST/ASTPrinter.h"
-
+#include "AST/Sema.h"
 #include "MLIRBackend/MLIRGenerator.h"
-#include <mlir/IR/MLIRContext.h>
-#include <mlir/IR/BuiltinOps.h>
-#include <mlir/IR/Builders.h>
+#include "LLVMBackend/LLVMLowering.h"
+#include "LLVMBackend/NativeCodegen.h"
 
-#include "AST/ASTValidator.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/IR/Verifier.h"
-#include "mlir/Support/LogicalResult.h"
-#include "llvm/IR/LLVMContext.h"
-#include "mlir/Target/LLVMIR/ModuleTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/All.h"
-#include "mlir/Target/LLVMIR/Export.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
-#include "mlir/Target/LLVMIR/Export.h"
-#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
-#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
-#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/ExecutionEngine/ExecutionEngine.h"
-#include "mlir/ExecutionEngine/OptUtils.h"
-#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Export.h"
-#include "llvm/Support/TargetSelect.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
-#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
-#include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
+#include "llvm/Support/raw_ostream.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Async/IR/Async.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/Target/LLVMIR/Dialect/All.h"
 
 using namespace antlr4;
 
-int main() {
-    std::string sourceCode =
-        "func main() -> void {"
-    "let x = 10 + 20 * 5;"
-    "int y = x - 5;"
-    "int[5] dizi = [1,2,3,4];"
-    "list<int> dizi2 = [1,2,3,4];"
-    "int result;"
-    "if y < 100 {"
-    "result = x + 3;"
-    "y = y + 1;"
-    "dizi[2] = 4;"
-    "}"
-    "int total;"
-    "for i in 0 .. 100 step 2 { total = total + i; }"
-    "for sayi in dizi { total = total + sayi;}"
-    "while total < 1000 { total = total + 1; }"
-    "}"
-    "func myfunc() -> void { int total = 100; while total < 200 { total = total + 1; } string myNameIs = \"mehmet emin\"; }"
-    ;
+// Dosya verilmezse derlenen örnek program.
+static const char* const kSampleSource = R"(
+    int globalX = 42;
+    float globalPi = 3.14;
 
-    std::cout << "--- Kaynak Kod ---\n" << sourceCode << "\n";
+    // Basit tür çıkarımı ve temel işlemler
+    func main() -> void {
+        let a = 10;                 // let ile tür çıkarımı (int)
+        int b = 20;
+        let sonuc = a + b * 2;      // binary expr + let
+        bool flag = true;
 
+        // if-elseif-else zinciri
+        if sonuc > 50 {
+            sonuc = sonuc - 5;
+        } else if sonuc == 50 {
+            sonuc = 0;
+        } else {
+            sonuc = 1;
+        }
+
+        // Dizi tanımlama ve dizi erişimi
+        int[5] dizi = [1, 2, 3, 4, 5];
+        dizi[2] = 99;
+
+        // for-range döngüsü (break/continue içerebilir)
+        int toplam = 0;
+        for i in 0 .. 10 step 2 {
+            if i == 6 {
+                continue;
+            }
+            toplam = toplam + i;
+            if toplam > 20 {
+                break;
+            }
+        }
+
+        // for-collection döngüsü
+        for sayi in dizi {
+            toplam = toplam + sayi;
+        }
+
+        // while döngüsü
+        while toplam < 500 {
+            toplam = toplam + 1;
+        }
+
+        // Lambda ifadesi (hemen çağrı)
+        let kareAl = (int x) -> int | x * x;
+        let kareSonuc = kareAl(5);   // fonksiyon çağrısı
+
+        // Fonksiyon çağrısı (başka bir func)
+        yardimciFonksiyon(toplam);
+    }
+
+    func yardimciFonksiyon(int girdi) -> void {
+        int sonuc = girdi * 2;
+        // string kullanımı
+        string mesaj = "merhaba";
+    }
+)";
+
+static const char* const kUsage =
+    "Kullanim: minik_lang [kaynak.minik] [secenekler]\n"
+    "  kaynak.minik   derlenecek dosya (verilmezse gomulu ornek program)\n"
+    "  -o <dosya>     cikti dosyasi (varsayilan: exe icin a.out, obj icin a.o,\n"
+    "                 metin ciktilari icin ekran)\n"
+    "  --emit=<tur>   hattin hangi asamasinda durulacagi:\n"
+    "                   mlir       ust seviye MLIR (scf, memref, arith ...)\n"
+    "                   llvm-mlir  llvm dialect'ine indirilmis MLIR\n"
+    "                   llvm-ir    LLVM IR (.ll)\n"
+    "                   obj        nesne dosyasi (.o)\n"
+    "                   exe        calistirilabilir dosya (varsayilan)\n"
+    "  -O0 .. -O3     LLVM optimizasyon seviyesi (varsayilan: -O0)\n"
+    "  --print-ast    semantik analizden gecmis AST'yi yazdirir\n";
+
+enum class EmitKind { MLIR, LLVMDialect, LLVMIR, Object, Executable };
+
+// Metin çıktısını dosyaya ya da (yol boşsa) ekrana yazar.
+template <typename PrintFn>
+static bool writeText(const std::string& path, PrintFn print) {
+    if (path.empty()) {
+        print(llvm::outs());
+        llvm::outs() << "\n";
+        return true;
+    }
+    std::error_code ec;
+    llvm::raw_fd_ostream out(path, ec, llvm::sys::fs::OF_Text);
+    if (ec) {
+        std::cerr << "Cikti dosyasi acilamadi: " << path << "\n";
+        return false;
+    }
+    print(out);
+    out << "\n";
+    return true;
+}
+
+int main(int argc, char** argv) {
+    std::string inputPath, outputPath;
+    EmitKind emit = EmitKind::Executable;
+    unsigned optLevel = 0;
+    bool printAst = false;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-o" && i + 1 < argc) outputPath = argv[++i];
+        else if (arg == "--print-ast") printAst = true;
+        else if (arg == "-O0" || arg == "-O1" || arg == "-O2" || arg == "-O3") optLevel = arg[2] - '0';
+        else if (arg == "--emit=mlir") emit = EmitKind::MLIR;
+        else if (arg == "--emit=llvm-mlir") emit = EmitKind::LLVMDialect;
+        else if (arg == "--emit=llvm-ir") emit = EmitKind::LLVMIR;
+        else if (arg == "--emit=obj") emit = EmitKind::Object;
+        else if (arg == "--emit=exe") emit = EmitKind::Executable;
+        else if (arg == "-h" || arg == "--help") { std::cout << kUsage; return 0; }
+        else if (arg[0] == '-') { std::cerr << "Bilinmeyen secenek: " << arg << "\n" << kUsage; return 1; }
+        else inputPath = arg;
+    }
+
+    std::string sourceCode = kSampleSource;
+    if (!inputPath.empty()) {
+        std::ifstream file(inputPath);
+        if (!file) {
+            std::cerr << "Dosya acilamadi: " << inputPath << "\n";
+            return 1;
+        }
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        sourceCode = buffer.str();
+    }
+
+    // --- Ayrıştırma ---
     ANTLRInputStream input(sourceCode);
     minikLexer lexer(&input);
     CommonTokenStream tokens(&lexer);
     minikParser parser(&tokens);
 
     minikParser::ProgramContext* tree = parser.program();
-
-    if (parser.getNumberOfSyntaxErrors() > 0) {
+    if (lexer.getNumberOfSyntaxErrors() > 0 || parser.getNumberOfSyntaxErrors() > 0) {
         std::cerr << "Syntax hatasi bulundu! AST olusturulmayacak.\n";
         return 1;
     }
 
+    // --- AST ---
     ASTBuilder builder;
     std::any astResult = builder.visit(tree);
+    if (!astResult.has_value()) return 1;
+    std::unique_ptr<Program> astRoot(std::any_cast<Program*>(astResult));
 
-    if (astResult.has_value()) {
-        std::unique_ptr<Program> astRoot(std::any_cast<Program*>(astResult));
-
-        ASTPrinter printer;
-        astRoot->accept(printer);
-
-        ASTValidator validator;
-        astRoot->accept(validator);
-        if (validator.hasErrors()) {
-            for (const auto& err : validator.getErrors())
-                llvm::errs() << err << "\n";
-            return 1;
-        }
-
-        mlir::DialectRegistry registry;
-
-        registry.insert<mlir::func::FuncDialect>();
-        registry.insert<mlir::arith::ArithDialect>();
-        registry.insert<mlir::LLVM::LLVMDialect>();
-        registry.insert<mlir::memref::MemRefDialect>();
-
-        mlir::registerAllToLLVMIRTranslations(registry);
-
-        mlir::MLIRContext mlirCtx;
-        mlirCtx.getOrLoadDialect<mlir::func::FuncDialect>();
-        mlirCtx.getOrLoadDialect<mlir::arith::ArithDialect>();
-        mlirCtx.getOrLoadDialect<mlir::scf::SCFDialect>();
-        mlirCtx.getOrLoadDialect<mlir::memref::MemRefDialect>();
-        mlirCtx.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-
-        mlir::OpBuilder mlirBuilder(&mlirCtx);
-        mlir::ModuleOp moduleOp = mlir::ModuleOp::create(mlirBuilder.getUnknownLoc());
-
-        MLIRGenerator generator(mlirCtx, mlirBuilder, moduleOp);
-        astRoot->accept(generator);
-
-        // Sonucu yazdır
-        std::cout << "\n=== Generated MLIR ===" << std::endl;
-        moduleOp->dump();
-
-        /*mlir::PassManager pm(&mlirCtx);
-
-        pm.addPass(mlir::createArithToLLVMConversionPass());
-        pm.addPass(mlir::createConvertFuncToLLVMPass());
-        pm.addPass(mlir::createReconcileUnrealizedCastsPass());
-        pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
-
-        if (mlir::failed(pm.run(moduleOp))) {
-            std::cerr << "Pass manager failed!" << std::endl;
-            return -1;
-        }*/
+    // --- Semantik analiz ---
+    // Tipleri çözer, örtük dönüşümleri AST'ye yazar ve akış yapısını işaretler.
+    // Kod üretimi geçerli bir ağaç varsaydığı için hata varsa burada durulur.
+    Sema sema;
+    astRoot->accept(sema);
+    if (sema.hasErrors()) {
+        for (const auto& err : sema.getErrors())
+            std::cerr << (inputPath.empty() ? "<ornek>" : inputPath) << ":" << err << "\n";
+        return 1;
     }
 
+    if (printAst) {
+        ASTPrinter printer;
+        astRoot->accept(printer);
+        std::cout.flush(); // sonraki çıktılar llvm::outs ile yazılıyor; sıra karışmasın
+    }
+
+    // --- MLIR üretimi ---
+    mlir::DialectRegistry registry;
+    registry.insert<mlir::func::FuncDialect>();
+    registry.insert<mlir::arith::ArithDialect>();
+    registry.insert<mlir::math::MathDialect>();
+    registry.insert<mlir::scf::SCFDialect>();
+    registry.insert<mlir::cf::ControlFlowDialect>();
+    registry.insert<mlir::LLVM::LLVMDialect>();
+    registry.insert<mlir::memref::MemRefDialect>();
+    registry.insert<mlir::tensor::TensorDialect>();
+    registry.insert<mlir::linalg::LinalgDialect>();
+    registry.insert<mlir::bufferization::BufferizationDialect>();
+    registry.insert<mlir::async::AsyncDialect>();   // paralel döngülerin indirilmesi için
+    registry.insert<mlir::affine::AffineDialect>();
+    minik::registerLoweringInterfaces(registry);
+    mlir::registerAllToLLVMIRTranslations(registry);
+
+    // Registry context'e verilir; LLVM IR'a çeviri arayüzleri ancak böyle bulunur.
+    mlir::MLIRContext mlirCtx(registry);
+    mlirCtx.getOrLoadDialect<mlir::func::FuncDialect>();
+    mlirCtx.getOrLoadDialect<mlir::arith::ArithDialect>();
+    mlirCtx.getOrLoadDialect<mlir::math::MathDialect>();
+    mlirCtx.getOrLoadDialect<mlir::scf::SCFDialect>();
+    mlirCtx.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+    mlirCtx.getOrLoadDialect<mlir::memref::MemRefDialect>();
+    mlirCtx.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+    mlirCtx.getOrLoadDialect<mlir::tensor::TensorDialect>();
+    mlirCtx.getOrLoadDialect<mlir::linalg::LinalgDialect>();
+    mlirCtx.getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
+
+    mlir::OpBuilder mlirBuilder(&mlirCtx);
+    mlir::ModuleOp moduleOp = mlir::ModuleOp::create(mlirBuilder.getUnknownLoc());
+
+    MLIRGenerator generator(mlirCtx, mlirBuilder, moduleOp);
+    astRoot->accept(generator);
+
+    // Üretilen modülü doğrula: kod üretimindeki hatalar (eksik terminator, tip
+    // uyuşmazlığı...) ilerideki bir pass'te anlaşılmaz bir çökme yerine burada,
+    // net bir mesajla yakalanır.
+    if (mlir::failed(mlir::verify(moduleOp))) {
+        llvm::errs() << "Uretilen MLIR modulu dogrulamadan gecemedi!\n";
+        moduleOp->dump();
+        return 1;
+    }
+
+    if (emit == EmitKind::MLIR)
+        return writeText(outputPath, [&](llvm::raw_ostream& os) { moduleOp->print(os); }) ? 0 : 1;
+
+    // --- MLIR → llvm dialect'i ---
+    if (!minik::lowerToLLVMDialect(moduleOp)) {
+        llvm::errs() << "MLIR, LLVM dialect'ine indirilemedi!\n";
+        return 1;
+    }
+    if (emit == EmitKind::LLVMDialect)
+        return writeText(outputPath, [&](llvm::raw_ostream& os) { moduleOp->print(os); }) ? 0 : 1;
+
+    // --- llvm dialect'i → LLVM IR ---
+    llvm::LLVMContext llvmContext;
+    std::unique_ptr<llvm::Module> llvmModule = minik::translateToLLVMIR(moduleOp, llvmContext);
+    if (!llvmModule) {
+        llvm::errs() << "LLVM IR'a ceviri basarisiz!\n";
+        return 1;
+    }
+
+    // --- Optimizasyon ve makine kodu ---
+    std::string error;
+    std::unique_ptr<minik::NativeCodegen> codegen = minik::NativeCodegen::create(optLevel, error);
+    if (!codegen) {
+        llvm::errs() << "Kod uretici hazirlanamadi: " << error << "\n";
+        return 1;
+    }
+    codegen->configure(*llvmModule);
+    codegen->optimize(*llvmModule);
+
+    if (emit == EmitKind::LLVMIR)
+        return writeText(outputPath, [&](llvm::raw_ostream& os) { llvmModule->print(os, nullptr); }) ? 0 : 1;
+
+    if (emit == EmitKind::Object) {
+        if (!codegen->emitObject(*llvmModule, outputPath.empty() ? "a.o" : outputPath, error)) {
+            llvm::errs() << error << "\n";
+            return 1;
+        }
+        return 0;
+    }
+
+    // --- Bağlama: geçici nesne dosyası + çalışma zamanı → çalıştırılabilir ---
+    std::string runtimeLib = minik::NativeCodegen::findRuntimeLibrary(argv[0]);
+    if (runtimeLib.empty()) {
+        llvm::errs() << "Calisma zamani kutuphanesi (libminikrt.a) bulunamadi; "
+                        "MINIK_RUNTIME ortam degiskeniyle yolunu verin.\n";
+        return 1;
+    }
+    llvm::SmallString<128> objectPath;
+    if (std::error_code ec = llvm::sys::fs::createTemporaryFile("minik", "o", objectPath)) {
+        llvm::errs() << "Gecici dosya olusturulamadi: " << ec.message() << "\n";
+        return 1;
+    }
+    bool ok = codegen->emitObject(*llvmModule, objectPath.str().str(), error) &&
+              minik::NativeCodegen::link(objectPath.str().str(), runtimeLib,
+                                         outputPath.empty() ? "a.out" : outputPath,
+                                         generator.usesParallelLoops(), error);
+    llvm::sys::fs::remove(objectPath);
+    if (!ok) {
+        llvm::errs() << error << "\n";
+        return 1;
+    }
     return 0;
 }

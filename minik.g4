@@ -4,9 +4,11 @@ program
     : declaration* EOF
     ;
 
+// Üst seviyede yalnızca fonksiyonlar ve global değişkenler bulunabilir;
+// çalıştırılabilir ifadeler (if, döngü, atama...) bir fonksiyonun içinde olmalı.
 declaration
     : functionDecl
-    | statement
+    | variableDefinition
     ;
 
 statement
@@ -28,7 +30,7 @@ block
 
 assignmentStatement
     : IDENTIFIER '=' expression ';'                    #DirectAssignment
-    | expression '[' expression ']' '=' expression ';' #ArrayElementAssignment
+    | expression '[' exprList ']' '=' expression ';'   #ArrayElementAssignment
     ;
 
 functionDecl
@@ -57,21 +59,26 @@ whileStatement
     : 'while' expression block
     ;
 
+// 'parallel': yinelemeler birbirinden bağımsızdır ve aynı anda çalışabilir.
+// (Yalnızca aralık döngüsünde geçerlidir; Sema denetler.)
 forStatement
-    : 'for' IDENTIFIER 'in' expression '..' expression ('step' expression)? block   #ForRangeStatement
-    | 'for' IDENTIFIER 'in' expression block                                        #ForCollectionStatement
+    : parallel='parallel'? 'for' IDENTIFIER 'in' expression '..' expression ('step' expression)? block   #ForRangeStatement
+    | parallel='parallel'? 'for' IDENTIFIER 'in' expression block                                        #ForCollectionStatement
     ;
 
+// Alternatiflerin sırası önceliği belirler (üstteki daha sıkı bağlanır).
+// Sonek işlemleri ([] ve çağrı) tekli işleçlerden önce gelmeli; aksi halde
+// -a[0] ifadesi (-a)[0], !f(x) ifadesi (!f)(x) olarak ayrışır.
 expression
-    : '-' expression                                                #UnaryMinusExpr
+    : expression '[' exprList ']'                                   #ArrayAccessExpr   // dizi[i], matris[i, j]
+    | expression '(' exprList? ')'                                  #FunctionCallExpr
+    | '-' expression                                                #UnaryMinusExpr
     | '!' expression                                                #NotExpr
     | expression op=('*'|'/'|'%') expression                        #MulDivExpr
     | expression op=('+'|'-') expression                            #AddSubExpr
     | expression op=('<'|'<='|'>'|'>='|'=='|'!=') expression        #RelationalExpr
     | expression op='&&' expression                                 #LogicalAndExpr
     | expression op='||' expression                                 #LogicalOrExpr
-    | expression '[' expression ']'                                 #ArrayAccessExpr
-    | expression '(' exprList? ')'                                  #FunctionCallExpr
     | '(' expression ')'                                            #ParenExpr
     | lambdaExpr                                                    #LambdaExpression
     | '[' exprList? ']'                                             #ListLiteralExpr
@@ -94,6 +101,7 @@ lambdaExpr
 variableType
     : baseType ('[' NUMBER ']')?                                    #ArrayOrBaseType
     | 'list' '<' variableType '>'                                   #ListType
+    | 'matrix' '<' variableType (',' NUMBER)? '>'                   #MatrixType   // matrix<T> = matrix<T, 2>; sayı: boyut sayısı
     | '(' typeList? ')' '->' variableType                           #LambdaType
     ;
 

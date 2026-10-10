@@ -6,63 +6,120 @@
 #define MLIRCONTROLFLOWMANAGER_H
 
 #include "CodegenContext.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include <functional>
 
+// ---------------------------------------------------------------------------
+// MLIRControlFlowManager
+//
+// Akış kontrolünü HİBRİT olarak üretir:
+//
+//   * Yapısal yol (scf): gövdesinden dışarı atlamayan her if ve döngü
+//     scf.if / scf.while / scf.for olarak üretilir. Bu operasyonlar döngü
+//     yapısını (sınırlar, adım, gövde) IR'de açıkça taşıdığı için ileride
+//     paralelleştirme ve GPU'ya indirme (scf.parallel → gpu) bunların
+//     üzerinden yapılır.
+//
+//   * Bloklu yol (cf): `break` ya da `return` içeren döngüler ile dışarı
+//     atlayan if'ler, blok + dal (cf.br / cf.cond_br) olarak üretilir. scf
+//     bölgeleri tek bloklu olduğundan bu atlamalar orada ifade edilemez.
+//
+// Hangi yolun seçileceğine Sema karar verir (IfStmt::needsCFG,
+// LoopStmt::needsCFG / hasContinue); bu sınıf yalnızca `structured` bayrağına
+// bakar.
+//
+// İki yol şöyle iç içe geçer: bir scf bölgesinin içinde bloklu bir yapı
+// gerekirse (ör. scf.for içinde break'li bir while) o yapı, çok bloklu
+// bölgeye izin veren scf.execute_region içine sarılır; dıştaki döngü yapısal
+// kalır. `continue` de aynı mekanizmayla çözülür: döngü scf.for olarak kalır,
+// gövdesi bir execute_region'a konur ve continue, bölgenin son bloğuna atlar.
+//
+//   * Paralel yol (scf.parallel): `parallel for` döngüleri. Yinelemelerin
+//     bağımsız olduğu bilgisi IR'de açıkça durur.
+// ---------------------------------------------------------------------------
 class MLIRControlFlowManager {
-    CodegenContext& ctx;
 public:
-    MLIRControlFlowManager(CodegenContext& context) : ctx(context) {}
+    using BodyGen     = std::function<void()>;
+    using CondGen     = std::function<mlir::Value()>;
+    using IterBodyGen = std::function<void(mlir::Value iv)>;
 
-    void buildIf(mlir::Value cond, mlir::Location loc,
-                 std::function<void()> trueBodyGen,
-                 std::function<void()> falseBodyGen) {
-        mlir::OpBuilder& builder = ctx.builder;
-        bool hasElse = (falseBodyGen != nullptr);
-        auto ifOp = builder.create<mlir::scf::IfOp>(loc, cond, hasElse);
+private:
+    CodegenContext& ctx;
 
-        builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
-        trueBodyGen();
-        builder.create<mlir::scf::YieldOp>(loc, mlir::ValueRange());
+    // Aktif döngünün continue ve break hedef blokları.
+    struct LoopContext {
+        mlir::Block* continueBlock; // 'continue' → bu bloğa atla
+        mlir::Block* exitBlock;     // 'break'    → bu bloğa atla (yapısal döngüde yoktur)
+    };
 
-        if (hasElse) {
-            builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
-            falseBodyGen();
-            builder.create<mlir::scf::YieldOp>(loc, mlir::ValueRange());
-        }
+    llvm::SmallVector<LoopContext, 8> loopStack;
 
-        builder.setInsertionPointAfter(ifOp);
-    }
+    // O an üretim yapılan bölge yeni blok kabul ediyor mu? Fonksiyon gövdesi
+    // ve scf.execute_region için true, scf.if/for/while gövdeleri için false.
+    bool cfgAllowed = true;
 
-    void buildWhile(mlir::Location loc,
-                    std::function<mlir::Value()> condGen,
-                    std::function<void()> bodyGen) {
-        mlir::OpBuilder& builder = ctx.builder;
-        // scf.while with no loop-carried values: resultTypes=[], initArgs=[]
-        llvm::SmallVector<mlir::Type, 0> resultTypes;
-        llvm::SmallVector<mlir::Value, 0> initArgs;
-        auto whileOp = builder.create<mlir::scf::WhileOp>(
-            loc,
-            mlir::TypeRange(resultTypes),
-            mlir::ValueRange(initArgs)
-        );
+public:
+    explicit MLIRControlFlowManager(CodegenContext& context) : ctx(context) {}
 
-        // Before block (condition region) — no block args needed
-        mlir::Block* before = builder.createBlock(&whileOp.getBefore());
-        builder.setInsertionPointToEnd(before);
-        mlir::Value cond = condGen();
-        builder.create<mlir::scf::ConditionOp>(loc, cond, mlir::ValueRange(initArgs));
+    /// Blok bir terminator ile bitiyor mu (arkasına kod eklenemez mi)?
+    static bool isTerminated(mlir::Block* block);
 
-        // After block (body region)
-        mlir::Block* after = builder.createBlock(&whileOp.getAfter());
-        builder.setInsertionPointToEnd(after);
-        bodyGen();
-        builder.create<mlir::scf::YieldOp>(loc, mlir::ValueRange(initArgs));
+    // -----------------------------------------------------------------------
+    // Fonksiyon sınırları: her fonksiyon/lambda kendi döngü yığınıyla başlar.
+    // -----------------------------------------------------------------------
+    struct State {
+        llvm::SmallVector<LoopContext, 8> loopStack;
+        bool cfgAllowed;
+    };
+    State enterFunction();
+    void leaveFunction(State saved);
 
-        builder.setInsertionPointAfter(whileOp);
-    }
+    // -----------------------------------------------------------------------
+    // Yapılar
+    // -----------------------------------------------------------------------
+
+    /// if / else. `elseGen` boş olabilir.
+    void buildIf(mlir::Location loc, mlir::Value cond, bool structured,
+                 BodyGen thenGen, BodyGen elseGen);
+
+    /// while. Koşul her yinelemede `condGen` ile yeniden üretilir.
+    void buildWhile(mlir::Location loc, bool structured, bool hasContinue,
+                    CondGen condGen, BodyGen bodyGen);
+
+    /// Sayaçlı döngü: iv = lb; iv < ub; iv += step  (step > 0 varsayılır).
+    /// lb/ub/step aynı tipte (iN ya da index) olmalıdır. `bodyGen`e sayaç SSA
+    /// değeri olarak verilir.
+    void buildCountedLoop(mlir::Location loc, mlir::Value lb, mlir::Value ub, mlir::Value step,
+                          bool isSigned, bool structured, bool hasContinue,
+                          IterBodyGen bodyGen);
+
+    /// Paralel döngü: yinelemeler birbirinden bağımsızdır ve aynı anda
+    /// çalışabilir. lb/ub/step index tipinde olmalıdır. Sema, gövdenin buna
+    /// uygun olduğunu doğrulamıştır.
+    void buildParallelLoop(mlir::Location loc, mlir::Value lb, mlir::Value ub, mlir::Value step,
+                           IterBodyGen bodyGen);
+
+    /// Kısa devreli && / ||: sağ taraf yalnızca gerekirse hesaplanır.
+    mlir::Value buildShortCircuit(mlir::Location loc, mlir::Value lhs, bool isAnd,
+                                  CondGen rhsGen);
+
+    void emitBreak(mlir::Location loc);
+    void emitContinue(mlir::Location loc);
+
+private:
+    // Bloklu (cf) yol
+    void buildIfCFG(mlir::Location loc, mlir::Value cond, BodyGen& thenGen, BodyGen& elseGen);
+    void buildWhileCFG(mlir::Location loc, CondGen& condGen, BodyGen& bodyGen);
+    void buildCountedLoopCFG(mlir::Location loc, mlir::Value lb, mlir::Value ub, mlir::Value step,
+                             bool isSigned, IterBodyGen& bodyGen);
+
+    // Bloklu bir yapıyı, gerekiyorsa scf.execute_region içine sararak üretir.
+    void withCFG(mlir::Location loc, llvm::function_ref<void()> emit);
+
+    // Yapısal bir döngünün (tek bloklu) gövdesini üretir.
+    void emitStructuredLoopBody(mlir::Location loc, bool hasContinue,
+                                llvm::function_ref<void()> bodyGen);
 };
 
-
-
-#endif //MLIRCONTROLFLOWMANAGER_H
+#endif // MLIRCONTROLFLOWMANAGER_H

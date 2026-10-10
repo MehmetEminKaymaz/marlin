@@ -1,0 +1,30 @@
+// Matrislerin hatalı kullanımları.
+// error: matris parametresi 'm' degistirilemez
+// error: matris baslangic degeri olmadan tanimlanamaz
+// error: matris elemani sayisal olmali (bulunan: string)
+// error: matris satirlari ayni uzunlukta olmali (beklenen 2, bulunan 1)
+// error: matrix<int> 2 indeks bekler (verilen: 1)
+// error: matrislerle yalnizca + - * / kullanilabilir
+// error: ic ice liste literali yalnizca matris olarak kullanilabilir
+// error: matris tek basina yazdirilmali
+// error: 'matmul' matris bekler (bulunan: int)
+// error: 'zeros' boyut olarak tamsayi bekler (bulunan: float64)
+// error: int[3] 1 indeks bekler (verilen: 2)
+func degistir(matrix<int> m) -> void {
+    m[0, 0] = 1;
+}
+
+func main() -> void {
+    matrix<int> bos;
+    matrix<string> s = zeros(1, 1);
+    matrix<int> a = [[1, 2], [3]];
+    matrix<int> b = [[1, 2], [3, 4]];
+    b[0] = 1;
+    matrix<int> c = b % b;
+    let n = [[1, 2], [3, 4]];
+    print("b =", b);
+    matrix<int> d = matmul(b, 5);
+    matrix<float64> z = zeros(2.5, 2);
+    int[3] dizi = [1, 2, 3];
+    print(dizi[0, 1]);
+}

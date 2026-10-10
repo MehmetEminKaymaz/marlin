@@ -18,6 +18,7 @@ class ArrayAccessExpr;
 class FunctionCallExpr;
 class UnaryExpr;
 class BinaryExpr;
+class CastExpr;
 class BlockStmt;
 class ExprStmt;
 class VariableDecl;
@@ -50,6 +51,7 @@ public:
     virtual void visit(FunctionCallExpr* node) = 0;
     virtual void visit(UnaryExpr* node) = 0;
     virtual void visit(BinaryExpr* node) = 0;
+    virtual void visit(CastExpr* node) = 0;
     virtual void visit(BlockStmt* node) = 0;
     virtual void visit(ExprStmt* node) = 0;
     virtual void visit(VariableDecl* node) = 0;

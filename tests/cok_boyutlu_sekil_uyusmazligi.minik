@@ -1,0 +1,9 @@
+// expect: 1
+// stderr: calisma zamani hatasi (satir 7): matris boyutlari uyusmuyor (2x3x4 ve 2x3x5)
+// Boyut sayısı aynı (derleme geçer), uzunluklar farklı (çalışırken yakalanır).
+func main() -> void {
+    matrix<int, 3> a = zeros(2, 3, 4);
+    matrix<int, 3> b = zeros(2, 3, 5);
+    matrix<int, 3> c = a + b;
+    print(sum(c));
+}

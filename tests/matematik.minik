@@ -1,0 +1,42 @@
+// output: 4.0 1024.0 3.0
+// output: 0.0 1.0 1.0 0.0
+// output: 2.0 3.0 3.0 -2.0
+// output: 5 2.5 7
+// output: 3 7 2.5 -1.0
+// output: 3.141592653589793 0.0 0.0
+// output: 1.5 2.0
+// output: 5.0
+// output: 9 10
+// Matematik yerleşikleri MLIR math/arith operasyonlarına çevrilir.
+
+func hipotenus(float64 a, float64 b) -> float64 {
+    return sqrt(a * a + b * b);
+}
+
+func main() -> void {
+    // Tamsayı argüman float64'e çevrilir
+    print(sqrt(16), pow(2, 10), log2(8.0));
+    print(sin(0.0), cos(0.0), exp(0), log(1));
+
+    // Yuvarlama: sonuç kayan nokta kalır
+    print(floor(2.7), ceil(2.1), round(2.5), trunc(-2.7));
+
+    // abs / min / max: tamsayıda tamsayı, kayan noktada kayan nokta
+    uint8 u = 7;
+    print(abs(-5), abs(-2.5), abs(u));
+    print(min(3, 7), max(3, 7), max(2.5, 1), min(-1.0, 4));
+
+    // libm üzerinden inenler
+    print(atan2(1.0, 1.0) * 4, tanh(0.0), tan(0.0) + atan(0.0));
+
+    // float argüman float kalır
+    float f = 2.25;
+    float kok = sqrt(f);
+    print(kok, kok + 0.5);
+
+    print(hipotenus(3, 4));
+
+    // Kullanıcı tanımı yerleşiği gölgeler
+    int max = 9;
+    print(max, min(max + 1, 20));
+}

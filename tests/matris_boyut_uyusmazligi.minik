@@ -1,0 +1,11 @@
+// expect: 1
+// output: 2 3
+// stderr: calisma zamani hatasi (satir 9): matris boyutlari uyusmuyor (2x2 ve 2x3)
+// Eleman eleman işlemde boyutlar çalışırken denetlenir.
+func main() -> void {
+    matrix<int> a = [[1, 2], [3, 4]];
+    matrix<int> b = [[1, 2, 3], [4, 5, 6]];
+    print(rows(b), cols(b));
+    matrix<int> c = a + b;
+    print("sonra");
+}

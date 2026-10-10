@@ -1,0 +1,123 @@
+// output: 1 2
+// output: 3 4
+// output: 2 2
+// output: 3 20
+// output: 21 42
+// output: 63 84
+// output: 200
+// output: 70 100
+// output: 150 220
+// output: 1 3
+// output: 2 4
+// output: 1 99
+// output: 1.5 1.5 1.5
+// output: 1.5 1.5 1.5
+// output: 2 3 9.0
+// output: 0.5 1.0
+// output: 1.5 2.0
+// output: 300
+// output: -4
+// output: 63
+// output: 52
+// output: 30
+// output: 290
+// output: 1.0 0.0 0.0
+// output: 0.0 1.0 0.0
+// output: 0.0 0.0 1.0
+// output: 1 5
+// output: 4000.0
+// output: 8
+// output: 14 32
+// output: 32 77
+// output: 3 2
+// matrix<T>: iki boyutlu, değer olarak davranan matris.
+
+func olcekle(matrix<int> m, int k) -> matrix<int> {
+    return m * k;                          // yeni hesaplanan matris döner
+}
+
+// Matris köşegeninin toplamı (eleman erişimiyle döngü)
+func iz(matrix<int> m) -> int {
+    int t = 0;
+    for i in 0 .. rows(m) { t = t + m[i, i]; }
+    return t;
+}
+
+// Yerel matris kopyalanmadan döndürülür
+func birim(int n) -> matrix<float64> {
+    matrix<float64> I = zeros(n, n);
+    for i in 0 .. n { I[i, i] = 1; }
+    return I;
+}
+
+// Parametre döndürülürse kopyası döner (çağıranınki ayrı kalır)
+func ayni(matrix<int> m) -> matrix<int> {
+    return m;
+}
+
+func main() -> void {
+    matrix<int> A = [[1, 2], [3, 4]];
+    matrix<int> B = [[10, 20], [30, 40]];
+    print(A);
+    print(rows(A), cols(A));
+    print(A[1, 0], B[0, 1]);
+
+    // Eleman eleman işlemler ve sayıyla işlem: tek döngüde hesaplanır
+    matrix<int> C = A + B * 2;
+    print(C);
+    C = C - A;                             // sağ taraf eski değeri kullanır
+    print(sum(C));
+
+    // Matris çarpımı ve devrik
+    matrix<int> M = matmul(A, B);
+    print(M);
+    print(transpose(A));
+
+    // Değer semantiği: D bağımsız bir kopyadır
+    matrix<int> D = A;
+    D[0, 0] = 99;
+    print(A[0, 0], D[0, 0]);
+
+    // Oluşturma, kayan nokta, eleman tipi dönüşümü
+    matrix<float64> Z = zeros(2, 3);
+    matrix<float64> O = ones(2, 3);
+    matrix<float64> F = (Z + O * 3) / 2;
+    print(F);
+    print(rows(F), cols(F), sum(F));
+    matrix<float64> G = A * 0.5;           // int matris kayan noktaya çevrilir
+    print(G);
+
+    print(sum(A * B));                     // çarpım için ara matris ayrılmaz
+    matrix<int> N = -A;
+    print(N[1, 1]);
+    print(sum(fill(3, 3, 7)));
+    print(sum(matmul(A, transpose(A))));
+
+    // Fonksiyonlar
+    print(sum(olcekle(A, 3)));
+    print(iz(M));
+    print(birim(3));
+    matrix<int> K = ayni(A);
+    K[0, 0] = 5;
+    print(A[0, 0], K[0, 0]);
+
+    // Döngüde yeniden atama: her adımda eski bellek bırakılır
+    matrix<float64> acc = zeros(2, 2);
+    for i in 0 .. 1000 { acc = acc + ones(2, 2); }
+    print(sum(acc));
+
+    // Döngü gövdesinde tanımlı matris; continue ve break ile çıkış
+    int say = 0;
+    for i in 0 .. 5 {
+        matrix<int> T = fill(2, 2, i);
+        if i == 1 { continue; }
+        if i == 3 { break; }
+        say = say + sum(T);
+    }
+    print(say);
+
+    // Kare olmayan matrisler
+    matrix<int> P = [[1, 2, 3], [4, 5, 6]];
+    print(matmul(P, transpose(P)));
+    print(rows(transpose(P)), cols(transpose(P)));
+}

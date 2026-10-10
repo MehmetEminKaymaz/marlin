@@ -1,0 +1,9 @@
+// expect: 1
+// stderr: calisma zamani hatasi (satir 7): matmul icin boyutlar uygun degil (2x3 ve 2x3)
+// (2x3) * (2x3) çarpılamaz: soldakinin sütun sayısı sağdakinin satır sayısı olmalı.
+func main() -> void {
+    matrix<float> a = ones(2, 3);
+    matrix<float> b = ones(2, 3);
+    matrix<float> c = matmul(a, b);
+    print(c);
+}

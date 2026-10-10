@@ -5,9 +5,13 @@
 #ifndef ASTNODE_H
 #define ASTNODE_H
 
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 #include "ASTVisitor.h"
+#include "Builtins.h"
+#include "SemType.h"
 #include "Enums/TypeKind.h"
 
 
@@ -22,6 +26,9 @@ class ASTNode {
 };
 
 class Expression : public ASTNode {
+public:
+    // Sema tarafından doldurulur; kod üretimi tipleri buradan okur.
+    SemType type;
 };
 
 class Statement : public ASTNode {
@@ -31,6 +38,9 @@ class Type : public ASTNode {
     public:
     TypeKind kind;
     int arraySize = 0;
+    // Matrix: boyut sayısı. matrix<T> yazımında 2; geçersiz yazımda (tamsayı
+    // olmayan sayı) -1 olur ve Sema raporlar.
+    int rank = 0;
     std::unique_ptr<Type> elementType;
     std::vector<std::unique_ptr<Type>> paramTypes;
     std::unique_ptr<Type> returnType;
@@ -41,7 +51,7 @@ class Type : public ASTNode {
 
 class Program : public ASTNode {
     public:
-    std::pmr::vector<std::unique_ptr<Statement>> declarations;
+    std::vector<std::unique_ptr<Statement>> declarations;
     void accept(ASTVisitor& visitor) override {visitor.visit(this);};
 };
 
@@ -82,7 +92,11 @@ public:
 
 class Identifier : public Expression {
 public:
+    // İsmin neye çözüldüğü (Sema doldurur)
+    enum class Ref { Unresolved, Local, Global, Function };
+
     std::string name;
+    Ref ref = Ref::Unresolved;
     explicit Identifier(const std::string& n) : name(n) {}
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
@@ -96,9 +110,9 @@ public:
 class ArrayAccessExpr : public Expression {
 public:
     std::unique_ptr<Expression> target;
-    std::unique_ptr<Expression> index;
-    ArrayAccessExpr(std::unique_ptr<Expression> t, std::unique_ptr<Expression> idx)
-        : target(std::move(t)), index(std::move(idx)) {}
+    // Dizi ve listede tek indeks (a[i]), matriste iki indeks (m[i, j]).
+    std::vector<std::unique_ptr<Expression>> indices;
+    explicit ArrayAccessExpr(std::unique_ptr<Expression> t) : target(std::move(t)) {}
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
@@ -106,6 +120,9 @@ class FunctionCallExpr : public Expression {
 public:
     std::unique_ptr<Expression> target;
     std::vector<std::unique_ptr<Expression>> arguments;
+    // Çağrı bir yerleşik fonksiyona (print, sqrt ...) aitse Sema işaretler;
+    // bu durumda `target` çözülmez ve kod üretiminde kullanılmaz.
+    Builtin builtin = Builtin::None;
     FunctionCallExpr(std::unique_ptr<Expression> t) : target(std::move(t)) {}
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
@@ -130,6 +147,15 @@ public:
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
+// Örtük tip dönüşümü. Kaynak kodda karşılığı yoktur; Sema, tiplerin uyuşmadığı
+// yerlere ekler (hedef tip `type` alanındadır).
+class CastExpr : public Expression {
+public:
+    std::unique_ptr<Expression> operand;
+    explicit CastExpr(std::unique_ptr<Expression> e) : operand(std::move(e)) {}
+    void accept(ASTVisitor& visitor) override { visitor.visit(this); }
+};
+
 class BlockStmt : public Statement {
 public:
     std::vector<std::unique_ptr<Statement>> statements;
@@ -149,6 +175,7 @@ public:
     std::unique_ptr<Type> type;
     std::unique_ptr<Expression> initializer;
     bool isLet;
+    SemType varType; // Sema doldurur (let için çıkarılan tip dahil)
     VariableDecl(std::string n, std::unique_ptr<Type> t, std::unique_ptr<Expression> init, bool let = false)
         : name(std::move(n)), type(std::move(t)), initializer(std::move(init)), isLet(let) {}
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
@@ -179,6 +206,7 @@ public:
     std::vector<std::unique_ptr<ParamDecl>> params;
     std::unique_ptr<Type> returnType;
     std::unique_ptr<BlockStmt> body;
+    SemType fnType; // Sema doldurur
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
@@ -186,7 +214,9 @@ class LambdaExpr : public Expression {
 public:
     std::vector<std::unique_ptr<ParamDecl>> params;
     std::unique_ptr<Type> returnType;
-    std::unique_ptr<ASTNode> body;
+    // Gövde ya tek bir ifadedir ( | expr ) ya da bir bloktur; biri doludur.
+    std::unique_ptr<Expression> exprBody;
+    std::unique_ptr<BlockStmt> blockBody;
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
@@ -200,31 +230,47 @@ public:
     std::unique_ptr<BlockStmt> trueBlock;
     std::vector<ElseIf> elseIfs;
     std::unique_ptr<BlockStmt> elseBlock;
+    // Dallardan biri dışarı atlıyor mu (return ya da dıştaki döngüye
+    // break/continue)? Öyleyse scf.if kullanılamaz, cf blokları üretilir.
+    bool needsCFG = false;
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
-class WhileStmt : public Statement {
+// Döngülerin ortak kısmı. Akış bilgilerini Sema doldurur.
+class LoopStmt : public Statement {
+public:
+    std::unique_ptr<BlockStmt> body;
+    // Gövdede bu döngüye ait bir break ya da herhangi bir return var:
+    // döngü yapısal (scf) olarak üretilemez, cf bloklarına düşülür.
+    bool needsCFG = false;
+    // Gövdede bu döngüye ait bir continue var.
+    bool hasContinue = false;
+    // `parallel for`: yinelemeler aynı anda çalışabilir. Sema, gövdenin buna
+    // uygun olduğunu (yinelemelerin birbirinin verisine dokunmadığını) denetler.
+    bool isParallel = false;
+};
+
+class WhileStmt : public LoopStmt {
 public:
     std::unique_ptr<Expression> condition;
-    std::unique_ptr<BlockStmt> body;
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
-class ForRangeStmt : public Statement {
+class ForRangeStmt : public LoopStmt {
 public:
     std::string iteratorName;
     std::unique_ptr<Expression> start;
     std::unique_ptr<Expression> end;
     std::unique_ptr<Expression> step;
-    std::unique_ptr<BlockStmt> body;
+    SemType iterType; // Sema doldurur
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
-class ForCollectionStmt : public Statement {
+class ForCollectionStmt : public LoopStmt {
 public:
     std::string iteratorName;
     std::unique_ptr<Expression> collection;
-    std::unique_ptr<BlockStmt> body;
+    SemType iterType; // Sema doldurur (koleksiyonun eleman tipi)
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 

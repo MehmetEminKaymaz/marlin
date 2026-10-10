@@ -1,0 +1,56 @@
+    int globalX = 42;
+    float globalPi = 3.14;
+
+
+    func topla(int a,int b) -> int
+    {
+      return a + b;
+    }
+
+    // Basit tür çıkarımı ve temel işlemler
+    func main() -> void {
+        let a = 10;                 // let ile tür çıkarımı (int)
+        int b = 20;
+        let sonuc = a + b * 2;      // binary expr + let
+        bool flag = true;
+        list<int> listem = [];
+
+        print(flag);
+
+        if(b == 20)
+        {
+           print("b nin değeri 20 dir");
+        }
+
+        for i in 0 .. 10 {
+           push(listem,i);
+        }
+
+        print("liste elemanları yazdırılıyor");
+        for i in listem {
+            print(i);
+        }
+
+        let kare = (int n) -> int | n*n;
+        print("topla fonksiyonu çağırılıyor");
+        print(topla(a,b));
+        print("kare lambda fonksiyonu çağırılıyor");
+        print(kare(4));
+
+
+        matrix<int> mat1 = [[1,2],[2,3]];
+        matrix<int> mat2 = [[4,5],[6,7]];
+        print(mat1);
+        print(mat2);
+        let matsonuc = mat1 * mat2;
+        print(matsonuc);
+
+        print("paralel başlıyor");
+
+        parallel for i in 0 .. 1000 {
+
+            print(i);
+
+        }
+
+    }

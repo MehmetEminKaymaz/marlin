@@ -1,0 +1,12 @@
+// expect: 1
+// output: once
+// stderr: calisma zamani hatasi (satir 10): liste indeksi sinir disinda (indeks 5, uzunluk 3)
+// Sınır dışı indeks çöp okumaz; program mesajla durur. Hatadan önceki çıktı
+// kaybolmaz, sonraki satır çalışmaz.
+func main() -> void {
+    list<int> l = [1, 2, 3];
+    print("once");
+    int i = 5;
+    print(l[i]);
+    print("sonra");
+}

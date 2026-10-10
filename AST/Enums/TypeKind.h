@@ -24,6 +24,7 @@ enum class TypeKind {
  Void,
  Array,
  List,
+ Matrix,
  Lambda
 };
 

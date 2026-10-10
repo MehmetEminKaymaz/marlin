@@ -1,0 +1,23 @@
+// Listelerin hatalı kullanımları.
+// error: global degisken olarak yalnizca
+// error: bos liste literalinin tipi cikarilamiyor
+// error: 'push' ilk arguman olarak liste bekler (bulunan: int)
+// error: liste elemani sayisal, bool ya da char olmali (bulunan: string)
+// error: bu tipte bir deger yazdirilamaz: list<int>
+// error: tip uyusmazligi: beklenen list<float>, bulunan list<int>
+// error: 'len' liste, dizi ya da string bekler (bulunan: int)
+// error: tip uyusmazligi: beklenen int, bulunan bool
+// error: 'pop' 1 arguman bekler (verilen: 2)
+list<int> genel;
+
+func main() -> void {
+    let e = [];
+    push(5, 1);
+    list<string> s;
+    list<int> l;
+    print(l);
+    list<float> g = l;
+    print(len(5));
+    push(l, true);
+    pop(l, 1);
+}

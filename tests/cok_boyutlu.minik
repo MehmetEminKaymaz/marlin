@@ -1,0 +1,71 @@
+// output: 1 2 3
+// output: 21 22 23
+// output: 3 60
+// output: 7 11
+// output: 54
+// output: 2 2 3
+// output: 102.0 672.0
+// output: 0.0 1.0 2.0
+// output: 10.0 11.0 12.0
+// output:
+// output: 100.0 101.0 102.0
+// output: 110.0 111.0 112.0
+// output: 0.0
+// output: 6 36
+// output: 684.0
+// output: 5 0.0
+// output: 36
+// output: 9
+// matrix<T, N>: boyut sayısı tipin parçasıdır.
+
+func toplam3(matrix<int, 3> x) -> int {
+    return sum(x);
+}
+
+// Her boyut sayısı için ayrı tip: bu fonksiyon yalnızca vektör alır.
+func karelerToplami(matrix<int, 1> x) -> int {
+    return sum(x * x);
+}
+
+func main() -> void {
+    // Tek boyut (vektör)
+    matrix<int, 1> v = [1, 2, 3];
+    matrix<int, 1> w = fill(3, 10);
+    print(v);
+    print(v + w * 2);
+    print(shape(v, 0), sum(v * w));
+    v[1] = 7;
+    print(v[1], sum(v));
+
+    // matrix<int> ile matrix<int, 2> aynı tiptir
+    matrix<int, 2> m2 = [[1, 2], [3, 4]];
+    matrix<int> m = m2;
+    print(sum(matmul(m, m2)));
+
+    // Üç boyut
+    matrix<float64, 3> t = zeros(2, 2, 3);
+    print(shape(t, 0), shape(t, 1), shape(t, 2));
+    for i in 0 .. 2 {
+        for j in 0 .. 2 {
+            for k in 0 .. 3 { t[i, j, k] = i * 100 + j * 10 + k; }
+        }
+    }
+    print(t[1, 0, 2], sum(t));
+    print(t);                                  // iki boyutlu dilimler, arada boş satır
+
+    matrix<float64, 3> u = t * 2 - t;          // eleman eleman, tek işlemde
+    print(sum(u - t));
+
+    matrix<int, 3> lit = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]];
+    print(lit[1, 0, 1], sum(lit));
+
+    matrix<float64, 3> o = ones(2, 2, 3);
+    print(sum(o + t));
+
+    // Tip yazılmazsa boyut sayısı argüman sayısından çıkar
+    let z = zeros(2, 3, 4, 5);
+    print(shape(z, 3), sum(z));
+
+    print(toplam3(lit));
+    print(karelerToplami([2, 2, 1]));          // literal doğrudan argüman
+}

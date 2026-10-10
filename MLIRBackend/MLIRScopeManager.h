@@ -7,7 +7,6 @@
 
 #include "CodegenContext.h"
 #include <string>
-#include <iostream>
 
 class MLIRScopeManager {
     CodegenContext& ctx;
@@ -34,7 +33,6 @@ public:
                 return it->at(name);
             }
         }
-        std::cerr << "Variable not found: " << name << "\n";
         return nullptr;
     }
 };

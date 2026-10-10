@@ -1,0 +1,29 @@
+// expect: 80
+// Örtük dönüşümler, işaretsiz aritmetik, öncelik ve kısa devre.
+func main() -> int {
+    int64 buyuk = 3000000000;                 // literal doğrudan i64
+    int a = 7;
+    int64 t = buyuk + a;                      // a, i64'e genişler
+    int r = 0;
+    if t > 3000000000 { r = r + 1; }          // 1
+
+    float f = 3;                              // tamsayı literali -> f32
+    float64 g = f * 2.5;                      // 7.5
+    int h = g;                                // 7 (kesilir)
+    r = r + h;                                // 8
+
+    uint8 u = 200;
+    uint8 v = u / 3;                          // işaretsiz bölme: 66 (işaretli olsaydı -18)
+    r = r + v;                                // 74
+
+    int[3] d = [5, 6, 7];
+    r = r + -d[0];                            // -(d[0])  -> 69
+
+    int i = 3;
+    if i < 3 && d[i] > 0 { r = r + 1000; }    // kısa devre: d[3] okunmaz
+    if i == 3 || d[i] > 0 { r = r + 10; }     // 79
+
+    char c = 'b';
+    if c > 'a' && !(c == '\n') { r = r + 1; } // 80
+    return r;
+}

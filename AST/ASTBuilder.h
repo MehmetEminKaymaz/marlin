@@ -10,7 +10,52 @@
 
 class ASTBuilder : public minikBaseVisitor {
 
+    // Düğüme kaynak konumunu yazar (henüz yazılmamışsa).
+    static void setLoc(ASTNode* node, antlr4::Token* tok) {
+        if (!node || !tok || node->line != 0) return;
+        node->line   = static_cast<int>(tok->getLine());
+        node->column = static_cast<int>(tok->getCharPositionInLine()) + 1;
+    }
+
+    // "\n", "\t" gibi kaçış dizilerini gerçek karakterlere çevirir.
+    static std::string unescape(const std::string& s) {
+        std::string out;
+        for (size_t i = 0; i < s.size(); ++i) {
+            if (s[i] != '\\' || i + 1 >= s.size()) { out += s[i]; continue; }
+            switch (s[++i]) {
+                case 'n': out += '\n'; break;
+                case 't': out += '\t'; break;
+                case 'r': out += '\r'; break;
+                case '0': out += '\0'; break;
+                default:  out += s[i]; break; // \\  \'  \"
+            }
+        }
+        return out;
+    }
+
+    Expression* makeBinary(BinaryExpr::Op op, minikParser::ExpressionContext* l,
+                           minikParser::ExpressionContext* r, antlr4::Token* opTok) {
+        auto left = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(l)));
+        auto right = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(r)));
+        auto* node = new BinaryExpr(op, std::move(left), std::move(right));
+        setLoc(node, opTok); // hata mesajları işleci göstersin
+        return node;
+    }
+
 public:
+    // Her kuralın ürettiği düğüme, o kuralın ilk token'ının konumunu yazar.
+    // Böylece visitXxx metotlarının tek tek konum ataması gerekmez.
+    std::any visit(antlr4::tree::ParseTree* tree) override {
+        std::any result = minikBaseVisitor::visit(tree);
+        auto* ctx = dynamic_cast<antlr4::ParserRuleContext*>(tree);
+        if (!ctx || !result.has_value()) return result;
+
+        if (auto* e = std::any_cast<Expression*>(&result)) setLoc(*e, ctx->getStart());
+        else if (auto* s = std::any_cast<Statement*>(&result)) setLoc(*s, ctx->getStart());
+        else if (auto* t = std::any_cast<Type*>(&result)) setLoc(*t, ctx->getStart());
+        return result;
+    }
+
     virtual std::any visitProgram(minikParser::ProgramContext *ctx) override {
         auto program = std::make_unique<Program>();
         for (auto* declCtx : ctx->declaration()) {
@@ -26,7 +71,7 @@ public:
 
     virtual std::any visitDeclaration(minikParser::DeclarationContext *ctx) override {
     if (ctx->functionDecl()) return visit(ctx->functionDecl());
-    if (ctx->statement()) return visit(ctx->statement());
+    if (ctx->variableDefinition()) return visit(ctx->variableDefinition());
     return {};
 }
 
@@ -90,6 +135,7 @@ virtual std::any visitFunctionDecl(minikParser::FunctionDeclContext *ctx) overri
         for (auto* p : ctx->paramList()->param()) {
             auto type = std::unique_ptr<Type>(std::any_cast<Type*>(visit(p->variableType())));
             auto param = new ParamDecl(p->IDENTIFIER()->getText(), std::move(type));
+            setLoc(param, p->getStart());
             fn->params.push_back(std::unique_ptr<ParamDecl>(param));
         }
     }
@@ -140,6 +186,7 @@ virtual std::any visitWhileStatement(minikParser::WhileStatementContext *ctx) ov
 
 virtual std::any visitForRangeStatement(minikParser::ForRangeStatementContext *ctx) override {
     auto f = new ForRangeStmt();
+    f->isParallel = ctx->parallel != nullptr;
     f->iteratorName = ctx->IDENTIFIER()->getText();
     f->start = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
     f->end = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(1))));
@@ -152,6 +199,7 @@ virtual std::any visitForRangeStatement(minikParser::ForRangeStatementContext *c
 
 virtual std::any visitForCollectionStatement(minikParser::ForCollectionStatementContext *ctx) override {
     auto f = new ForCollectionStmt();
+    f->isParallel = ctx->parallel != nullptr;
     f->iteratorName = ctx->IDENTIFIER()->getText();
     f->collection = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     f->body = std::unique_ptr<BlockStmt>(static_cast<BlockStmt*>(std::any_cast<Statement*>(visit(ctx->block()))));
@@ -168,13 +216,14 @@ virtual std::any visitNumberExpr(minikParser::NumberExprContext *ctx) override {
 
 virtual std::any visitStringExpr(minikParser::StringExprContext *ctx) override {
     std::string text = ctx->STRING()->getText();
-    text = text.substr(1, text.length() - 2); // remove quotes
+    text = unescape(text.substr(1, text.length() - 2)); // remove quotes
     return static_cast<Expression*>(new StringLiteral(text));
 }
 
 virtual std::any visitCharExpr(minikParser::CharExprContext *ctx) override {
     std::string text = ctx->CHAR()->getText();
-    char val = text[1]; // simple char handling
+    text = unescape(text.substr(1, text.length() - 2));
+    char val = text.empty() ? '\0' : text[0];
     return static_cast<Expression*>(new CharLiteral(val));
 }
 
@@ -201,9 +250,11 @@ virtual std::any visitListLiteralExpr(minikParser::ListLiteralExprContext *ctx) 
 }
 
 virtual std::any visitArrayAccessExpr(minikParser::ArrayAccessExprContext *ctx) override {
-    auto target = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
-    auto index = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(1))));
-    return static_cast<Expression*>(new ArrayAccessExpr(std::move(target), std::move(index)));
+    auto target = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
+    auto access = new ArrayAccessExpr(std::move(target));
+    for (auto* e : ctx->exprList()->expression())
+        access->indices.push_back(std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(e))));
+    return static_cast<Expression*>(access);
 }
 
 virtual std::any visitFunctionCallExpr(minikParser::FunctionCallExprContext *ctx) override {
@@ -232,25 +283,19 @@ virtual std::any visitNotExpr(minikParser::NotExprContext *ctx) override {
 }
 
 virtual std::any visitMulDivExpr(minikParser::MulDivExprContext *ctx) override {
-    auto left = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
-    auto right = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(1))));
     BinaryExpr::Op op;
     if (ctx->op->getText() == "*") op = BinaryExpr::Mul;
     else if (ctx->op->getText() == "/") op = BinaryExpr::Div;
     else op = BinaryExpr::Mod;
-    return static_cast<Expression*>(new BinaryExpr(op, std::move(left), std::move(right)));
+    return makeBinary(op, ctx->expression(0), ctx->expression(1), ctx->op);
 }
 
 virtual std::any visitAddSubExpr(minikParser::AddSubExprContext *ctx) override {
-    auto left = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
-    auto right = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(1))));
     BinaryExpr::Op op = ctx->op->getText() == "+" ? BinaryExpr::Add : BinaryExpr::Sub;
-    return static_cast<Expression*>(new BinaryExpr(op, std::move(left), std::move(right)));
+    return makeBinary(op, ctx->expression(0), ctx->expression(1), ctx->op);
 }
 
 virtual std::any visitRelationalExpr(minikParser::RelationalExprContext *ctx) override {
-    auto left = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
-    auto right = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(1))));
     std::string optxt = ctx->op->getText();
     BinaryExpr::Op op;
     if (optxt == "<") op = BinaryExpr::Lt;
@@ -259,19 +304,15 @@ virtual std::any visitRelationalExpr(minikParser::RelationalExprContext *ctx) ov
     else if (optxt == ">=") op = BinaryExpr::Gte;
     else if (optxt == "==") op = BinaryExpr::Eq;
     else op = BinaryExpr::Neq;
-    return static_cast<Expression*>(new BinaryExpr(op, std::move(left), std::move(right)));
+    return makeBinary(op, ctx->expression(0), ctx->expression(1), ctx->op);
 }
 
 virtual std::any visitLogicalAndExpr(minikParser::LogicalAndExprContext *ctx) override {
-    auto left = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
-    auto right = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(1))));
-    return static_cast<Expression*>(new BinaryExpr(BinaryExpr::And, std::move(left), std::move(right)));
+    return makeBinary(BinaryExpr::And, ctx->expression(0), ctx->expression(1), ctx->op);
 }
 
 virtual std::any visitLogicalOrExpr(minikParser::LogicalOrExprContext *ctx) override {
-    auto left = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
-    auto right = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(1))));
-    return static_cast<Expression*>(new BinaryExpr(BinaryExpr::Or, std::move(left), std::move(right)));
+    return makeBinary(BinaryExpr::Or, ctx->expression(0), ctx->expression(1), ctx->op);
 }
 
 virtual std::any visitLambdaExpr(minikParser::LambdaExprContext *ctx) override {
@@ -279,14 +320,16 @@ virtual std::any visitLambdaExpr(minikParser::LambdaExprContext *ctx) override {
     if (ctx->paramList()) {
         for (auto* p : ctx->paramList()->param()) {
             auto type = std::unique_ptr<Type>(std::any_cast<Type*>(visit(p->variableType())));
-            lam->params.push_back(std::unique_ptr<ParamDecl>(new ParamDecl(p->IDENTIFIER()->getText(), std::move(type))));
+            auto param = new ParamDecl(p->IDENTIFIER()->getText(), std::move(type));
+            setLoc(param, p->getStart());
+            lam->params.push_back(std::unique_ptr<ParamDecl>(param));
         }
     }
     lam->returnType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType())));
     if (ctx->expression()) {
-        lam->body = std::unique_ptr<ASTNode>(static_cast<ASTNode*>(std::any_cast<Expression*>(visit(ctx->expression()))));
+        lam->exprBody = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     } else {
-        lam->body = std::unique_ptr<ASTNode>(static_cast<ASTNode*>(std::any_cast<Statement*>(visit(ctx->block()))));
+        lam->blockBody = std::unique_ptr<BlockStmt>(static_cast<BlockStmt*>(std::any_cast<Statement*>(visit(ctx->block()))));
     }
     return static_cast<Expression*>(lam);
 }
@@ -312,6 +355,18 @@ virtual std::any visitListType(minikParser::ListTypeContext *ctx) override {
     auto listType = new Type(TypeKind::List);
     listType->elementType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType())));
     return listType;
+}
+
+virtual std::any visitMatrixType(minikParser::MatrixTypeContext *ctx) override {
+    auto matrixType = new Type(TypeKind::Matrix);
+    matrixType->elementType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType())));
+    matrixType->rank = 2;
+    if (ctx->NUMBER()) {
+        std::string text = ctx->NUMBER()->getText();
+        const bool isInteger = text.find('.') == std::string::npos && text.size() <= 3;
+        matrixType->rank = isInteger ? std::stoi(text) : -1;
+    }
+    return matrixType;
 }
 
 virtual std::any visitLambdaType(minikParser::LambdaTypeContext *ctx) override {
@@ -356,6 +411,7 @@ virtual std::any visitBaseType(minikParser::BaseTypeContext *ctx) override {
     virtual std::any visitDirectAssignment(minikParser::DirectAssignmentContext *ctx) override {
         // Sol taraf (hedef) doğrudan bir Identifier
         auto target = std::unique_ptr<Expression>(new Identifier(ctx->IDENTIFIER()->getText()));
+        setLoc(target.get(), ctx->getStart());
         // Sağ taraf (atanacak değer)
         auto value = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
 
@@ -366,11 +422,14 @@ virtual std::any visitBaseType(minikParser::BaseTypeContext *ctx) override {
     virtual std::any visitArrayElementAssignment(minikParser::ArrayElementAssignmentContext *ctx) override {
         // Sol tarafı (hedef) bir ArrayAccessExpr olarak oluşturuyoruz
         auto arrayTarget = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
-        auto arrayIndex = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(1))));
-        auto target = std::unique_ptr<Expression>(new ArrayAccessExpr(std::move(arrayTarget), std::move(arrayIndex)));
+        auto access = new ArrayAccessExpr(std::move(arrayTarget));
+        for (auto* e : ctx->exprList()->expression())
+            access->indices.push_back(std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(e))));
+        auto target = std::unique_ptr<Expression>(access);
+        setLoc(target.get(), ctx->getStart());
 
-        // Sağ taraf (atanacak değer) 3. expression'dır (index 2)
-        auto value = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(2))));
+        // Sağ taraf (atanacak değer): '=' işaretinden sonraki ifade
+        auto value = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(1))));
 
         return static_cast<Statement*>(new AssignmentStmt(std::move(target), std::move(value)));
     }

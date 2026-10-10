@@ -1,0 +1,31 @@
+// Bu dosya derlenmemeli: her satır bir semantik hatayı dener.
+// error: her yolda deger dondurmuyor
+// error: 'break' bir dongunun icinde olmali
+// error: tip uyusmazligi: beklenen int, bulunan bool
+// error: tanimsiz isim: 'y'
+// error: dongu degiskeni 'i' degistirilemez
+// error: yakalama henuz desteklenmiyor
+// error: if kosulu bool olmali
+// error: arguman sayisi uyusmuyor
+// error: sabit deger uint8 tipine sigmiyor
+// error: tip uyusmazligi: beklenen int[3], bulunan int[2]
+// error: step pozitif olmali
+// error: 'z' bu kapsamda zaten tanimli
+func f(int a) -> int {
+    if a > 0 { return 1; }
+}
+
+func main() -> void {
+    break;
+    int x = true;
+    y = 3;
+    for i in 0 .. 5 { i = 2; }
+    int z = 5;
+    let lam = () -> int | z;
+    if z { }
+    f(1, 2);
+    uint8 k = 300;
+    int[3] d = [1, 2];
+    for j in 0 .. 5 step 0 { }
+    int z = 6;
+}

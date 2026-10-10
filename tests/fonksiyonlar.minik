@@ -1,0 +1,30 @@
+// expect: 118
+// Globaller, ileri referans, özyineleme, lambdalar ve fonksiyon değerleri.
+int sayac = 5;
+float oran = 0.5;
+int[4] tablo;
+
+func main() -> int {
+    let kare = (int x) -> int | x * x;
+    let topla = (int a, int b) -> int { return a + b; };
+    (int) -> int f = ikiKat;                  // fonksiyon, değer olarak
+
+    sayac = sayac + 1;                        // 6
+    tablo[2] = 9;
+    arttir();                                 // 7
+    float64 y = oran * 4;                     // 2.0
+    int yi = y;
+    string mesaj = "merhaba\n";
+
+    // 55 + 9 + 3 + 8 + 7 + 9 + 0 + 2 + 25
+    return fib(10) + kare(3) + topla(1, 2) + f(4) + sayac + tablo[2] + tablo[0] + yi + uygula(kare, 5);
+}
+
+func fib(int n) -> int {
+    if n < 2 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+func ikiKat(int x) -> int { return x * 2; }
+func arttir() -> void { sayac = sayac + 1; }
+func uygula((int) -> int g, int x) -> int { return g(x); }

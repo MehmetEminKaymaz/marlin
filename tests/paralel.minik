@@ -1,0 +1,72 @@
+// output: 499999500000
+// output: 0 4 9801
+// output: 999000000
+// output: 1250
+// output: 2000.0
+// output: 1536.0
+// output: 9801 9801
+// output: 9802
+// parallel for: yinelemeler iş parçacıklarına dağıtılır.
+
+func kare(int x) -> int {
+    return x * x;
+}
+
+func main() -> void {
+    // Listenin elemanlarına paralel yazma; gövdede yerel değişken
+    int n = 1000000;
+    list<int64> a = [];
+    for i in 0 .. n { push(a, 0); }
+    parallel for i in 0 .. n {
+        int64 gecici = i;                  // her yinelemeye özel
+        a[i] = gecici;
+    }
+    int64 toplam = 0;
+    for x in a { toplam = toplam + x; }
+    print(toplam);
+
+    // Statik dizi ve fonksiyon çağrısı
+    int[100] k;
+    parallel for i in 0 .. 100 { k[i] = kare(i); }
+    print(k[0], k[2], k[99]);
+
+    // Matris: satırlar paralel, sütunlar sıralı
+    matrix<int64> m = zeros(1000, 1000);
+    parallel for i in 0 .. 1000 {
+        for j in 0 .. 1000 { m[i, j] = i + j; }
+    }
+    print(sum(m));
+
+    // step ve continue
+    int[100] c;
+    for i in 0 .. 100 { c[i] = 0; }
+    parallel for i in 0 .. 100 step 2 {
+        if i % 4 == 0 { continue; }
+        c[i] = i;                          // 2, 6, 10, ..., 98
+    }
+    int ct = 0;
+    for x in c { ct = ct + x; }
+    print(ct);
+
+    // İç içe paralel döngü
+    matrix<float64> g = zeros(50, 40);
+    parallel for i in 0 .. 50 {
+        parallel for j in 0 .. 40 { g[i, j] = 1; }
+    }
+    print(sum(g));
+
+    // Gövdede matris işlemi: her yineleme kendi matrisini ayırır ve bırakır
+    matrix<float64, 1> r = zeros(64);
+    parallel for i in 0 .. 64 {
+        matrix<float64> t = fill(4, 4, 0.5);
+        r[i] = sum(t * 2.0 + t);
+    }
+    print(sum(r));
+
+    // Yazılmayan bir dizi serbestçe okunabilir; yazılan dizi aynı indeksle
+    int[100] d;
+    parallel for i in 0 .. 100 { d[i] = k[99 - i] + k[i]; }
+    print(d[0], d[99]);
+    parallel for i in 0 .. 100 { d[i] = d[i] + 1; }
+    print(d[0]);
+}

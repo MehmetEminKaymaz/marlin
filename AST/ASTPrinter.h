@@ -66,7 +66,9 @@ public:
         printNode("ArrayAccess");
         indentLevel++;
         if (node->target) node->target->accept(*this);
-        if (node->index) node->index->accept(*this);
+        for (auto& index : node->indices) {
+            if (index) index->accept(*this);
+        }
         indentLevel--;
     }
     void visit(FunctionCallExpr* node) override {
@@ -103,7 +105,14 @@ public:
             if (p) p->accept(*this);
         }
         if (node->returnType) node->returnType->accept(*this);
-        if (node->body) node->body->accept(*this);
+        if (node->exprBody) node->exprBody->accept(*this);
+        if (node->blockBody) node->blockBody->accept(*this);
+        indentLevel--;
+    }
+    void visit(CastExpr* node) override {
+        printNode("Cast -> " + node->type.str());
+        indentLevel++;
+        if (node->operand) node->operand->accept(*this);
         indentLevel--;
     }
 
@@ -224,6 +233,7 @@ public:
             case TypeKind::Void:    typeStr = "void"; break;
             case TypeKind::Array:   typeStr = "Array[" + std::to_string(node->arraySize) + "]"; break;
             case TypeKind::List:    typeStr = "List"; break;
+            case TypeKind::Matrix:  typeStr = "Matrix"; break;
             case TypeKind::Lambda:  typeStr = "Lambda"; break;
             default: typeStr = "Unknown"; break;
         }
