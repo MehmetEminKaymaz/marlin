@@ -71,10 +71,28 @@ public:
     /// tensor'un `dimension` numaralı boyutunun uzunluğu, index tipinde.
     mlir::Value dim(mlir::Value tensor, unsigned dimension, mlir::Location loc);
 
-    // --- oluşturma ---
-    /// `sizes`: her boyutun uzunluğu (index tipinde).
+    // --- bellek ---
+    /// Yeni matris belleği; `sizes`: her boyutun uzunluğu (index tipinde).
+    /// @GPU fonksiyonda GPU belleğinden, aksi halde yığın belleğinden ayrılır.
     mlir::Value allocateBuffer(llvm::ArrayRef<mlir::Value> sizes, mlir::Type elementType,
                                mlir::Location loc);
+    /// allocateBuffer ile (aynı tür fonksiyonda) ayrılmış belleği bırakır.
+    void freeBuffer(mlir::Value buffer, mlir::Location loc);
+    /// Belleğin nerede olacağı açıkça verilir: GPU'da (onDevice) ya da CPU'da.
+    mlir::Value allocateIn(llvm::ArrayRef<mlir::Value> sizes, mlir::Type elementType,
+                           bool onDevice, mlir::Location loc);
+
+    // --- CPU <-> GPU (yalnızca GPU hedefi açıkken kullanılır) ---
+    /// `buffer` ile aynı şekilde, CPU (onDevice = false) ya da GPU belleğinde
+    /// yeni bir bellek ayırır.
+    mlir::Value allocateLike(mlir::Value buffer, bool onDevice, mlir::Location loc);
+    void free(mlir::Value buffer, bool onDevice, mlir::Location loc);
+    /// CPU belleğindeki matrisin GPU'daki kopyası.
+    mlir::Value upload(mlir::Value hostBuffer, mlir::Location loc);
+    /// GPU belleğindeki matrisin CPU'daki kopyası.
+    mlir::Value download(mlir::Value deviceBuffer, mlir::Location loc);
+
+    // --- oluşturma ---
     /// Bütün elemanları `value` olan matris.
     Result filled(llvm::ArrayRef<mlir::Value> sizes, mlir::Value value, mlir::Location loc);
 
@@ -101,6 +119,8 @@ public:
 private:
     Result allocate(llvm::ArrayRef<mlir::Value> sizes, mlir::Type elementType,
                     mlir::Location loc);
+    mlir::Value sumOnDevice(llvm::ArrayRef<mlir::Value> inputs, mlir::Type elementType,
+                            ElementFn body, mlir::Location loc);
     void checkSameShape(llvm::ArrayRef<mlir::Value> inputs, int line, mlir::Location loc);
     void checkIndex(mlir::Value buffer, llvm::ArrayRef<mlir::Value> indices, int line,
                     mlir::Location loc);

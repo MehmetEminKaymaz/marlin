@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # LLVM ve MLIR için dizinler
-list(APPEND CMAKE_PREFIX_PATH "/home/emin/llvm-project/build")
+list(APPEND CMAKE_PREFIX_PATH "/home/emin/llvm-project/build-gpu")
 
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
@@ -103,10 +103,13 @@ set(PROJECT_SOURCES
         LLVMBackend/LLVMLowering.h
         LLVMBackend/NativeCodegen.cpp
         LLVMBackend/NativeCodegen.h
+        LLVMBackend/GpuOffload.cpp
+        LLVMBackend/GpuOffload.h
         AST/Builtins.h
         AST/SemType.h
         AST/Sema.cpp
         AST/SemaParallel.cpp
+        AST/SemaGpu.cpp
         AST/Sema.h
 )
 
@@ -133,6 +136,12 @@ add_executable(minik_lang
         ${ANTLR_GENERATED_SRC}
         ${PROJECT_SOURCES}
 )
+
+# LLVM/MLIR, RTTI kapalı derlenmiştir. Kendi pass'imizi tanımlayan dosya
+# (mlir::Pass'ten türeyen sınıf) da öyle derlenmeli; aksi halde bağlayıcı
+# mlir::Pass'in tip bilgisini arar ve bulamaz. Projenin geri kalanı RTTI
+# kullanır (AST üzerinde dynamic_cast, ANTLR).
+set_source_files_properties(LLVMBackend/GpuOffload.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")
 
 # Çalışma zamanı kütüphanesi: derlenen her minik programına bağlanır (print vb.).
 # Derleyiciyle aynı dizine üretilir; minik_lang onu yanında arar, bulamazsa
@@ -200,6 +209,19 @@ target_link_libraries(minik_lang PRIVATE
         MLIRSCFToControlFlow
         MLIRControlFlowToLLVM
         MLIRReconcileUnrealizedCasts
+
+        # GPU: gpu dialect'i, çekirdeklerin ayrılması, NVIDIA (NVVM) hedefi.
+        # NVPTX kod üreticisi MLIRNVVMTarget üzerinden gelir.
+        MLIRGPUDialect
+        MLIRGPUTransforms
+        MLIRGPUToNVVMTransforms
+        MLIRGPUToGPURuntimeTransforms
+        MLIRNVVMDialect
+        MLIRNVVMTarget
+        MLIRNVVMToLLVM
+        MLIRUBToLLVM
+        MLIRIndexToLLVM
+        MLIRComplexToLLVM
 
         # LLVM IR -> makine kodu: yerel hedef (X86) + optimizasyon hattı
         ${LLVM_NATIVE_LIBS}

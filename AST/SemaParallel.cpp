@@ -148,10 +148,32 @@ void Sema::checkParallelCalls() {
         }
     }
 
+    // GPU'ya is vermek de ayni sekilde yayilir (bkz. @GPU kurallari, kural 5).
+    changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& [name, fn] : effects) {
+            if (!fn.gpuWorkReason.empty()) continue;
+            for (auto& callee : fn.callees) {
+                auto found = effects.find(callee);
+                if (found == effects.end() || found->second.gpuWorkReason.empty()) continue;
+                fn.gpuWorkReason = "'" + callee + "' fonksiyonunu cagiriyor; o da " +
+                                   found->second.gpuWorkReason;
+                changed = true;
+                break;
+            }
+        }
+    }
+
     for (auto& call : parallelCalls) {
         auto found = effects.find(call.callee);
-        if (found == effects.end() || found->second.unsafeReason.empty()) continue;
-        error(call.at, "paralel dongude '" + call.callee + "' cagrilamaz: " +
-                       found->second.unsafeReason);
+        if (found == effects.end()) continue;
+        if (!found->second.unsafeReason.empty())
+            error(call.at, "paralel dongude '" + call.callee + "' cagrilamaz: " +
+                           found->second.unsafeReason);
+        else if (!found->second.gpuWorkReason.empty())
+            error(call.at, "paralel dongude '" + call.callee + "' cagrilamaz: " +
+                           found->second.gpuWorkReason +
+                           " (paralel dongunun icinden GPU'ya yeni is verilemez)");
     }
 }

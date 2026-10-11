@@ -3,7 +3,10 @@
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/AffineMap.h"
@@ -68,10 +71,61 @@ Value MLIRMatrixManager::zeroOf(mlir::Type elementType, Location loc) {
         loc, cast<TypedAttr>(ctx.builder.getZeroAttr(elementType)));
 }
 
+// ===========================================================================
+// Bellek
+//
+// Matris belleği iki yerde yaşayabilir: CPU'da (yığın belleği, memref.alloc)
+// ya da GPU'da (gpu.alloc). İkisi de aynı tiptedir (memref); hangisinde
+// olduğunu fonksiyonun hedefi belirler: @GPU fonksiyonun bütün matrisleri
+// GPU'dadır. İkisi arasında veri yalnızca gpu.memcpy ile taşınır.
+// ===========================================================================
+
+Value MLIRMatrixManager::allocateIn(llvm::ArrayRef<Value> sizes, mlir::Type elementType,
+                                    bool onDevice, Location loc) {
+    MemRefType type = bufferTypeOf(elementType, static_cast<unsigned>(sizes.size()));
+    if (onDevice)
+        return ctx.builder.create<gpu::AllocOp>(loc, type, /*asyncToken=*/mlir::Type(),
+                                                /*asyncDependencies=*/ValueRange(),
+                                                ValueRange(sizes), /*symbolOperands=*/ValueRange())
+            .getMemref();
+    return ctx.builder.create<memref::AllocOp>(loc, type, ValueRange(sizes));
+}
+
+void MLIRMatrixManager::free(Value buffer, bool onDevice, Location loc) {
+    if (onDevice)
+        ctx.builder.create<gpu::DeallocOp>(loc, /*asyncToken=*/mlir::Type(), ValueRange(), buffer);
+    else
+        ctx.builder.create<memref::DeallocOp>(loc, buffer);
+}
+
 Value MLIRMatrixManager::allocateBuffer(llvm::ArrayRef<Value> sizes, mlir::Type elementType,
                                         Location loc) {
-    return ctx.builder.create<memref::AllocOp>(
-        loc, bufferTypeOf(elementType, static_cast<unsigned>(sizes.size())), ValueRange(sizes));
+    return allocateIn(sizes, elementType, ctx.onDevice, loc);
+}
+
+void MLIRMatrixManager::freeBuffer(Value buffer, Location loc) {
+    free(buffer, ctx.onDevice, loc);
+}
+
+Value MLIRMatrixManager::allocateLike(Value buffer, bool onDevice, Location loc) {
+    llvm::SmallVector<Value, 4> sizes;
+    for (unsigned d = 0; d < rankOf(buffer); ++d)
+        sizes.push_back(ctx.builder.create<memref::DimOp>(loc, buffer, static_cast<int64_t>(d)));
+    return allocateIn(sizes, elementTypeOf(buffer), onDevice, loc);
+}
+
+Value MLIRMatrixManager::upload(Value hostBuffer, Location loc) {
+    Value deviceBuffer = allocateLike(hostBuffer, /*onDevice=*/true, loc);
+    ctx.builder.create<gpu::MemcpyOp>(loc, /*asyncToken=*/mlir::Type(), ValueRange(),
+                                      deviceBuffer, hostBuffer);
+    return deviceBuffer;
+}
+
+Value MLIRMatrixManager::download(Value deviceBuffer, Location loc) {
+    Value hostBuffer = allocateLike(deviceBuffer, /*onDevice=*/false, loc);
+    ctx.builder.create<gpu::MemcpyOp>(loc, /*asyncToken=*/mlir::Type(), ValueRange(),
+                                      hostBuffer, deviceBuffer);
+    return hostBuffer;
 }
 
 MLIRMatrixManager::Result MLIRMatrixManager::allocate(llvm::ArrayRef<Value> sizes,
@@ -171,6 +225,7 @@ Value MLIRMatrixManager::sum(llvm::ArrayRef<Value> inputs, mlir::Type elementTyp
     OpBuilder& b = ctx.builder;
     const unsigned rank = rankOf(inputs[0]);
     checkSameShape(inputs, line, loc);
+    if (ctx.onDevice) return sumOnDevice(inputs, elementType, body, loc);
 
     Value accumulator = ctx.createEntryAlloca(loc, MemRefType::get({}, elementType));
     b.create<memref::StoreOp>(loc, zeroOf(elementType, loc), accumulator);
@@ -195,6 +250,75 @@ Value MLIRMatrixManager::sum(llvm::ArrayRef<Value> inputs, mlir::Type elementTyp
             nested.create<linalg::YieldOp>(nestedLoc, total);
         });
     return b.create<tensor::ExtractOp>(loc, generic.getResult(0), ValueRange());
+}
+
+// GPU'da toplam. Sonucu tek bir sayıya indirgemek kendiliğinden paralel
+// değildir; bu yüzden iş ikiye bölünür:
+//
+//   1. GPU: `workers` kadar iş parçacığı, elemanları aralarında paylaşır
+//      (t numaralı iş parçacığı t, t + workers, t + 2*workers ... sıralı
+//      elemanları toplar) ve kendi ara toplamını `partial[t]`ye yazar.
+//   2. CPU: ara toplamlar kopyalanır ve toplanır (en çok `workers` sayı).
+//
+// Elemanların toplanma sırası CPU'dakinden farklıdır; kayan noktalı sayılarda
+// sonuç son basamaklarda farklı çıkabilir.
+Value MLIRMatrixManager::sumOnDevice(llvm::ArrayRef<Value> inputs, mlir::Type elementType,
+                                     ElementFn body, Location loc) {
+    OpBuilder& b = ctx.builder;
+    const unsigned rank = rankOf(inputs[0]);
+    const bool isFloat = isa<FloatType>(elementType);
+    auto add = [&](Value lhs, Value rhs) -> Value {
+        if (isFloat) return b.create<arith::AddFOp>(loc, lhs, rhs);
+        return b.create<arith::AddIOp>(loc, lhs, rhs);
+    };
+
+    // Toplamda elemanın konumu önemsizdir: girdiler tek boyutlu görülür.
+    llvm::SmallVector<Value, 4> flat;
+    for (Value input : inputs) {
+        Value buffer = toBuffer(input, loc);
+        if (rank > 1) {
+            ReassociationIndices allDimensions;
+            for (unsigned d = 0; d < rank; ++d) allDimensions.push_back(d);
+            buffer = b.create<memref::CollapseShapeOp>(
+                loc, buffer, llvm::ArrayRef<ReassociationIndices>(allDimensions));
+        }
+        flat.push_back(buffer);
+    }
+
+    Value zero = b.create<arith::ConstantIndexOp>(loc, 0);
+    Value one = b.create<arith::ConstantIndexOp>(loc, 1);
+    Value count = b.create<memref::DimOp>(loc, flat[0], zero);
+    Value workers = b.create<arith::MinSIOp>(loc, count,
+                                             b.create<arith::ConstantIndexOp>(loc, 8192));
+    workers = b.create<arith::MaxSIOp>(loc, workers, one); // boş matriste de bir ara toplam (0)
+
+    Value sizes[] = {workers};
+    Value partial = allocateIn(sizes, elementType, /*onDevice=*/true, loc);
+    b.create<scf::ParallelOp>(
+        loc, ValueRange(zero), ValueRange(workers), ValueRange(one),
+        [&](OpBuilder&, Location, ValueRange workerIds) {
+            Value worker = workerIds[0];
+            auto loop = b.create<scf::ForOp>(
+                loc, worker, count, workers, ValueRange(zeroOf(elementType, loc)),
+                [&](OpBuilder&, Location, Value index, ValueRange total) {
+                    llvm::SmallVector<Value, 4> elements;
+                    for (Value buffer : flat)
+                        elements.push_back(b.create<memref::LoadOp>(loc, buffer, ValueRange(index)));
+                    b.create<scf::YieldOp>(loc, add(total[0], body(elements)));
+                });
+            b.create<memref::StoreOp>(loc, loop.getResult(0), partial, ValueRange(worker));
+        });
+
+    Value hostPartial = download(partial, loc);
+    free(partial, /*onDevice=*/true, loc);
+    auto total = b.create<scf::ForOp>(
+        loc, zero, workers, one, ValueRange(zeroOf(elementType, loc)),
+        [&](OpBuilder&, Location, Value index, ValueRange sum) {
+            Value part = b.create<memref::LoadOp>(loc, hostPartial, ValueRange(index));
+            b.create<scf::YieldOp>(loc, add(sum[0], part));
+        });
+    free(hostPartial, /*onDevice=*/false, loc);
+    return total.getResult(0);
 }
 
 // ===========================================================================
@@ -257,6 +381,9 @@ MLIRMatrixManager::Result MLIRMatrixManager::transpose(Value input, Location loc
 void MLIRMatrixManager::checkIndex(Value buffer, llvm::ArrayRef<Value> indices, int line,
                                    Location loc) {
     OpBuilder& b = ctx.builder;
+    // GPU'da çalışan kod hata mesajı yazıp programı durduramaz; orada indeks
+    // denetlenmez.
+    if (ctx.inKernel) return;
 
     llvm::SmallVector<Value, 4> sizes;
     Value outOfBounds;

@@ -12,35 +12,50 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 // --- Çalışma zamanı hataları ---
 // Program devam edemeyecek bir hata yaptığında (sınır dışı indeks gibi) mesaj
 // yazıp 1 koduyla çıkar. Önce stdout boşaltılır ki o ana kadarki çıktı kaybolmasın.
 
+// Çıkış _exit iledir (exit değil): exit, program kapanırken çalışan temizlik
+// kodlarını çağırır; paralel döngülerin iş parçacığı havuzu orada bütün iş
+// parçacıklarının bitmesini bekler ve hata yapan iş parçacığı hiç bitmeyeceği
+// için program kilitlenebilir.
 static void fail(void) {
     fflush(stdout);
-    exit(1);
+    fflush(stderr);
+    _exit(1);
+}
+
+// Her hata fonksiyonunun ilk işi. Paralel döngüde birden çok iş parçacığı aynı
+// anda hata yapabilir: stderr kilitlenir ve bir daha bırakılmaz, böylece
+// yalnızca ilk hatanın mesajı yazılır (diğerleri program çıkana kadar bekler).
+static void begin_panic(void) {
+    flockfile(stderr);
+    fflush(stdout);
 }
 
 void minik_panic_index(int64_t index, int64_t length, int32_t line) {
-    fflush(stdout);
+    begin_panic();
     fprintf(stderr, "calisma zamani hatasi (satir %d): liste indeksi sinir disinda (indeks %lld, uzunluk %lld)\n",
             (int)line, (long long)index, (long long)length);
     fail();
 }
 
 void minik_panic_pop(int32_t line) {
-    fflush(stdout);
+    begin_panic();
     fprintf(stderr, "calisma zamani hatasi (satir %d): bos listeden pop yapilamaz\n", (int)line);
     fail();
 }
 
 // Matris hata mesajlarındaki sayılar (şekiller, indeksler) boyut sayısına göre
 // değişir. Derleyici onları hata fonksiyonundan hemen önce minik_report_push
-// ile tek tek bildirir; iki ayrı liste tutulur (slot 0 ve 1).
+// ile tek tek bildirir; iki ayrı liste tutulur (slot 0 ve 1). Listeler iş
+// parçacığına özeldir: paralel döngüde iki iş parçacığının sayıları karışmaz.
 #define REPORT_MAX 16
-static long long report_values[2][REPORT_MAX];
-static int report_count[2];
+static _Thread_local long long report_values[2][REPORT_MAX];
+static _Thread_local int report_count[2];
 
 void minik_report_push(int64_t slot, int64_t value) {
     int s = slot != 0;
@@ -55,7 +70,7 @@ static void report_print(int slot, const char* separator) {
 
 // slot 0: indeksler, slot 1: boyut uzunlukları
 void minik_panic_matrix_index(int32_t line) {
-    fflush(stdout);
+    begin_panic();
     fprintf(stderr, "calisma zamani hatasi (satir %d): matris indeksi sinir disinda (indeks [", (int)line);
     report_print(0, ", ");
     fputs("], boyut ", stderr);
@@ -66,7 +81,7 @@ void minik_panic_matrix_index(int32_t line) {
 
 // slot 0 ve 1: iki matrisin şekilleri
 void minik_panic_shape(int32_t line) {
-    fflush(stdout);
+    begin_panic();
     fprintf(stderr, "calisma zamani hatasi (satir %d): matris boyutlari uyusmuyor (", (int)line);
     report_print(0, "x");
     fputs(" ve ", stderr);
@@ -76,7 +91,7 @@ void minik_panic_shape(int32_t line) {
 }
 
 void minik_panic_matmul(int32_t line) {
-    fflush(stdout);
+    begin_panic();
     fprintf(stderr, "calisma zamani hatasi (satir %d): matmul icin boyutlar uygun degil (", (int)line);
     report_print(0, "x");
     fputs(" ve ", stderr);

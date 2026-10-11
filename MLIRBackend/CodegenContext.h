@@ -13,6 +13,10 @@
 #include <vector>
 #include <string>
 
+// GPU için üretilen fonksiyonların (func.func) işareti; kod üretimi koyar,
+// indirme hattı okur.
+inline constexpr const char* kGpuFunctionAttr = "minik.gpu";
+
 struct CodegenContext {
     mlir::OpBuilder& builder;
     mlir::MLIRContext& context;
@@ -22,6 +26,16 @@ struct CodegenContext {
     // Üretilmekte olan fonksiyonun giriş bloğu. Bütün yığıt tahsisleri buraya
     // yapılır (bkz. createEntryAlloca).
     mlir::Block* allocaBlock = nullptr;
+
+    // --- GPU hedefi (bkz. MLIRGenerator.h, "GPU") ---
+    // @GPU fonksiyonlar gerçekten GPU için mi üretilsin? Kapalıysa (--gpu=off)
+    // sıradan CPU fonksiyonu gibi üretilirler.
+    bool gpuEnabled = true;
+    // Üretilmekte olan fonksiyon @GPU: matrisleri GPU belleğinde yaşar.
+    bool onDevice = false;
+    // Üretilmekte olan kod GPU'da çalışacak (bir `parallel for` gövdesi):
+    // çalışma zamanı kütüphanesi çağrılamaz.
+    bool inKernel = false;
 
     CodegenContext(mlir::OpBuilder& b, mlir::MLIRContext& c, mlir::ModuleOp m)
         : builder(b), context(c), theModule(m) {

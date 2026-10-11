@@ -18,6 +18,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include <string>
+#include <unordered_map>
 
 // ---------------------------------------------------------------------------
 // MLIRGenerator
@@ -52,6 +54,25 @@
 //                            olarak davranır; belleğinin tek bir sahibi vardır.
 //   string                 → {ptr, i64} struct; değişkense llvm.alloca yuvasında
 //   fonksiyon / lambda     → fonksiyon tipli SSA değeri (func.constant)
+//
+// GPU
+//
+// @GPU fonksiyon da sıradan bir fonksiyon olarak üretilir; farkları şunlardır:
+//
+//   * Matris belleği GPU'dan ayrılır (gpu.alloc / gpu.dealloc). Matrislerin
+//     tipi değişmez (memref); yalnızca gösterdikleri bellek GPU'dadır.
+//   * Fonksiyon `minik.gpu` ile işaretlenir. İndirme hattı işaretli
+//     fonksiyonlardaki paralel döngüleri (`parallel for` ve matris işlemleri)
+//     GPU çekirdeklerine çevirir (bkz. LLVMBackend/GpuOffload). Kod üretimi
+//     CPU ile aynı IR'yi üretir; hedefi indirme hattı belirler.
+//   * `parallel for` gövdesi GPU'da çalışacağı için orada çalışma zamanı
+//     kütüphanesi çağrılmaz (indeks sınır denetimi yapılmaz).
+//   * Parametre ya da dönüşünde matris varsa, CPU'dan çağrılabilmesi için
+//     ayrıca bir giriş fonksiyonu (`ad.host`) üretilir: matrisleri GPU'ya
+//     kopyalar, asıl fonksiyonu çağırır, sonucu CPU'ya kopyalar.
+//
+// GPU hedefi kapalıysa (--gpu=off) bunların hiçbiri yapılmaz; @GPU fonksiyon
+// CPU fonksiyonu olarak üretilir.
 // ---------------------------------------------------------------------------
 class MLIRGenerator : public ASTVisitor {
     CodegenContext        ctx;
@@ -68,6 +89,9 @@ class MLIRGenerator : public ASTVisitor {
     int         stringLiteralCount = 0;
     int         lambdaCounter      = 0;
     bool        usesParallel       = false;
+    bool        usesGpu            = false;
+    // Programdaki fonksiyonlar (çağrı üretilirken hedefleri buradan okunur).
+    std::unordered_map<std::string, FunctionDecl*> functions;
 
     // --- Matris sahipliği (ayrıntı: MLIRGeneratorMatrix.cpp) ---
     // Üretilmekte olan deyimde hesaplanmış, henüz kimsenin sahiplenmediği
@@ -95,6 +119,12 @@ public:
     /// Program `parallel for` içeriyor mu? (İçeriyorsa çalıştırılabilir dosyaya
     /// iş parçacığı çalışma zamanı da bağlanmalıdır.)
     bool usesParallelLoops() const { return usesParallel; }
+
+    /// @GPU fonksiyonlar GPU için mi üretilsin? (Varsayılan: evet.)
+    void setGpuEnabled(bool enabled) { ctx.gpuEnabled = enabled; }
+    /// Program GPU'da çalışan kod içeriyor mu? (İçeriyorsa indirme hattına GPU
+    /// adımları eklenir ve çalıştırılabilir dosyaya GPU çalışma zamanı bağlanır.)
+    bool usesGpuCode() const { return usesGpu; }
 
     void visit(Program* node) override;
     void visit(Type* node) override;
@@ -140,6 +170,11 @@ private:
 
     // --- Fonksiyonlar ve globaller (MLIRGenerator.cpp) ---
     void declareFunctionSignature(FunctionDecl* node);
+    /// Fonksiyon GPU için mi üretiliyor?
+    bool targetsGpu(const FunctionDecl* node) const { return node->isGpu && ctx.gpuEnabled; }
+    /// @GPU fonksiyonun CPU'dan çağrılan giriş fonksiyonunun adı.
+    static std::string hostEntryName(const std::string& name) { return name + ".host"; }
+    void emitHostEntry(FunctionDecl* node);
     void emitGlobalVariable(VariableDecl* node);
     /// Fonksiyon ve lambdaların ortak gövde üretimi: giriş bloğu, parametreler,
     /// fonksiyona özgü durumun (kapsam, döngü yığını) kurulup geri alınması.

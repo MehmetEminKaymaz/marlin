@@ -118,6 +118,7 @@ minik_lang [kaynak.minik] [secenekler]
 | `-O0` `-O1` `-O2` `-O3` | Optimizasyon seviyesi. Varsayılan `-O0` (optimizasyon yok). |
 | `--emit=...` | Derlemeyi hangi aşamada durduracağını seçer (aşağıya bak) |
 | `--print-ast` | Programın ağaç yapısını (AST) ekrana yazar |
+| `--gpu=off` | `@GPU` fonksiyonları da CPU için derler. Ekran kartı olmayan makinede çalıştırmak ya da CPU ile GPU'yu karşılaştırmak için. |
 | `--help` | Kısa yardım |
 
 ### Ara aşamaları görmek: `--emit`
@@ -131,6 +132,7 @@ Derleyici programı adım adım dönüştürür. `--emit` ile istediğin adımda
 | Komut | Gösterdiği |
 |---|---|
 | `--emit=mlir` | Üst seviye MLIR. Döngülerin `scf.for` mu yoksa `cf` bloğu mu olduğunu burada görürsün. |
+| `--emit=gpu-mlir` | GPU'da çalışacak kısımlar ayrıldıktan sonraki MLIR. Her GPU çekirdeği bir `gpu.module` içinde, CPU tarafında ise onu başlatan `gpu.launch_func` çağrısı görünür. |
 | `--emit=llvm-mlir` | LLVM dialect'ine indirilmiş MLIR |
 | `--emit=llvm-ir` | LLVM IR (`.ll` dosyalarındaki biçim) |
 | `--emit=obj` | Nesne dosyası (`.o`), henüz bağlanmamış |
@@ -207,6 +209,10 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `hatalar_cok_boyutlu.minik` | Boyut sayısıyla ilgili derleme hataları |
 | `paralel.minik` | `parallel for`: liste, dizi ve matrise paralel yazma, iç içe paralel döngü |
 | `hatalar_paralel.minik` | Paralel döngüde yarışa yol açabilecek kullanımların reddedilmesi |
+| `gpu.minik` | `@GPU` fonksiyonlar: GPU'da `parallel for`, matris işlemleri, `matmul`, `sum`, CPU ↔ GPU kopyalama |
+| `hatalar_gpu.minik` | `@GPU` fonksiyonlarda izin verilmeyen kullanımlar |
+
+`@GPU` içeren testler iki kez çalıştırılır: ekran kartında ve `--gpu=off` ile tümüyle CPU'da. İkisi de aynı çıktıyı vermelidir. Makinede NVIDIA ekran kartı yoksa yalnızca `--gpu=off` ile çalışırlar.
 
 ---
 
@@ -471,6 +477,50 @@ Bu kurallar katıdır: aslında güvenli olan bazı döngüleri de reddeder. Kar
 
 Küçük ve hafif döngülerde paralellik fayda sağlamaz, hatta yavaşlatabilir (işi dağıtmanın da bir maliyeti var); ağır hesaplarda kullan.
 
+**GPU'da çalışan fonksiyonlar (`@GPU`):**
+
+Bir fonksiyonun nerede çalışacağını başına yazılan işaret belirler: `@CPU` ya da `@GPU`. İşaret yazılmazsa `@CPU` sayılır.
+
+```
+@GPU
+func adim(matrix<float64> a, matrix<float64> b, int n) -> matrix<float64> {
+    matrix<float64> x = a;
+    for k in 0 .. n {          // bu döngü CPU'da döner, her turda GPU'ya iş verir
+        x = x * 0.5 + b;       // GPU'da çalışır
+    }
+    return x;
+}
+
+func main() -> void {
+    matrix<float64> a = ones(2000, 2000);
+    matrix<float64> b = ones(2000, 2000);
+    matrix<float64> c = adim(a, b, 100);   // a ve b GPU'ya, sonuç CPU'ya kopyalanır
+    print(sum(c));
+}
+```
+
+`@GPU` fonksiyonda:
+
+- **Matrisler ekran kartının belleğinde yaşar.** Fonksiyon `@CPU` tarafından çağrıldığında matris parametreleri GPU'ya kopyalanır, dönen matris CPU'ya geri kopyalanır. Çağıran, sonuç hazır olana kadar bekler. Bir `@GPU` fonksiyon başka bir `@GPU` fonksiyonu çağırdığında kopyalama olmaz.
+- **`parallel for` ve matris işlemleri GPU'da çalışır** (`a + b`, `matmul`, `transpose`, `zeros`, `sum` ...). `parallel for`un her yinelemesi ayrı bir GPU iş parçacığıdır.
+- **Geri kalan sıralı kod CPU'da çalışır** ve yalnızca GPU'ya sırayla iş verir. Yukarıdaki `for k` döngüsü böyledir: veri 100 tur boyunca GPU'da kalır.
+
+Kurallar (derleyici denetler):
+
+- Yalnızca sayısal / `bool` / `char` değerler ve matrisler kullanılabilir. Dizi, liste, string, lambda, global değişken ve `print` kullanılamaz.
+- Yalnızca `@GPU` fonksiyonlar çağrılabilir. `@GPU` fonksiyon bir değişkene konamaz; adıyla çağrılır.
+- Matris elemanına (`m[i, j]`) yalnızca `parallel for` içinde erişilebilir. Döngünün dışındaki kod CPU'da çalışır, veri ise GPU'dadır.
+- `parallel for` gövdesinde matris işlemi (`a + b`, `zeros`, `sum` ...), iç içe `parallel for` ve bunları yapan fonksiyonlara çağrı olamaz. Gövdeden çağrılan fonksiyonlar yalnızca sayılarla çalışmalıdır (`@GPU func kare(float64 v) -> float64` gibi).
+- `main` `@GPU` olamaz.
+
+Bilinmesi gerekenler:
+
+- **GPU'da çalışan `parallel for` içinde indeks sınırı denetlenmez.** CPU'da sınır dışı indeks programı mesajla durdurur; GPU'da durdurmaz, sonuç tanımsızdır. Emin olmak için programı önce `--gpu=off` ile dene: orada denetim vardır.
+- **Kayan noktalı toplamlar son basamaklarda farklı çıkabilir.** `sum` GPU'da elemanları CPU'dakinden farklı sırayla toplar. Özellikle `float` (32 bit) ile milyonlarca eleman toplanınca fark belirginleşir.
+- **GPU her işte hızlı değildir.** Program GPU'yu ilk kullandığında yarım saniye kadar bir başlatma süresi vardır ve her kopyalamanın bir maliyeti olur. Küçük işlerde CPU daha hızlıdır; kazanç büyük matrislerde ve veri GPU'da kalırken yapılan çok sayıda işlemde gelir.
+- Aynı program `--gpu=off` ile derlenirse tümüyle CPU'da çalışır ve aynı sonucu verir (yukarıdaki toplama farkı dışında).
+- `--emit=gpu-mlir` ile hangi kısımların GPU çekirdeği olduğunu görebilirsin.
+
 **Yerleşik fonksiyonlar:**
 
 | | |
@@ -506,6 +556,9 @@ Küçük ve hafif döngülerde paralellik fayda sağlamaz, hatta yavaşlatabilir
 | `run.sh: $'\r': command not found` | Dosya Windows satır sonlarıyla kaydedilmiş. Düzelt: `sed -i 's/\r$//' tests/run.sh` |
 | `Calisma zamani kutuphanesi (libminikrt.a) bulunamadi` | Derleyiciyi `cmake-build-debug` dışına kopyaladıysan kütüphaneyi bulamaz. Yolunu ver: `export MINIK_RUNTIME=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/cmake-build-debug/libminikrt.a` |
 | `error while loading shared libraries: libmlir_async_runtime.so` | `parallel for` içeren programlar LLVM derlemendeki bir kütüphaneyi kullanır ve yolunu içlerinde taşır. LLVM dizinini taşıdıysan ya da programı başka bir makineye kopyaladıysan bulunamaz; derleyiciyi yeniden derleyip programı yeniden üret. |
+| `error while loading shared libraries: libmlir_cuda_runtime.so` | `@GPU` içeren programlar için aynı durum: kütüphane LLVM derlemendedir (`build-gpu/lib`). |
+| Program çalışırken `... failed with 'CUDA_ERROR_...'` yazıyor | GPU'ya ulaşılamıyor ya da GPU'da hata oldu. `nvidia-smi` ekran kartını gösteriyor mu bak. GPU belleği yetmiyor olabilir; ya da `parallel for` içinde sınır dışı indeks vardır. `--gpu=off` ile derleyip dene. |
+| `@GPU` programı derlenirken `ptxas` bulunamadı hatası | CUDA araç takımı bulunamıyor. `export PATH=/usr/local/cuda-12.9/bin:$PATH` |
 | `Syntax hatasi bulundu!` | Yazım hatası. Hemen üstünde satır ve sütunu gösteren bir `line 3:5 ...` mesajı vardır. |
 | Gramerde (`minik.g4`) yaptığın değişiklik etkisiz | Derleyiciyi yeniden derle; ayrıştırıcı dosyaları gramerden otomatik üretilir. |
 | `git` komutu PowerShell'de bulunamıyor | git yalnızca WSL içinde kurulu. WSL terminalinde kullan. |
@@ -522,6 +575,7 @@ AST/                Ağaç yapısı ve semantik analiz
   ASTBuilder.h        Ayrıştırma ağacından AST kurar
   Sema.*              Tip denetimi, isim çözümleme, akış analizi
   SemaParallel.cpp    Paralel döngülerin güvenlik denetimi
+  SemaGpu.cpp         @GPU fonksiyonların kuralları
   SemType.h           Çözülmüş tipler
   Builtins.h          Yerleşik fonksiyonların listesi
 
@@ -537,13 +591,14 @@ MLIRBackend/        AST → MLIR
 
 LLVMBackend/        MLIR → çalıştırılabilir dosya
   LLVMLowering.*      MLIR'i LLVM IR'a indirir
+  GpuOffload.*        @GPU fonksiyonlardaki paralel işleri GPU çekirdeğine çevirir
   NativeCodegen.*     Optimizasyon, nesne dosyası, bağlama
 
 runtime/minik_rt.c  Derlenen programlara eklenen C kütüphanesi (print, hata mesajları)
 tests/              Test programları ve run.sh
 ```
 
-**Gereksinimler** (WSL içinde kurulu olanlar): LLVM/MLIR 19.1.7 (`/home/emin/llvm-project/build`), ANTLR 4.10 (`/home/emin/antlr-4.10-complete.jar` ve `libantlr4-runtime-dev`), Java, CMake, bir C/C++ derleyicisi. Bu yollar `CMakeLists.txt` içinde sabit yazılıdır; başka bir makinede derlemek için orada değiştirmek gerekir.
+**Gereksinimler** (WSL içinde kurulu olanlar): LLVM/MLIR 19.1.7 (`/home/emin/llvm-project/build-gpu`; X86 ve NVPTX hedefleriyle derlenmiş), ANTLR 4.10 (`/home/emin/antlr-4.10-complete.jar` ve `libantlr4-runtime-dev`), Java, CMake, bir C/C++ derleyicisi. `@GPU` için ayrıca bir NVIDIA ekran kartı ve CUDA araç takımı (`/usr/local/cuda-12.9`). Bu yollar `CMakeLists.txt` içinde sabit yazılıdır; başka bir makinede derlemek için orada değiştirmek gerekir.
 
 
 

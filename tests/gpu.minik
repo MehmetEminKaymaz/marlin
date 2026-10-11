@@ -1,0 +1,176 @@
+// @GPU fonksiyonlar: matrisler GPU belleğinde yaşar; `parallel for` ve matris
+// işlemleri GPU'da çalışır. Aynı program --gpu=off ile tümüyle CPU'da çalışır
+// ve aynı çıktıyı verir.
+
+// Yalnızca sayılarla çalışan @GPU fonksiyon: hem GPU'da çalışan döngüden hem
+// de CPU'dan çağrılabilir.
+@GPU
+func kare(float64 v) -> float64 {
+    return v * v;
+}
+
+// İçinde döngü ve koşul olan yardımcı.
+@GPU
+func ucgenSayi(int n) -> int {
+    int t = 0;
+    for k in 1 .. n + 1 {
+        if k % 2 == 0 { continue; }
+        t = t + k;
+    }
+    return t;
+}
+
+// parallel for: her eleman ayrı bir GPU iş parçacığında hesaplanır.
+@GPU
+func kareler(matrix<float64, 1> a, float64 ek) -> matrix<float64, 1> {
+    int64 n = shape(a, 0);
+    matrix<float64, 1> r = zeros(n);
+    parallel for i in 0 .. n {
+        float64 t = kare(a[i]);
+        r[i] = t + ek + sqrt(a[i]);
+    }
+    return r;
+}
+
+// Eleman eleman matris işlemleri: her ifade tek bir GPU çekirdeği.
+@GPU
+func karisim(matrix<float64> a, matrix<float64> b) -> matrix<float64> {
+    matrix<float64> c = a * 2.0 + b;
+    return (c - a) / 2.0;
+}
+
+// Sıralı döngü CPU'da döner; veri turlar boyunca GPU'da kalır.
+@GPU
+func adimlar(matrix<float64> a, matrix<float64> b, int n) -> matrix<float64> {
+    matrix<float64> x = a;
+    for k in 0 .. n {
+        x = x * 0.5 + b;
+    }
+    return x;
+}
+
+@GPU
+func carp(matrix<float64> a, matrix<float64> b) -> matrix<float64> {
+    return transpose(matmul(a, b));
+}
+
+// Sayı döndüren @GPU fonksiyon: yalnızca parametreler GPU'ya kopyalanır.
+@GPU
+func toplam(matrix<int, 3> t) -> int {
+    return sum(t * 2);
+}
+
+// İki boyutlu yazma ve adımlı aralık.
+@GPU
+func tablo(int satir, int sutun) -> matrix<int> {
+    matrix<int> m = zeros(satir, sutun);
+    parallel for i in 0 .. satir {
+        for j in 0 .. sutun {
+            m[i, j] = i * 10 + j;
+        }
+    }
+    parallel for i in 0 .. satir step 2 {
+        m[i, 0] = -1;
+    }
+    return m;
+}
+
+// @GPU fonksiyondan @GPU fonksiyon: veri kopyalanmadan GPU'da kalır.
+@GPU
+func zincir(matrix<float64> a, matrix<float64> b) -> float64 {
+    matrix<float64> c = karisim(a, b);
+    matrix<float64> d = carp(c, c);
+    return sum(d);
+}
+
+// Matris literali ve eleman tipi dönüşümü.
+@GPU
+func sabitler(matrix<int, 1> v) -> matrix<float64, 1> {
+    matrix<float64, 1> agirlik = [0.5, 1.5, 2.5];
+    matrix<float64, 1> w = v;
+    return w * agirlik;
+}
+
+// Yerel değişkenler, koşullar ve matematik GPU'da.
+@GPU
+func parcali(matrix<float64, 1> a) -> matrix<float64, 1> {
+    int64 n = shape(a, 0);
+    float64 esik = 2.0;
+    matrix<float64, 1> r = zeros(n);
+    parallel for i in 0 .. n {
+        float64 v = a[i];
+        int tur = 0;
+        while v > esik {
+            v = v / 2.0;
+            tur = tur + 1;
+            if tur >= 3 { break; }
+        }
+        if i == 1 { continue; }
+        r[i] = max(v, 1.0) + abs(0.0 - tur) + floor(pow(2.0, 3.0));
+    }
+    return r;
+}
+
+// Boş aralık ve boş matris: GPU'ya iş verilmez.
+@GPU
+func bos(int n) -> int {
+    matrix<int, 1> m = zeros(n);
+    parallel for i in 0 .. n {
+        m[i] = 7;
+    }
+    return sum(m);
+}
+
+func main() -> void {
+// output: 0.5 2.5 18.5 84.5 260.5
+    matrix<float64, 1> v = [0.0, 1.0, 4.0, 9.0, 16.0];
+    print(kareler(v, 0.5));
+
+// output: 1.0 2.0
+// output: 3.0 4.0
+    matrix<float64> a = [[1.0, 2.0], [3.0, 4.0]];
+    matrix<float64> b = [[1.0, 2.0], [3.0, 4.0]];
+    print(karisim(a, b));
+
+// output: 1.875 3.75
+// output: 5.625 7.5
+    print(adimlar(a, b, 3));
+
+// output: 7.0 15.0
+// output: 10.0 22.0
+    print(carp(a, b));
+
+// output: 56
+    matrix<int, 3> t = [[[1, 2], [3, 4]], [[5, 6], [7, 0]]];
+    print(toplam(t));
+
+// output: -1 1 2
+// output: 10 11 12
+// output: -1 21 22
+    print(tablo(3, 3));
+
+// output: 54.0
+    print(zincir(a, b));
+
+// output: 1.0 6.0 12.5
+    matrix<int, 1> tam = [2, 4, 5];
+    print(sabitler(tam));
+
+// output: 9.0 0.0 10.5 12.125 23.5
+    matrix<float64, 1> p = [0.5, 3.0, 3.0, 9.0, 100.0];
+    print(parcali(p));
+
+// output: 0 21
+    print(bos(0), bos(3));
+
+    // Sayılarla çalışan @GPU fonksiyon CPU'dan doğrudan çağrılır.
+// output: 6.25 9
+    print(kare(2.5), ucgenSayi(6));
+
+    // Büyük veri: 100000 eleman. Sonuç tam sayı olduğu için toplama sırası
+    // (CPU ve GPU'da farklıdır) sonucu değiştirmez.
+// output: 300000.0
+    matrix<float64, 1> buyuk = ones(100000);
+    matrix<float64, 1> sonuc = kareler(buyuk, 1.0);
+    print(sum(sonuc));
+}

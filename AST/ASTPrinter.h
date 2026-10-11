@@ -145,7 +145,7 @@ public:
         indentLevel--;
     }
     void visit(FunctionDecl* node) override {
-        printNode("FunctionDecl: " + node->name);
+        printNode("FunctionDecl: " + node->name + (node->isGpu ? " @GPU" : ""));
         indentLevel++;
         for (auto& p : node->params) {
             if (p) p->accept(*this);

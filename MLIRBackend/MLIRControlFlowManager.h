@@ -97,8 +97,9 @@ public:
     /// Paralel döngü: yinelemeler birbirinden bağımsızdır ve aynı anda
     /// çalışabilir. lb/ub/step index tipinde olmalıdır. Sema, gövdenin buna
     /// uygun olduğunu doğrulamıştır.
+    /// `onDevice`: döngü GPU'da çalışacak (gövde bir GPU çekirdeği olur).
     void buildParallelLoop(mlir::Location loc, mlir::Value lb, mlir::Value ub, mlir::Value step,
-                           IterBodyGen bodyGen);
+                           bool onDevice, IterBodyGen bodyGen);
 
     /// Kısa devreli && / ||: sağ taraf yalnızca gerekirse hesaplanır.
     mlir::Value buildShortCircuit(mlir::Location loc, mlir::Value lhs, bool isAnd,

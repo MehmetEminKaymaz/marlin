@@ -183,7 +183,13 @@ void MLIRGenerator::visit(FunctionCallExpr* node) {
 
     mlir::Operation* callOp;
     if (isDirect) {
-        auto callee = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(ident->name);
+        // CPU'dan, matris alan/döndüren bir @GPU fonksiyona çağrı: veriyi
+        // GPU'ya (ve sonucu geri) kopyalayan giriş fonksiyonu çağrılır.
+        FunctionDecl* decl = functions.at(ident->name);
+        const bool crossesToGpu = decl->isGpu && ctx.gpuEnabled && !ctx.onDevice &&
+                                  decl->hasMatrixSignature();
+        auto callee = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(
+            crossesToGpu ? hostEntryName(ident->name) : ident->name);
         callOp = ctx.builder.create<mlir::func::CallOp>(loc, callee, mlir::ValueRange(args));
     } else {
         callOp = ctx.builder.create<mlir::func::CallIndirectOp>(

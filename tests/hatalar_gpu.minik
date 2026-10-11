@@ -1,0 +1,89 @@
+// @GPU fonksiyonların kuralları (bkz. AST/Sema.h).
+
+int sayac = 0;
+
+func cpuYardimci(int x) -> int {
+    return x + 1;
+}
+
+@GPU
+func kare(float64 v) -> float64 {
+    return v * v;
+}
+
+// error: 15:1: hata: bilinmeyen hedef '@FPGA' (gecerli olanlar: @CPU, @GPU)
+@FPGA
+func bilinmeyen() -> void {
+}
+
+// Kural 1: tipler
+// error: 22:14: hata: @GPU fonksiyonda yalnizca sayisal/bool/char degerler ve matrisler kullanilabilir (bulunan: list<int>)
+@GPU
+func tipler1(list<int> l) -> void {
+}
+
+@GPU
+func tipler2(int n) -> void {
+// error: 29:5: hata: @GPU fonksiyonda yalnizca sayisal/bool/char degerler ve matrisler kullanilabilir (bulunan: int[3])
+// error: 29:16: hata: @GPU fonksiyonda yalnizca sayisal/bool/char degerler ve matrisler kullanilabilir (bulunan: int[3])
+    int[3] a = [1, 2, 3];
+}
+
+// Kural 2: global, print, lambda
+@GPU
+func yasaklar(int n) -> int {
+// error: 36:13: hata: @GPU fonksiyon global degisken kullanamaz ('sayac'); degeri parametre olarak verin
+    int x = sayac;
+// error: 38:5: hata: @GPU fonksiyonda print kullanilamaz; degeri dondurup @CPU tarafinda yazdirin
+    print(n);
+    return x;
+}
+
+// Kural 3: yalnızca @GPU fonksiyonlar çağrılabilir
+@GPU
+func cagri(int n) -> int {
+// error: 46:12: hata: @GPU fonksiyondan @CPU fonksiyon 'cpuYardimci' cagrilamaz (GPU'da calismasi gerekiyorsa basina @GPU yazin)
+    return cpuYardimci(n);
+}
+
+// Kural 4: eleman erişimi yalnızca parallel for içinde
+@GPU
+func eleman(matrix<float64, 1> a) -> float64 {
+// error: 53:12: hata: @GPU fonksiyonda matris elemanina yalnizca parallel for icinde erisilebilir (matris GPU belleginde durur; dongunun disindaki kod CPU'da calisir)
+    return a[0];
+}
+
+@GPU
+func topla(matrix<float64, 1> a) -> float64 {
+    return sum(a);
+}
+
+// Kural 5: parallel for gövdesinden GPU'ya yeni iş verilemez
+@GPU
+func govde(matrix<float64, 1> a, int n) -> matrix<float64, 1> {
+    matrix<float64, 1> r = zeros(n);
+    parallel for i in 0 .. n {
+// error: 68:34: hata: GPU'da calisan paralel dongunun icinde matris islemi yapilamaz; yalnizca matris elemanlarina erisilebilir (or. m[i, j])
+// error: 68:9: hata: GPU'da calisan paralel dongunun icinde matris tanimlanamaz
+        matrix<float64, 1> t = a * 2.0;
+// error: 70:16: hata: GPU'da calisan paralel dongunun icinde 'sum' kullanilamaz
+        r[i] = sum(a);
+// error: 72:16: hata: paralel dongude 'topla' cagrilamaz: @GPU fonksiyon ve matris kullaniyor (paralel dongunun icinden GPU'ya yeni is verilemez)
+        r[i] = topla(a);
+// error: 74:9: hata: @GPU fonksiyonda ic ice parallel for desteklenmiyor; icteki donguyu siradan for olarak yazin
+        parallel for j in 0 .. n {
+        }
+        r[i] = kare(a[i]);
+    }
+    return r;
+}
+
+func main() -> void {
+// error: 83:13: hata: @GPU fonksiyon 'kare' deger olarak kullanilamaz; yalnizca adiyla cagrilabilir
+    let f = kare;
+    matrix<float64, 1> a = ones(4);
+    parallel for i in 0 .. 4 {
+// error: 87:21: hata: paralel dongude 'topla' cagrilamaz: @GPU fonksiyon ve matris kullaniyor (paralel dongunun icinden GPU'ya yeni is verilemez)
+        float64 s = topla(a);
+    }
+}

@@ -102,7 +102,7 @@ void MLIRGenerator::visit(AssignmentStmt* node) {
             mlir::Value newBuffer = takeMatrixOwnership(value, node->line, loc);
             mlir::Value oldBuffer = ctx.builder.create<mlir::memref::LoadOp>(loc, storage);
             ctx.builder.create<mlir::memref::StoreOp>(loc, newBuffer, storage);
-            ctx.builder.create<mlir::memref::DeallocOp>(loc, oldBuffer);
+            matrixManager.freeBuffer(oldBuffer, loc);
         } else {
             storeTo(value, storage, ident->type, loc);
         }
@@ -221,13 +221,17 @@ void MLIRGenerator::visit(ForRangeStmt* node) {
 void MLIRGenerator::emitParallelFor(ForRangeStmt* node, mlir::Value start, mlir::Value end,
                                     mlir::Value step) {
     auto loc = locOf(node);
-    usesParallel = true;
     const SemType& iterType = node->iterType;
+    // @GPU fonksiyonda döngü GPU'da çalışır; aksi halde iş parçacıklarında.
+    const bool onDevice = ctx.onDevice;
+    if (!onDevice) usesParallel = true;
 
     cfManager.buildParallelLoop(
         loc, toIndex(start, iterType, loc), toIndex(end, iterType, loc),
-        toIndex(step, iterType, loc),
+        toIndex(step, iterType, loc), onDevice,
         [&](mlir::Value index) {
+            const bool savedInKernel = ctx.inKernel;
+            ctx.inKernel = onDevice;
             // Gövdenin yığıt tahsisleri fonksiyon girişine DEĞİL buraya, her
             // yinelemeye özel bloğa yapılır: iş parçacıkları yerel
             // değişkenleri paylaşmamalı.
@@ -245,6 +249,7 @@ void MLIRGenerator::emitParallelFor(ForRangeStmt* node, mlir::Value start, mlir:
             scopeManager.popScope();
 
             ctx.allocaBlock = savedAllocaBlock;
+            ctx.inKernel = savedInKernel;
         });
 }
 

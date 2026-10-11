@@ -69,6 +69,7 @@ private:
         bool readOnly = false; // matris parametresi: atanamaz, elemanı değiştirilemez
         bool isParam = false;
         int scopeDepth = 0;    // tanımlandığı kapsamın `scopes` içindeki sırası (declare yazar)
+        bool isGpu = false;    // fonksiyon: @GPU ile tanımlı
     };
 
     // Açık olan her if ve döngü için bir çerçeve. break/continue/return
@@ -163,6 +164,9 @@ private:
     struct FunctionEffects {
         std::string unsafeReason;          // boşsa güvenli (şimdilik)
         std::vector<std::string> callees;  // doğrudan çağırdığı fonksiyonlar
+        // Boş değilse fonksiyon GPU'ya iş verir (bkz. GPU kuralları, kural 5);
+        // paralel döngünün içinden çağrılamaz.
+        std::string gpuWorkReason;
     };
     struct ParallelCall {
         std::string callee;
@@ -188,6 +192,43 @@ private:
     void noteCall(FunctionCallExpr* call);
     void finishParallelLoop(ParallelLoop& loop);
     void checkParallelCalls();
+
+    // -----------------------------------------------------------------------
+    // @GPU fonksiyonların kuralları (SemaGpu.cpp)
+    //
+    // @GPU fonksiyonun matrisleri GPU belleğinde yaşar. İçindeki `parallel for`
+    // döngüleri ve matris işlemleri GPU'da çalışır (birer "kernel" olur);
+    // aradaki sıralı kod CPU'da çalışır ve yalnızca GPU'ya sırayla iş verir.
+    // Bundan şu kurallar çıkar:
+    //
+    //   1. Tipler: yalnızca sayısal / bool / char değerler ve matrisler.
+    //      (Dizi, liste, string ve fonksiyon değerleri CPU belleğinde yaşar.)
+    //   2. Global değişken, print ve lambda kullanılamaz.
+    //   3. Yalnızca @GPU fonksiyonlar çağrılabilir.
+    //   4. Matris elemanına (m[i, j]) yalnızca `parallel for` içinde erişilir:
+    //      döngünün dışındaki kod CPU'da çalışır, veri ise GPU'dadır.
+    //   5. `parallel for` gövdesi GPU'da çalışır; oradan GPU'ya yeni iş
+    //      verilemez. Bu yüzden gövdede matris işlemi (a + b, zeros, sum ...),
+    //      iç içe `parallel for` ve bunları yapan fonksiyonlara çağrı olamaz.
+    //      Gövdeden çağrılan fonksiyonlar yalnızca sayılarla çalışmalıdır.
+    //
+    // @CPU tarafında tek kısıt: @GPU fonksiyon yalnızca adıyla çağrılabilir
+    // (değişkene konamaz); çağrı sırasında matrisler GPU'ya kopyalanır.
+    // -----------------------------------------------------------------------
+    bool gpuFunction = false;    // denetlenmekte olan fonksiyon @GPU
+    bool identIsCallee = false;  // sıradaki Identifier bir çağrının hedefi
+
+    bool inGpuKernel() const { return gpuFunction && inParallel(); }
+    static bool gpuTypeAllowed(const SemType& type);
+    void resolveTarget(FunctionDecl* fn);
+    void checkGpuType(const SemType& type, const ASTNode* at);
+    void noteGpuWork(const std::string& reason);
+    void checkGpuExpr(Expression* expr);
+    void checkGpuIdentifier(Identifier* ident, const Symbol& sym, bool isCallee);
+    void checkGpuElementAccess(ArrayAccessExpr* access);
+    void checkGpuBuiltin(FunctionCallExpr* call, const std::string& name);
+    void checkGpuCall(FunctionCallExpr* call);
+    void checkGpuParallelFor(ForRangeStmt* loop);
 };
 
 #endif //SEMA_H

@@ -1,13 +1,22 @@
 #include "LLVMLowering.h"
 
+#include "GpuOffload.h"
+
 #include "llvm/IR/IRBuilder.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/AsyncToLLVM/AsyncToLLVM.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/Async/Passes.h"
+#include "mlir/Conversion/ComplexToLLVM/ComplexToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
+#include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
+#include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
+#include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
+#include "mlir/Conversion/GPUCommon/GPUCommonPass.h"
+#include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/MathToLibm/MathToLibm.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
@@ -17,6 +26,9 @@
 #include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/ControlFlow/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
@@ -24,7 +36,9 @@
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVM/NVVM/Target.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "mlir/Transforms/Passes.h"
 
 namespace minik {
 
@@ -38,9 +52,41 @@ void registerLoweringInterfaces(mlir::DialectRegistry& registry) {
     mlir::scf::registerBufferizableOpInterfaceExternalModels(registry);
     mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
     mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(registry);
+    // GPU modüllerini NVIDIA makine koduna derleyen hedef.
+    mlir::NVVM::registerNVVMTargetInterfaceExternalModels(registry);
+    // gpu-to-llvm, CPU tarafındaki kodu llvm dialect'ine çevirirken yüklü her
+    // dialect'ten kendi dönüşüm kurallarını ister; kurallar burada kaydedilir.
+    mlir::arith::registerConvertArithToLLVMInterface(registry);
+    mlir::cf::registerConvertControlFlowToLLVMInterface(registry);
+    mlir::registerConvertFuncToLLVMInterface(registry);
+    mlir::registerConvertMemRefToLLVMInterface(registry);
+    mlir::registerConvertMathToLLVMInterface(registry);
+    mlir::registerConvertComplexToLLVMInterface(registry);
+    mlir::index::registerConvertIndexToLLVMInterface(registry);
+    mlir::ub::registerConvertUBToLLVMInterface(registry);
+    mlir::registerConvertNVVMToLLVMInterface(registry);
 }
 
-bool lowerToLLVMDialect(mlir::ModuleOp module) {
+// GPU ADIMLARI (yalnızca program @GPU fonksiyon içeriyorsa)
+//
+// GPU'da çalışacak kod, CPU kodunun arasından adım adım ayrılır:
+//
+//   G1  minik-gpu-offload      işaretli fonksiyonlardaki paralel döngüler ve
+//                              matris işlemleri → gpu.launch (GpuOffload.h)
+//   G2  gpu-kernel-outlining   her gpu.launch gövdesi → ayrı bir gpu.module
+//                              içinde gpu.func (çekirdek); yerinde
+//                              gpu.launch_func çağrısı kalır. Çekirdeğin
+//                              çağırdığı fonksiyonlar da modüle kopyalanır.
+//   G3  gpu-async-region       CPU tarafındaki gpu işlemlerini (alloc, memcpy,
+//                              launch_func) birbirine sıralı bağlar ve CPU'nun
+//                              sonucu okumadan önce GPU'yu beklemesini sağlar.
+//   G4  convert-gpu-to-nvvm    gpu.module'ün içi → NVIDIA'ya özgü llvm
+//                              dialect'i (matematik → libdevice çağrıları)
+//   G5  gpu-to-llvm            CPU tarafındaki gpu işlemleri → GPU çalışma
+//                              zamanı çağrıları (libmlir_cuda_runtime.so)
+//   G6  gpu-module-to-binary   gpu.module → derlenmiş çekirdek (NVPTX kod
+//                              üretici + ptxas); programın içine gömülür.
+bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSplit) {
     mlir::PassManager pm(module->getName());
 
     // A) Matris ifadeleri: tensor → bellek.
@@ -51,17 +97,26 @@ bool lowerToLLVMDialect(mlir::ModuleOp module) {
     //    adımdan ÖNCE eklenmelidir.
     pm.addPass(mlir::bufferization::createOneShotBufferizePass());
 
-    // B) linalg işlemleri (generic, matmul, fill) → scf.for döngüleri.
-    //    Paralel döngü / GPU hedefi için burası convert-linalg-to-parallel-loops
-    //    ile değiştirilecek.
+    // G1 — linalg işlemleri hâlâ dururken çalışmalı: @GPU fonksiyonlardakiler
+    //      paralel döngüye, oradan GPU çekirdeğine çevrilir.
+    if (usesGpu) pm.addPass(createGpuOffloadPass());
+
+    // B) Kalan (CPU'daki) linalg işlemleri (generic, matmul, fill) → scf.for
+    //    döngüleri.
     pm.addPass(mlir::createConvertLinalgToLoopsPass());
+
+    // G2
+    if (usesGpu) pm.addPass(mlir::createGpuKernelOutliningPass());
+    // (--emit=gpu-mlir burada durur: CPU kodu ve GPU çekirdekleri ayrılmış,
+    // ikisi de hâlâ okunabilir üst seviye MLIR.)
+    if (stopAfterGpuSplit) return mlir::succeeded(pm.run(module));
 
     // C) Paralel döngüler (scf.parallel) → iş parçacıkları.
     //    async-parallel-for, yineleme aralığını parçalara böler ve her parçayı
     //    bir görev olarak iş parçacığı havuzuna verir; sonraki pass'ler bu
     //    görevleri çalışma zamanı çağrılarına ve LLVM coroutine'lerine indirir.
-    //    GPU hedefi için scf.parallel burada async yerine gpu dialect'ine
-    //    çevrilecek.
+    //    (@GPU fonksiyonlardaki paralel döngüler G1'de GPU'ya ayrıldı; buraya
+    //    yalnızca CPU'dakiler gelir.)
     //
     //    Ayarlar:
     //      * İş parçacığı sayısı çalışırken makineden öğrenilir (-1); pass'in
@@ -87,11 +142,26 @@ bool lowerToLLVMDialect(mlir::ModuleOp module) {
     //    ürettiği için scf dönüşümünden önce gelmelidir.
     pm.addPass(mlir::memref::createExpandReallocPass());
     pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+    // Adres hesabı affine ifadeler olarak üretilir; onlar da açılır.
+    pm.addPass(mlir::createLowerAffinePass());
 
     // 1) scf.if / scf.for / scf.while / scf.execute_region → cf blokları.
     //    Bu noktadan sonra yapısal bilgi kaybolur; paralelleştirme ve GPU'ya
     //    yönlendirme gibi scf üzerinde çalışacak pass'ler bundan ÖNCE gelmeli.
     pm.addPass(mlir::createConvertSCFToCFPass());
+
+    if (usesGpu) {
+        // G3 — yalnızca CPU fonksiyonlarında.
+        pm.addNestedPass<mlir::func::FuncOp>(mlir::createGpuAsyncRegionPass());
+        // G4 — yalnızca GPU modüllerinde. Aşağıdaki matematik dönüşümlerinden
+        //      ÖNCE gelmeli: GPU'da sin/cos gibi işlemlerin karşılığı libm
+        //      değil libdevice'tır.
+        pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createStripDebugInfoPass());
+        pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createConvertGpuOpsToNVVMOps());
+        pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createReconcileUnrealizedCastsPass());
+        // Modüllerin hangi GPU için derleneceği (G6 bunu okur).
+        pm.addPass(mlir::createGpuNVVMAttachTarget());
+    }
 
     // 2) Matematik. Önce LLVM'de doğrudan karşılığı (intrinsic) olanlar
     //    çevrilir; kalanlar (tan, atan, atan2, tanh) libm fonksiyonlarına
@@ -106,6 +176,11 @@ bool lowerToLLVMDialect(mlir::ModuleOp module) {
     pm.addPass(mlir::createArithToLLVMConversionPass());
     pm.addPass(mlir::createConvertFuncToLLVMPass());
     pm.addPass(mlir::createConvertControlFlowToLLVMPass());
+
+    if (usesGpu) {
+        pm.addPass(mlir::createGpuToLLVMConversionPass()); // G5
+        pm.addPass(mlir::createGpuModuleToBinaryPass());   // G6
+    }
 
     // 4) Dönüşümler arasında geçici olarak bırakılan tip köprülerini
     //    (builtin.unrealized_conversion_cast) temizler.

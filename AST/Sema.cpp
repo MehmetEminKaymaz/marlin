@@ -170,6 +170,7 @@ bool Sema::literalFits(const Expression* e, const SemType& t) {
 
 SemType Sema::check(ExprPtr& e) {
     e->accept(*this);
+    checkGpuExpr(e.get());
     return e->type;
 }
 
@@ -309,6 +310,8 @@ void Sema::visit(Program* node) {
     Symbol* mainFn = lookup("main");
     if (!mainFn || mainFn->kind != Symbol::Function) {
         errors.push_back("hata: programda 'main' fonksiyonu yok");
+    } else if (mainFn->isGpu) {
+        errors.push_back("hata: 'main' @GPU olamaz; program CPU'da baslar");
     } else if (!mainFn->type.returnType().isError()) {
         const SemType& ret = mainFn->type.returnType();
         if (mainFn->type.paramCount() != 0 || !(ret.isVoid() || ret == SemType::Int(32)))
@@ -335,7 +338,15 @@ void Sema::declareFunction(FunctionDecl* fn) {
     std::vector<SemType> params = resolveParams(fn->params);
     SemType ret = resolveReturnType(fn->returnType.get());
     fn->fnType = SemType::Function(ret, params);
-    declare(fn->name, {fn->fnType, Symbol::Function, 0}, fn);
+
+    resolveTarget(fn);
+    if (fn->isGpu) {
+        for (size_t i = 0; i < params.size(); ++i) checkGpuType(params[i], fn->params[i].get());
+        checkGpuType(ret, fn->returnType.get());
+    }
+    Symbol symbol{fn->fnType, Symbol::Function, 0};
+    symbol.isGpu = fn->isGpu;
+    declare(fn->name, symbol, fn);
 }
 
 void Sema::checkGlobal(VariableDecl* v) {
@@ -375,6 +386,8 @@ void Sema::visit(FunctionDecl* node) {
     returnTypes.push_back(ret);
     parallelLoops.clear();
     currentEffects = &effects[node->name];
+    gpuFunction = node->isGpu;
+    if (node->hasMatrixSignature()) noteGpuWork("matris kullaniyor");
 
     std::vector<SemType> params(node->fnType.sub.begin() + 1, node->fnType.sub.end());
     declareParams(node->params, params);
@@ -385,12 +398,17 @@ void Sema::visit(FunctionDecl* node) {
                     ret.str() + " bekleniyor)");
 
     currentEffects = nullptr;
+    gpuFunction = false;
     returnTypes.pop_back();
     scopes.pop_back();
     funcDepth = 0;
 }
 
 void Sema::visit(LambdaExpr* node) {
+    if (gpuFunction) error(node, "@GPU fonksiyonda lambda kullanilamaz");
+    const bool outerGpu = gpuFunction;
+    gpuFunction = false;
+
     std::vector<SemType> params = resolveParams(node->params);
     SemType ret = resolveReturnType(node->returnType.get());
 
@@ -423,6 +441,7 @@ void Sema::visit(LambdaExpr* node) {
     flow = std::move(outerFlow);
     parallelLoops = std::move(outerParallel);
     currentEffects = outerEffects;
+    gpuFunction = outerGpu;
 
     bool ok = !ret.isError();
     for (auto& p : params) ok = ok && !p.isError();
@@ -449,7 +468,8 @@ void Sema::visit(CastExpr*) {} // Sema'nın kendi eklediği düğüm; tipi zaten
 
 void Sema::visit(Identifier* node) {
     const bool isAccessTarget = skipWholeRead;
-    skipWholeRead = false;
+    const bool isCallee = identIsCallee;
+    skipWholeRead = identIsCallee = false;
     node->type = SemType::Error();
     Symbol* sym = lookup(node->name);
     if (!sym) {
@@ -469,6 +489,7 @@ void Sema::visit(Identifier* node) {
               : sym->kind == Symbol::Global   ? Identifier::Ref::Global
                                               : Identifier::Ref::Local;
     node->type = sym->type;
+    checkGpuIdentifier(node, *sym, isCallee);
     // (İndeksleme ya da atama hedefi olarak kullanım ayrıca kaydedilir.)
     if (!isAccessTarget) noteWholeRead(node, *sym);
 }
@@ -625,6 +646,7 @@ void Sema::visit(ArrayAccessExpr* node) {
                        std::to_string(target.arraySize) + ")");
     node->type = target.elementType();
     noteElementAccess(node, isWrite);
+    checkGpuElementAccess(node);
 }
 
 // Yerleşik fonksiyon çağrısı: argüman sayısını ve tiplerini denetler,
@@ -635,6 +657,7 @@ void Sema::visit(ArrayAccessExpr* node) {
 void Sema::checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
                             const SemType& expected) {
     auto& args = node->arguments;
+    checkGpuBuiltin(node, name);
     // Yalnızca boyut soran yerleşikler (len, rows, cols, shape) verinin
     // elemanlarını okumaz; paralel döngü denetiminde okuma sayılmazlar.
     const bool onlyAsksSize = node->builtin == Builtin::Len || node->builtin == Builtin::Rows ||
@@ -867,7 +890,9 @@ void Sema::visit(FunctionCallExpr* node) {
         }
     }
 
+    identIsCallee = dynamic_cast<Identifier*>(node->target.get()) != nullptr;
     SemType callee = check(node->target);
+    identIsCallee = false;
     const bool callable = callee.isFunction() && node->arguments.size() == callee.paramCount();
 
     // Argümanlar, biliniyorsa parametre tipi beklentisiyle denetlenir.
@@ -890,6 +915,7 @@ void Sema::visit(FunctionCallExpr* node) {
         coerce(node->arguments[i], callee.paramType(i));
     node->type = callee.returnType();
     noteCall(node);
+    checkGpuCall(node);
 }
 
 void Sema::visit(UnaryExpr* node) {
@@ -1033,6 +1059,12 @@ void Sema::visit(VariableDecl* node) {
         type = SemType::Error();
     }
 
+    if (gpuFunction) {
+        checkGpuType(type, node);
+        if (type.isMatrix() && inGpuKernel())
+            error(node, "GPU'da calisan paralel dongunun icinde matris tanimlanamaz");
+    }
+
     node->varType = type;
     declare(node->name, {type, Symbol::Variable, funcDepth}, node);
 }
@@ -1133,6 +1165,7 @@ void Sema::visit(ForRangeStmt* node) {
     scopes.emplace_back();
     declare(node->iteratorName, {node->iterType, Symbol::Iterator, funcDepth}, node);
 
+    if (node->isParallel) checkGpuParallelFor(node);
     if (node->isParallel)
         parallelLoops.push_back({node->iteratorName, static_cast<int>(scopes.size()) - 1, {}, {}});
     visitLoopBody(node);

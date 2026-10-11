@@ -62,7 +62,7 @@ mlir::Value MLIRGenerator::takeMatrixOwnership(mlir::Value tensor, int line, mli
 void MLIRGenerator::flushTemporaries(mlir::Location loc, size_t from) {
     for (size_t i = from; i < temporaries.size(); ++i) {
         mlir::Value buffer = temporaries[i];
-        ctx.builder.create<mlir::memref::DeallocOp>(loc, buffer);
+        matrixManager.freeBuffer(buffer, loc);
         for (auto it = ownedBuffers.begin(); it != ownedBuffers.end(); ++it) {
             if (it->second != buffer) continue;
             ownedBuffers.erase(it);
@@ -77,7 +77,7 @@ void MLIRGenerator::freeMatrixScopes(size_t fromDepth, mlir::Location loc, mlir:
         for (mlir::Value slot : matrixScopes[depth]) {
             if (slot == keep) continue;
             mlir::Value buffer = ctx.builder.create<mlir::memref::LoadOp>(loc, slot);
-            ctx.builder.create<mlir::memref::DeallocOp>(loc, buffer);
+            matrixManager.freeBuffer(buffer, loc);
         }
     }
 }
@@ -218,8 +218,10 @@ void MLIRGenerator::emitMatrixLiteral(ListLiteral* node) {
             static_cast<int64_t>(level->elements.size()), indexType, loc));
         if (d + 1 < rank) level = static_cast<ListLiteral*>(level->elements.front().get());
     }
-    mlir::Value buffer = matrixManager.allocateBuffer(
-        sizes, typeManager.convert(node->type.elementType()), loc);
+    // Elemanlar tek tek yazıldığı için literal önce CPU belleğinde kurulur;
+    // @GPU fonksiyonda sonra GPU'ya kopyalanır.
+    mlir::Value buffer = matrixManager.allocateIn(
+        sizes, typeManager.convert(node->type.elementType()), /*onDevice=*/false, loc);
 
     // Elemanları, o ana kadar inilen indekslerle belleğe yaz.
     llvm::SmallVector<mlir::Value, 4> indices;
@@ -235,6 +237,12 @@ void MLIRGenerator::emitMatrixLiteral(ListLiteral* node) {
         }
     };
     store(node, 0);
+
+    if (ctx.onDevice) {
+        mlir::Value hostBuffer = buffer;
+        buffer = matrixManager.upload(hostBuffer, loc);
+        matrixManager.free(hostBuffer, /*onDevice=*/false, loc);
+    }
 
     setMatrixResult({matrixManager.toTensor(buffer, /*writable=*/false, loc), buffer});
 }

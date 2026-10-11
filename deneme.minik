@@ -53,4 +53,27 @@
 
         }
 
+
+        print("GPU:", matmulGpu());
+        print("CPU:", matmulCpu());
+
+    }
+
+
+    // 2000 x 2000 iki matrisi CPU'da çarpar; sonucun elemanlarının toplamını döndürür.
+    func matmulCpu() -> float64 {
+        matrix<float64> a = ones(2000, 2000);
+        matrix<float64> b = fill(2000, 2000, 2.0);
+        matrix<float64> c = matmul(a, b);
+        return sum(c);
+    }
+
+    // Aynı işi GPU'da yapar: matrisler GPU belleğinde oluşturulur ve çarpılır;
+    // CPU'ya yalnızca toplam (tek bir sayı) döner.
+    @GPU
+    func matmulGpu() -> float64 {
+        matrix<float64> a = ones(2000, 2000);
+        matrix<float64> b = fill(2000, 2000, 2.0);
+        matrix<float64> c = matmul(a, b);
+        return sum(c);
     }

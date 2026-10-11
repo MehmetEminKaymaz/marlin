@@ -377,13 +377,19 @@ void MLIRControlFlowManager::buildCountedLoopCFG(Location loc, Value lb, Value u
 // bloğuna yapar. Döngü içindeki tahsis her yinelemede yığıtı büyüteceğinden,
 // yığıtın konumu yineleme başında kaydedilir ve sonunda geri yüklenir.
 // (memref.alloca_scope aynı işi yapar ama içinde döngü/koşul bulunamıyor.)
+//
+// GPU'da (`onDevice`) yığıt kaydedilmez: orada her yineleme zaten ayrı bir GPU
+// iş parçacığıdır ve kendi yığıtı vardır. Gövdenin tahsislerini çekirdeğin
+// girişine GPU'ya indirme adımı taşır (bkz. LLVMBackend/GpuOffload).
 void MLIRControlFlowManager::buildParallelLoop(Location loc, Value lb, Value ub, Value step,
-                                               IterBodyGen bodyGen) {
+                                               bool onDevice, IterBodyGen bodyGen) {
     OpBuilder& builder = ctx.builder;
     builder.create<scf::ParallelOp>(
         loc, ValueRange(lb), ValueRange(ub), ValueRange(step),
         [&](OpBuilder& b, Location l, ValueRange ivs) {
-            Value stack = b.create<LLVM::StackSaveOp>(l, LLVM::LLVMPointerType::get(&ctx.context));
+            Value stack;
+            if (!onDevice)
+                stack = b.create<LLVM::StackSaveOp>(l, LLVM::LLVMPointerType::get(&ctx.context));
 
             // Paralel gövdeden dışarıya atlanamaz; yeni bir döngü bağlamı başlar.
             // Gövde her zaman execute_region içinde üretilir: hem tahsislere
@@ -393,7 +399,7 @@ void MLIRControlFlowManager::buildParallelLoop(Location loc, Value lb, Value ub,
             emitStructuredLoopBody(l, /*hasContinue=*/true, [&] { bodyGen(ivs[0]); });
             loopStack = std::move(savedLoops);
 
-            b.create<LLVM::StackRestoreOp>(l, stack);
+            if (stack) b.create<LLVM::StackRestoreOp>(l, stack);
         });
 }
 

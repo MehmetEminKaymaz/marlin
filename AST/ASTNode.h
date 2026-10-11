@@ -207,6 +207,21 @@ public:
     std::unique_ptr<Type> returnType;
     std::unique_ptr<BlockStmt> body;
     SemType fnType; // Sema doldurur
+
+    // Fonksiyonun başına yazılan @CPU / @GPU (yazılmadıysa boş).
+    std::string annotation;
+    // Hedef (Sema doldurur). @GPU: fonksiyonun matrisleri GPU belleğinde
+    // yaşar; içindeki `parallel for` ve matris işlemleri GPU'da çalışır.
+    bool isGpu = false;
+    // @GPU fonksiyonun parametre ya da dönüş tipinde matris var: CPU'dan
+    // çağrılırken veriler GPU'ya (ve sonuç geri) kopyalanmalıdır.
+    bool hasMatrixSignature() const {
+        if (!fnType.isFunction()) return false;
+        if (fnType.returnType().isMatrix()) return true;
+        for (size_t i = 0; i < fnType.paramCount(); ++i)
+            if (fnType.paramType(i).isMatrix()) return true;
+        return false;
+    }
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 

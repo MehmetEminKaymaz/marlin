@@ -15,12 +15,19 @@
 #
 # Çalıştırılan her test hem -O0 hem -O2 ile derlenir.
 #
+# @GPU fonksiyon içeren testler iki kez çalıştırılır: GPU'da ve --gpu=off ile
+# tümüyle CPU'da; ikisi de aynı çıktıyı vermelidir. Makinede kullanılabilir bir
+# NVIDIA GPU yoksa yalnızca --gpu=off ile çalıştırılırlar.
+#
 # Kullanım: tests/run.sh [minik_lang yolu]
 
 cd "$(dirname "$0")"
 COMPILER="${1:-../cmake-build-debug/minik_lang}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+has_gpu=0
+if nvidia-smi > /dev/null 2>&1; then has_gpu=1; else echo "  (GPU bulunamadi: @GPU testleri yalnizca --gpu=off ile calisacak)"; fi
 
 pass=0; fail=0
 ok()  { echo "  GECTI  $1"; pass=$((pass + 1)); }
@@ -44,8 +51,15 @@ for src in *.minik; do
     # "// output:" (boş satır) ve "// output: metin" biçimlerinin ikisi de geçerli
     sed -n -e 's|^// output: \(.*\)$|\1|p' -e 's|^// output:$||p' "$src" > "$TMP/expected"
 
-    for opt in -O0 -O2; do
-        if ! "$COMPILER" "$src" "$opt" -o "$TMP/prog" 2> "$TMP/err"; then
+    configs=("-O0" "-O2")
+    if grep -q '^@GPU' "$src"; then
+        configs=("-O0 --gpu=off" "-O2 --gpu=off")
+        [ "$has_gpu" = 1 ] && configs+=("-O0" "-O2")
+    fi
+
+    for opt in "${configs[@]}"; do
+        # ($opt bilerek tırnaksız: birden çok seçenek içerebilir)
+        if ! "$COMPILER" "$src" $opt -o "$TMP/prog" 2> "$TMP/err"; then
             bad "$src $opt" "derlenemedi: $(head -3 "$TMP/err")"; continue
         fi
         "$TMP/prog" > "$TMP/actual" 2> "$TMP/stderr"
@@ -59,6 +73,9 @@ for src in *.minik; do
             bad "$src $opt" "cikis kodu: beklenen $expected_code, bulunan $code $(head -2 "$TMP/stderr")"
         elif [ -n "$missing" ]; then
             bad "$src $opt" "beklenen hata mesaji yok:$missing"
+        elif grep -q "failed with 'CUDA" "$TMP/stderr"; then
+            # GPU çalışma zamanı hatayı yalnızca stderr'e yazar, programı durdurmaz.
+            bad "$src $opt" "GPU hatasi: $(head -2 "$TMP/stderr")"
         elif ! diff -u "$TMP/expected" "$TMP/actual" > "$TMP/diff"; then
             bad "$src $opt" "cikti farkli:"; sed 's/^/           /' "$TMP/diff"
         else

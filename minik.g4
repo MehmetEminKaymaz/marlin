@@ -34,7 +34,12 @@ assignmentStatement
     ;
 
 functionDecl
-    : 'func' IDENTIFIER '(' paramList? ')' '->' variableType block
+    : annotation? 'func' IDENTIFIER '(' paramList? ')' '->' variableType block
+    ;
+
+// Fonksiyonun çalışacağı hedef: @CPU ya da @GPU. Yazılmazsa @CPU.
+annotation
+    : '@' IDENTIFIER
     ;
 
 paramList

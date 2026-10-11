@@ -110,7 +110,8 @@ std::string NativeCodegen::findRuntimeLibrary(const char* argv0) {
 }
 
 bool NativeCodegen::link(const std::string& objectPath, const std::string& runtimeLib,
-                         const std::string& exePath, bool needsThreads, std::string& error) {
+                         const std::string& exePath, bool needsThreads, bool needsGpu,
+                         std::string& error) {
     llvm::ErrorOr<std::string> linker = std::make_error_code(std::errc::no_such_file_or_directory);
     for (const char* name : {"cc", "clang", "gcc"}) {
         linker = llvm::sys::findProgramByName(name);
@@ -132,13 +133,18 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
     const std::string libDir = MINIK_LLVM_LIB_DIR;
     const std::string searchPath = "-L" + libDir;
     const std::string runPath = "-Wl,-rpath," + libDir;
-    if (needsThreads) {
+    if (needsThreads || needsGpu) {
         args.push_back(searchPath);
-        args.push_back("-lmlir_async_runtime");
         args.push_back(runPath);
     }
+    if (needsThreads) args.push_back("-lmlir_async_runtime");
+    // GPU'da çalışan kod, GPU ile MLIR'in CUDA sarmalayıcısı üzerinden konuşur
+    // (bellek ayırma, kopyalama, çekirdek başlatma). O da sistemdeki NVIDIA
+    // sürücüsünü (libcuda) kullanır.
+    if (needsGpu) args.push_back("-lmlir_cuda_runtime");
 #else
     (void)needsThreads;
+    (void)needsGpu;
 #endif
     int status = llvm::sys::ExecuteAndWait(*linker, args, std::nullopt, {}, 0, 0, &error);
     if (status != 0) {

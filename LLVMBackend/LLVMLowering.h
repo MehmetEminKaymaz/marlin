@@ -30,7 +30,9 @@ void registerLoweringInterfaces(mlir::DialectRegistry& registry);
 /// Modüldeki bütün dialect'leri llvm dialect'ine indirir. Sıra önemlidir:
 /// önce yapısal akış (scf) bloklara açılır, sonra kalan her şey çevrilir.
 /// Hata durumunda false döner (ayrıntı MLIR tanılama çıktısındadır).
-bool lowerToLLVMDialect(mlir::ModuleOp module);
+/// `usesGpu`: modülde GPU için üretilmiş fonksiyon var; GPU adımları eklenir.
+/// `stopAfterGpuSplit`: GPU çekirdekleri ayrıldıktan sonra dur (incelemek için).
+bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSplit = false);
 
 /// llvm dialect'indeki modülü LLVM IR'a çevirir ve programın giriş noktasını
 /// C çalışma zamanının beklediği `i32 main()` biçimine getirir. Başarısızsa

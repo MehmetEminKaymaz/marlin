@@ -25,8 +25,10 @@ void MLIRGenerator::visit(Program* node) {
     for (auto& decl : node->declarations) {
         if (auto* var = dynamic_cast<VariableDecl*>(decl.get()))
             emitGlobalVariable(var);
-        else if (auto* fn = dynamic_cast<FunctionDecl*>(decl.get()))
+        else if (auto* fn = dynamic_cast<FunctionDecl*>(decl.get())) {
+            functions[fn->name] = fn;
             declareFunctionSignature(fn);
+        }
     }
 
     // 2. geçiş — fonksiyon gövdeleri.
@@ -47,8 +49,16 @@ void MLIRGenerator::visit(ParamDecl* /*node*/) {}
 void MLIRGenerator::declareFunctionSignature(FunctionDecl* node) {
     mlir::OpBuilder::InsertionGuard guard(ctx.builder);
     ctx.builder.setInsertionPointToEnd(ctx.theModule.getBody());
-    ctx.builder.create<mlir::func::FuncOp>(
-        locOf(node), node->name, typeManager.convertFunction(node->fnType));
+    auto funcType = typeManager.convertFunction(node->fnType);
+    auto funcOp = ctx.builder.create<mlir::func::FuncOp>(locOf(node), node->name, funcType);
+    if (!targetsGpu(node)) return;
+
+    // İndirme hattı, paralel döngüleri GPU'ya çevrilecek fonksiyonları bu
+    // işaretten tanır.
+    usesGpu = true;
+    funcOp->setAttr(kGpuFunctionAttr, ctx.builder.getUnitAttr());
+    if (node->hasMatrixSignature())
+        ctx.builder.create<mlir::func::FuncOp>(locOf(node), hostEntryName(node->name), funcType);
 }
 
 void MLIRGenerator::visit(FunctionDecl* node) {
@@ -56,8 +66,63 @@ void MLIRGenerator::visit(FunctionDecl* node) {
     auto funcOp = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(node->name);
     assert(funcOp && "fonksiyon imzasi 1. geciste olusturulmus olmali");
 
+    ctx.onDevice = targetsGpu(node);
     emitFunctionBody(funcOp, node->fnType, node->params, locOf(node),
                      [&] { node->body->accept(*this); });
+    ctx.onDevice = false;
+
+    if (targetsGpu(node) && node->hasMatrixSignature())
+        emitHostEntry(node);
+}
+
+// @GPU fonksiyonun CPU'dan çağrılan girişi. CPU ile GPU arasındaki bütün veri
+// taşıma buradadır:
+//
+//   func @f.host(%a: memref (CPU), %n) -> memref (CPU) {
+//     %da = gpu.alloc ...;  gpu.memcpy %da, %a      matris parametreleri GPU'ya
+//     %dr = call @f(%da, %n)                        iş GPU'da yapılır
+//     gpu.dealloc %da
+//     %r = alloc ...;  gpu.memcpy %r, %dr           sonuç CPU'ya
+//     gpu.dealloc %dr
+//     return %r
+//   }
+//
+// Matris parametreleri salt okunur olduğu için geri kopyalanmaz. Sayılar
+// olduğu gibi geçer.
+void MLIRGenerator::emitHostEntry(FunctionDecl* node) {
+    auto loc = locOf(node);
+    auto target = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(node->name);
+    auto entry = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(hostEntryName(node->name));
+
+    mlir::OpBuilder::InsertionGuard guard(ctx.builder);
+    mlir::Block* block = entry.addEntryBlock();
+    ctx.builder.setInsertionPointToEnd(block);
+
+    llvm::SmallVector<mlir::Value, 4> args, uploaded;
+    for (size_t i = 0; i < node->params.size(); ++i) {
+        mlir::Value arg = block->getArgument(static_cast<unsigned>(i));
+        if (node->fnType.paramType(i).isMatrix()) {
+            arg = matrixManager.upload(arg, loc);
+            uploaded.push_back(arg);
+        }
+        args.push_back(arg);
+    }
+
+    auto call = ctx.builder.create<mlir::func::CallOp>(loc, target, mlir::ValueRange(args));
+    for (mlir::Value buffer : uploaded)
+        matrixManager.free(buffer, /*onDevice=*/true, loc);
+
+    if (call.getNumResults() == 0) {
+        ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange());
+        return;
+    }
+    mlir::Value result = call.getResult(0);
+    if (node->fnType.returnType().isMatrix()) {
+        mlir::Value deviceResult = result;
+        result = matrixManager.download(deviceResult, loc);
+        matrixManager.free(deviceResult, /*onDevice=*/true, loc);
+    }
+    ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange(result));
 }
 
 void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& fnType,

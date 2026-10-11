@@ -20,6 +20,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Async/IR/Async.h"
@@ -106,14 +107,17 @@ static const char* const kUsage =
     "                 metin ciktilari icin ekran)\n"
     "  --emit=<tur>   hattin hangi asamasinda durulacagi:\n"
     "                   mlir       ust seviye MLIR (scf, memref, arith ...)\n"
+    "                   gpu-mlir   GPU cekirdekleri ayrilmis MLIR (gpu.module)\n"
     "                   llvm-mlir  llvm dialect'ine indirilmis MLIR\n"
     "                   llvm-ir    LLVM IR (.ll)\n"
     "                   obj        nesne dosyasi (.o)\n"
     "                   exe        calistirilabilir dosya (varsayilan)\n"
     "  -O0 .. -O3     LLVM optimizasyon seviyesi (varsayilan: -O0)\n"
+    "  --gpu=off      @GPU fonksiyonlari da CPU icin derler (GPU'suz makinede\n"
+    "                 calistirmak ya da CPU ile karsilastirmak icin)\n"
     "  --print-ast    semantik analizden gecmis AST'yi yazdirir\n";
 
-enum class EmitKind { MLIR, LLVMDialect, LLVMIR, Object, Executable };
+enum class EmitKind { MLIR, GpuMLIR, LLVMDialect, LLVMIR, Object, Executable };
 
 // Metin çıktısını dosyaya ya da (yol boşsa) ekrana yazar.
 template <typename PrintFn>
@@ -139,13 +143,17 @@ int main(int argc, char** argv) {
     EmitKind emit = EmitKind::Executable;
     unsigned optLevel = 0;
     bool printAst = false;
+    bool gpuEnabled = true;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-o" && i + 1 < argc) outputPath = argv[++i];
         else if (arg == "--print-ast") printAst = true;
+        else if (arg == "--gpu=off") gpuEnabled = false;
+        else if (arg == "--gpu=on") gpuEnabled = true;
         else if (arg == "-O0" || arg == "-O1" || arg == "-O2" || arg == "-O3") optLevel = arg[2] - '0';
         else if (arg == "--emit=mlir") emit = EmitKind::MLIR;
+        else if (arg == "--emit=gpu-mlir") emit = EmitKind::GpuMLIR;
         else if (arg == "--emit=llvm-mlir") emit = EmitKind::LLVMDialect;
         else if (arg == "--emit=llvm-ir") emit = EmitKind::LLVMIR;
         else if (arg == "--emit=obj") emit = EmitKind::Object;
@@ -216,6 +224,7 @@ int main(int argc, char** argv) {
     registry.insert<mlir::bufferization::BufferizationDialect>();
     registry.insert<mlir::async::AsyncDialect>();   // paralel döngülerin indirilmesi için
     registry.insert<mlir::affine::AffineDialect>();
+    registry.insert<mlir::gpu::GPUDialect>();       // @GPU fonksiyonlar
     minik::registerLoweringInterfaces(registry);
     mlir::registerAllToLLVMIRTranslations(registry);
 
@@ -231,11 +240,13 @@ int main(int argc, char** argv) {
     mlirCtx.getOrLoadDialect<mlir::tensor::TensorDialect>();
     mlirCtx.getOrLoadDialect<mlir::linalg::LinalgDialect>();
     mlirCtx.getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
+    mlirCtx.getOrLoadDialect<mlir::gpu::GPUDialect>();
 
     mlir::OpBuilder mlirBuilder(&mlirCtx);
     mlir::ModuleOp moduleOp = mlir::ModuleOp::create(mlirBuilder.getUnknownLoc());
 
     MLIRGenerator generator(mlirCtx, mlirBuilder, moduleOp);
+    generator.setGpuEnabled(gpuEnabled);
     astRoot->accept(generator);
 
     // Üretilen modülü doğrula: kod üretimindeki hatalar (eksik terminator, tip
@@ -251,11 +262,12 @@ int main(int argc, char** argv) {
         return writeText(outputPath, [&](llvm::raw_ostream& os) { moduleOp->print(os); }) ? 0 : 1;
 
     // --- MLIR → llvm dialect'i ---
-    if (!minik::lowerToLLVMDialect(moduleOp)) {
+    if (!minik::lowerToLLVMDialect(moduleOp, generator.usesGpuCode(),
+                                   /*stopAfterGpuSplit=*/emit == EmitKind::GpuMLIR)) {
         llvm::errs() << "MLIR, LLVM dialect'ine indirilemedi!\n";
         return 1;
     }
-    if (emit == EmitKind::LLVMDialect)
+    if (emit == EmitKind::GpuMLIR || emit == EmitKind::LLVMDialect)
         return writeText(outputPath, [&](llvm::raw_ostream& os) { moduleOp->print(os); }) ? 0 : 1;
 
     // --- llvm dialect'i → LLVM IR ---
@@ -302,7 +314,8 @@ int main(int argc, char** argv) {
     bool ok = codegen->emitObject(*llvmModule, objectPath.str().str(), error) &&
               minik::NativeCodegen::link(objectPath.str().str(), runtimeLib,
                                          outputPath.empty() ? "a.out" : outputPath,
-                                         generator.usesParallelLoops(), error);
+                                         generator.usesParallelLoops(), generator.usesGpuCode(),
+                                         error);
     llvm::sys::fs::remove(objectPath);
     if (!ok) {
         llvm::errs() << error << "\n";

@@ -131,6 +131,7 @@ virtual std::any visitBlock(minikParser::BlockContext *ctx) override {
 virtual std::any visitFunctionDecl(minikParser::FunctionDeclContext *ctx) override {
     auto fn = new FunctionDecl();
     fn->name = ctx->IDENTIFIER()->getText();
+    if (ctx->annotation()) fn->annotation = ctx->annotation()->IDENTIFIER()->getText();
     if (ctx->paramList()) {
         for (auto* p : ctx->paramList()->param()) {
             auto type = std::unique_ptr<Type>(std::any_cast<Type*>(visit(p->variableType())));

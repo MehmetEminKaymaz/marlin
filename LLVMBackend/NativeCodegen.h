@@ -40,8 +40,11 @@ public:
     /// `runtimeLib`: minik çalışma zamanı kütüphanesi (libminikrt.a).
     /// `needsThreads`: program paralel döngü içeriyor; iş parçacığı çalışma
     /// zamanı da bağlanır.
+    /// `needsGpu`: program GPU'da çalışan kod içeriyor; GPU çalışma zamanı da
+    /// bağlanır.
     static bool link(const std::string& objectPath, const std::string& runtimeLib,
-                     const std::string& exePath, bool needsThreads, std::string& error);
+                     const std::string& exePath, bool needsThreads, bool needsGpu,
+                     std::string& error);
 
     /// libminikrt.a'nın yolunu bulur: önce MINIK_RUNTIME ortam değişkeni, sonra
     /// derleyicinin yanındaki dosya, en son derleme sırasında gömülen yol.
