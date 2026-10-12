@@ -1,0 +1,8 @@
+// Test modülü: alt dizindeki modül.
+public func carp(int a, int b) -> int {
+    return a * b;
+}
+
+public func ad() -> int {
+    return 2;
+}

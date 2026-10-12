@@ -77,6 +77,8 @@ set(PROJECT_SOURCES
         AST/Enums/TypeKind.h
         AST/ASTPrinter.cpp
         AST/ASTPrinter.h
+        AST/ModuleLoader.cpp
+        AST/ModuleLoader.h
         MLIRBackend/MLIRGenerator.cpp
         MLIRBackend/MLIRGeneratorExpr.cpp
         MLIRBackend/MLIRGeneratorStmt.cpp
@@ -86,6 +88,7 @@ set(PROJECT_SOURCES
         MLIRBackend/MLIRMatrixManager.cpp
         MLIRBackend/MLIRMatrixManager.h
         MLIRBackend/MLIRGeneratorMatrix.cpp
+        MLIRBackend/MLIRGeneratorStruct.cpp
         MLIRBackend/MLIRListManager.cpp
         MLIRBackend/MLIRListManager.h
         MLIRBackend/MLIRRuntime.h
@@ -112,6 +115,7 @@ set(PROJECT_SOURCES
         AST/Sema.cpp
         AST/SemaParallel.cpp
         AST/SemaGpu.cpp
+        AST/SemaStruct.cpp
         AST/Sema.h
 )
 
@@ -149,9 +153,22 @@ set_source_files_properties(LLVMBackend/GpuOffload.cpp LLVMBackend/ParallelMatmu
 # Çalışma zamanı kütüphanesi: derlenen her minik programına bağlanır (print vb.).
 # Derleyiciyle aynı dizine üretilir; minik_lang onu yanında arar, bulamazsa
 # aşağıda gömülen yola bakar.
-add_library(minikrt STATIC runtime/minik_rt.c)
+# std_*.c: standart kütüphane modüllerinin (std/*.minik) C ile yazılmış kısmı.
+add_library(minikrt STATIC
+        runtime/minik_rt.c
+        runtime/minik_rt.h
+        runtime/std_string.c
+        runtime/std_file.c
+        runtime/std_io.c
+        runtime/std_os.c
+        runtime/std_time.c
+        runtime/std_random.c)
 add_dependencies(minik_lang minikrt)
 target_compile_definitions(minik_lang PRIVATE MINIK_RUNTIME_LIB="$<TARGET_FILE:minikrt>")
+
+# Standart kütüphanenin minik dosyaları (import std.file → std/file.minik).
+# minik_lang önce yanındaki `std` dizinine, sonra buraya bakar.
+target_compile_definitions(minik_lang PRIVATE MINIK_STD_DIR="${CMAKE_CURRENT_SOURCE_DIR}/std")
 
 # Paralel döngü içeren programlar MLIR'in iş parçacığı havuzuna
 # (libmlir_async_runtime.so) bağlanır; minik_lang onu bu dizinde arar.

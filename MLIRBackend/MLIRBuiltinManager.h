@@ -4,6 +4,7 @@
 #include "CodegenContext.h"
 #include "MLIRArithManager.h"
 #include "MLIRRuntime.h"
+#include "../AST/ASTNode.h"
 #include "../AST/Builtins.h"
 #include "../AST/SemType.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -20,6 +21,9 @@
 //     (minik_print_i64, minik_print_str ...) çağrı olarak üretilir (bkz.
 //     MLIRRuntime). İleride GPU çekirdeklerinde print'in yasaklanması ya da
 //     yönlendirilmesi bu sınırda yapılır.
+//
+//   * String işlemleri (birleştirme, karşılaştırma, str) de çalışma zamanı
+//     çağrılarıdır: string, o kütüphanenin yönettiği bir bellek bloğudur.
 // ---------------------------------------------------------------------------
 class MLIRBuiltinManager {
     CodegenContext& ctx;
@@ -44,6 +48,13 @@ public:
     /// kendi düzenini kuran çağıranlar için.
     void printValue(mlir::Value value, const SemType& type, mlir::Location loc);
     void printChar(char c, mlir::Location loc);
+
+    // --- Stringler: çalışma zamanı kütüphanesine çağrılar ---
+    /// str(x): değeri metne çevirir (yeni bir string).
+    mlir::Value buildToString(mlir::Value value, const SemType& type, mlir::Location loc);
+    /// a + b (birleştirme) ve == != < <= > >= (sözlük sırası).
+    mlir::Value buildStringBinary(BinaryExpr::Op op, mlir::Value left, mlir::Value right,
+                                  mlir::Location loc);
 };
 
 #endif //MLIRBUILTINMANAGER_H

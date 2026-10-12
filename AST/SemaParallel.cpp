@@ -15,7 +15,7 @@ unsigned Sema::iteratorMask(const ArrayAccessExpr* access, const ParallelLoop& l
     for (size_t i = 0; i < access->indices.size(); ++i) {
         auto* ident = dynamic_cast<Identifier*>(access->indices[i].get());
         if (!ident || ident->name != loop.iterator) continue;
-        Symbol* sym = lookup(ident->name);
+        Symbol* sym = lookup(ident);
         if (sym && sym->kind == Symbol::Iterator && sym->scopeDepth == loop.bodyDepth)
             mask |= 1u << i;
     }
@@ -32,6 +32,16 @@ void Sema::noteUnsafe(const std::string& reason) {
 void Sema::noteWholeRead(Identifier* ident, const Symbol& sym) {
     if (!inParallel()) return;
     if (sym.kind != Symbol::Variable && sym.kind != Symbol::Global) return;
+    // Struct'ın bütün olarak kullanılması, dizi/liste/matris alanlarının her
+    // birinin bütün olarak kullanılmasıdır.
+    if (sym.type.isStruct()) {
+        for (const SemLeaf& leaf : leavesOf(sym.type, ident->name)) {
+            if (!leaf.type.isArray() && !leaf.type.isList() && !leaf.type.isMatrix()) continue;
+            for (auto& loop : parallelLoops)
+                if (isOutside(sym, loop)) loop.reads.push_back({leaf.path, ident, 0});
+        }
+        return;
+    }
     if (!sym.type.isArray() && !sym.type.isList() && !sym.type.isMatrix()) return;
 
     for (auto& loop : parallelLoops)
@@ -57,7 +67,7 @@ void Sema::noteWholeWrite(Identifier* ident, const Symbol& sym) {
 void Sema::noteElementAccess(ArrayAccessExpr* access, bool isWrite) {
     auto* root = dynamic_cast<Identifier*>(access->target.get());
     if (!root) return;
-    Symbol* sym = lookup(root->name);
+    Symbol* sym = lookup(root);
     if (!sym || (sym->kind != Symbol::Variable && sym->kind != Symbol::Global)) return;
 
     if (isWrite) {

@@ -1,0 +1,56 @@
+// expect: 3
+// output: 3.141592653589793 2.718281828459045
+// output: true true
+// output: true
+// output: true true true
+// output: true
+// output: 2 3 true
+// output: true
+// output: soru: cevap
+import std.math as math;
+import std.os as os;
+import std.time;
+import std.random as random;
+import std.io as io;
+
+func main() -> int {
+    print(math.PI, math.E);
+
+    // os
+    list<string> a = os.args();
+    print(len(a) == 1, len(os.env("PATH")) > 0);
+    print(os.env("MINIK_BOYLE_BIR_DEGISKEN_YOK") == "");
+
+    // time
+    float64 once = std.time.now();
+    float64 baslangic = time();                     // dile gömülü time() ile karışmaz
+    std.time.sleep(0.05);
+    print(once > 1700000000.0, std.time.now() > once, time() - baslangic >= 0.04);
+
+    // random: aynı tohum aynı sayıları verir
+    random.seed(42);
+    float64 r1 = random.random();
+    int64 z1 = random.rand_int(1, 7);
+    random.seed(42);
+    print(r1 == random.random() && z1 == random.rand_int(1, 7));
+
+    matrix<float64> m = random.rand_matrix(2, 3);
+    float64 toplam = sum(m);
+    print(rows(m), cols(m), toplam > 0.0 && toplam < 6.0);
+
+    bool aralikta = true;
+    for i in 0 .. 200 {
+        int64 z = random.rand_int(1, 7);
+        float64 r = random.random();
+        if z < 1 || z > 6 || r < 0.0 || r >= 1.0 {
+            aralikta = false;
+        }
+    }
+    print(aralikta);
+
+    io.write("soru: ");
+    print("cevap");
+
+    os.exit(3);
+    return 0;
+}

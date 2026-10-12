@@ -1,0 +1,27 @@
+// error: 'extern' yalnizca standart kutuphane dosyalarinda kullanilabilir
+// error: 'str.c_find' private; baska bir modulden kullanilamaz
+// error: 'std.string' modulundeki 'c_trim' private; import edilemez
+// error: paralel dongude 'std.file.exists' cagrilamaz
+// error: C ile yazilmis bir kutuphane fonksiyonu (yan etkisi olabilir)
+// error: @GPU fonksiyondan @CPU fonksiyon 'std.string.trim' cagrilamaz
+import std.string as str;
+import std.file as file;
+from std.string import c_trim;
+
+// Kullanıcı kodu C fonksiyonu bildiremez.
+extern func benim(int x) -> int;
+
+@GPU
+func gpuda(float64 v) -> float64 {
+    str.trim("a");
+    return v;
+}
+
+func main() -> void {
+    print(str.c_find("abc", "b", 0));       // extern'ler her zaman private
+
+    bool[4] var;
+    parallel for i in 0 .. 4 {
+        var[i] = file.exists("a.txt");      // yan etkili (@pure değil)
+    }
+}

@@ -43,8 +43,8 @@ struct CodegenContext {
         symbolTable.push_back(std::unordered_map<std::string, mlir::Value>());
     }
 
-    mlir::Location getLoc(int line, int col) {
-        return mlir::FileLineColLoc::get(&context, "main.src", line, col);
+    mlir::Location getLoc(llvm::StringRef file, int line, int col) {
+        return mlir::FileLineColLoc::get(&context, file, line, col);
     }
 
     // Tahsisi, o an neresi üretiliyor olursa olsun fonksiyonun giriş bloğuna

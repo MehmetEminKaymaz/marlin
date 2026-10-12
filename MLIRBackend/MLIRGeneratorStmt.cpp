@@ -4,6 +4,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 // ===========================================================================
 // Bloklar
@@ -46,10 +47,31 @@ void MLIRGenerator::visit(VariableDecl* node) {
     auto loc = locOf(node);
     const SemType& type = node->varType;
 
+    // Struct: her yaprak ayrı bir değişkendir.
+    if (type.isStruct()) {
+        declareStruct(node);
+        return;
+    }
+
+    auto* list = dynamic_cast<ListLiteral*>(node->initializer.get());
+    if (list && type.isArray()) {
+        // int[3] a = [1, 2, 3];  → elemanlar geçici dizi olmadan doğrudan yazılır
+        mlir::Value storage = createStorage(type, loc);
+        emitListInto(list, storage);
+        scopeManager.declareVariable(node->name, storage);
+    } else if (node->initializer) {
+        declareLocal(node->name, type, emitExpr(node->initializer.get()), node->line, loc);
+    } else {
+        declareDefault(node->name, type, loc);
+    }
+    flushTemporaries(loc);
+}
+
+void MLIRGenerator::declareLocal(const std::string& name, const SemType& type, mlir::Value value,
+                                 int line, mlir::Location loc) {
     // Fonksiyon değerleri yuvaya konmaz; isim doğrudan SSA değerine bağlanır.
     if (type.isFunction()) {
-        scopeManager.declareVariable(node->name, emitExpr(node->initializer.get()));
-        flushTemporaries(loc);
+        scopeManager.declareVariable(name, value);
         return;
     }
 
@@ -59,36 +81,51 @@ void MLIRGenerator::visit(VariableDecl* node) {
     // devralınır, başka bir değişkense kopyalanır. Değişken, blok bitince
     // bırakılmak üzere kaydedilir.
     if (type.isMatrix()) {
-        mlir::Value buffer = takeMatrixOwnership(emitExpr(node->initializer.get()), node->line, loc);
+        mlir::Value buffer = takeMatrixOwnership(value, line, loc);
         ctx.builder.create<mlir::memref::StoreOp>(loc, buffer, storage);
-        flushTemporaries(loc);
-        scopeManager.declareVariable(node->name, storage);
         matrixScopes.back().push_back(storage);
-        return;
-    }
-
-    auto* list = dynamic_cast<ListLiteral*>(node->initializer.get());
-    if (list && type.isArray()) {
-        // int[3] a = [1, 2, 3];  → elemanlar geçici dizi olmadan doğrudan yazılır
-        emitListInto(list, storage);
-    } else if (node->initializer) {
+    } else {
         // (list<T> için değer bir başvurudur: yuvaya yalnızca o yazılır)
-        storeTo(emitExpr(node->initializer.get()), storage, type, loc);
-    } else if (type.isList()) {
+        storeTo(value, storage, type, loc);
+    }
+    scopeManager.declareVariable(name, storage);
+}
+
+void MLIRGenerator::declareDefault(const std::string& name, const SemType& type,
+                                   mlir::Location loc) {
+    mlir::Value storage = createStorage(type, loc);
+    if (type.isList()) {
         // list<int> l;  → boş liste
         mlir::Value empty = listManager.create(typeManager.convert(type.elementType()), {}, loc);
         storeTo(empty, storage, type, loc);
     } else if (!type.isArray()) {
         // Başlangıç değeri verilmeyen skaler ve stringler sıfırlanır
         storeTo(emitZero(type, loc), storage, type, loc);
+    } else if (type.elementType().isString()) {
+        // Sayı dizilerinin elemanları başlatılmaz; string dizisinde ise
+        // başlatılmamış eleman geçersiz bir adres olurdu. Hepsi boş string yapılır.
+        mlir::Value empty = emitZero(type.elementType(), loc);
+        mlir::Value begin = ctx.builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
+        mlir::Value end = ctx.builder.create<mlir::arith::ConstantIndexOp>(loc, type.arraySize);
+        mlir::Value step = ctx.builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
+        ctx.builder.create<mlir::scf::ForOp>(
+            loc, begin, end, step, mlir::ValueRange(),
+            [&](mlir::OpBuilder& b, mlir::Location l, mlir::Value index, mlir::ValueRange) {
+                b.create<mlir::memref::StoreOp>(l, empty, storage, mlir::ValueRange(index));
+                b.create<mlir::scf::YieldOp>(l);
+            });
     }
-
-    flushTemporaries(loc);
-    scopeManager.declareVariable(node->name, storage);
+    scopeManager.declareVariable(name, storage);
 }
 
 void MLIRGenerator::visit(AssignmentStmt* node) {
     auto loc = locOf(node);
+
+    if (auto* ident = dynamic_cast<Identifier*>(node->target.get()); ident && ident->type.isStruct()) {
+        assignStruct(node, ident);
+        return;
+    }
+
     mlir::Value value = emitExpr(node->value.get());
 
     if (auto* ident = dynamic_cast<Identifier*>(node->target.get())) {
@@ -304,6 +341,30 @@ void MLIRGenerator::visit(ReturnStmt* node) {
         ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange());
         return;
     }
+    emitReturn(node->expr.get(), node->line, loc);
+}
+
+void MLIRGenerator::emitReturn(Expression* expr, int line, mlir::Location loc) {
+    // Struct yaprak yaprak döner. Matris yapraklarının sahipliği çağırana
+    // geçer; dizi yaprakları çağıranın ayırdığı yerlere kopyalanır.
+    if (expr->type.isStruct()) {
+        Values values = emitStructExpr(expr);
+        const std::vector<SemLeaf> leaves = leavesOf(expr->type);
+        Values results;
+        size_t arraySlot = 0;
+        for (size_t i = 0; i < leaves.size(); ++i) {
+            if (leaves[i].type.isArray())
+                ctx.builder.create<mlir::memref::CopyOp>(loc, values[i], returnArraySlots[arraySlot++]);
+            else if (leaves[i].type.isMatrix())
+                results.push_back(takeMatrixOwnership(values[i], line, loc));
+            else
+                results.push_back(values[i]);
+        }
+        flushTemporaries(loc);
+        freeMatrixScopes(0, loc);
+        ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange(results));
+        return;
+    }
 
     // Fonksiyondan çıkılırken bütün yerel matrisler bırakılır. Dönen değer
     // bir matrisse belleğinin sahipliği çağırana geçer:
@@ -312,13 +373,13 @@ void MLIRGenerator::visit(ReturnStmt* node) {
     //   * bir parametreyse (çağıranın belleği) kopyası döner.
     mlir::Value movedSlot;
     mlir::Value value;
-    if (node->expr->type.isMatrix()) {
-        movedSlot = ownedMatrixSlot(node->expr.get());
+    if (expr->type.isMatrix()) {
+        movedSlot = ownedMatrixSlot(expr);
         value = movedSlot
             ? ctx.builder.create<mlir::memref::LoadOp>(loc, movedSlot).getResult()
-            : takeMatrixOwnership(emitExpr(node->expr.get()), node->line, loc);
+            : takeMatrixOwnership(emitExpr(expr), line, loc);
     } else {
-        value = emitExpr(node->expr.get());
+        value = emitExpr(expr);
     }
 
     flushTemporaries(loc);

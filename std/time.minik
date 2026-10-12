@@ -1,0 +1,22 @@
+// std.time — takvim zamanı ve bekleme.
+//
+//   import std.time as time;
+//
+//   float64 simdi = time.now();
+//   time.sleep(0.5);
+//
+// Süre ölçmek için dile gömülü time() daha uygundur (saati geri gitmez).
+
+// C tarafı: runtime/std_time.c
+extern func c_now() -> float64;
+extern func c_sleep(float64 seconds) -> void;
+
+// 1 Ocak 1970'ten beri geçen süre, saniye cinsinden (kesirli).
+public func now() -> float64 {
+    return c_now();
+}
+
+// Programı verilen süre kadar (saniye; kesirli olabilir) bekletir.
+public func sleep(float64 seconds) -> void {
+    c_sleep(seconds);
+}

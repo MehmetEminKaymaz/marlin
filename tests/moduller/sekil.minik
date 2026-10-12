@@ -1,0 +1,28 @@
+// Test modülü: struct tanımları (bkz. tests/modul_struct.minik).
+public struct Nokta {
+    float64 x;
+    float64 y;
+}
+
+// public struct, alanında aynı modülün başka bir struct'ını taşıyabilir.
+public struct Dogru {
+    Nokta bas;
+    Nokta son;
+}
+
+struct Gizli {      // private: yalnızca bu dosyada
+    int a;
+}
+
+public func orijin() -> Nokta {
+    return Nokta(0, 0);
+}
+
+public func topla(Nokta p) -> float64 {
+    Gizli g = Gizli(1);
+    return p.x + p.y + g.a;
+}
+
+public func uzunlukKare(Dogru d) -> float64 {
+    return (d.son.x - d.bas.x) * (d.son.x - d.bas.x) + (d.son.y - d.bas.y) * (d.son.y - d.bas.y);
+}

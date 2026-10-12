@@ -1,0 +1,103 @@
+// std.file — dosya okuma ve yazma.
+//
+//   import std.file as file;
+//
+//   file.write_text("not.txt", "merhaba\n");
+//   print(file.read_text("not.txt"));
+//
+//   file.File f = file.open("not.txt", "r");
+//   if f.ok {
+//       while !file.eof(f) {
+//           print(file.read_line(f));
+//       }
+//       file.close(f);
+//   }
+//
+// Dosyalar metin olarak okunur ve yazılır.
+//
+// Hatalar: read_text / write_text gibi tek adımlı fonksiyonlar dosyaya
+// ulaşamazsa programı mesajla durdurur (önceden denetlemek için: exists).
+// open ise durdurmaz; sonucun `ok` alanı açılıp açılmadığını söyler.
+
+// C tarafı: runtime/std_file.c
+extern func c_exists(string path) -> bool;
+extern func c_read_text(string path) -> string;
+extern func c_write_text(string path, string text, bool append) -> void;
+extern func c_remove(string path) -> bool;
+extern func c_open(string path, string mode) -> int64;
+extern func c_read_line(int64 handle) -> string;
+extern func c_eof(int64 handle) -> bool;
+extern func c_write(int64 handle, string text) -> void;
+extern func c_close(int64 handle) -> void;
+
+// Açık bir dosya. `ok` yanlışsa dosya açılamamıştır ve kullanılamaz.
+public struct File {
+    int64 handle;
+    bool ok;
+}
+
+public func exists(string path) -> bool {
+    return c_exists(path);
+}
+
+// Dosyanın tamamı, tek bir string olarak.
+public func read_text(string path) -> string {
+    return c_read_text(path);
+}
+
+// Dosyayı (yoksa oluşturarak) verilen metinle yazar; eski içerik silinir.
+public func write_text(string path, string text) -> void {
+    c_write_text(path, text, false);
+}
+
+// Metni dosyanın sonuna ekler.
+public func append_text(string path, string text) -> void {
+    c_write_text(path, text, true);
+}
+
+// Dosyayı siler; silebildiyse true.
+public func remove(string path) -> bool {
+    return c_remove(path);
+}
+
+// Dosyanın satırları (satır sonları olmadan).
+public func read_lines(string path) -> list<string> {
+    list<string> lines = [];
+    int64 handle = c_open(path, "r");
+    if handle == 0 {
+        // Açılamadı: read_text aynı dosya için açıklayıcı mesajla durur.
+        c_read_text(path);
+    }
+    while !c_eof(handle) {
+        push(lines, c_read_line(handle));
+    }
+    c_close(handle);
+    return lines;
+}
+
+// mode: "r" okumak, "w" yazmak (eski içerik silinir), "a" sonuna eklemek için.
+public func open(string path, string mode) -> File {
+    int64 handle = c_open(path, mode);
+    return File(handle, handle != 0);
+}
+
+// Sıradaki satır (satır sonu olmadan). Dosya bittiyse boş string.
+public func read_line(File f) -> string {
+    return c_read_line(f.handle);
+}
+
+// Okunacak satır kalmadı mı?
+public func eof(File f) -> bool {
+    return c_eof(f.handle);
+}
+
+// Metni olduğu gibi yazar (satır sonu eklemez).
+public func write(File f, string text) -> void {
+    c_write(f.handle, text);
+}
+
+// İşi biten dosya kapatılmalıdır; yazılanlar ancak o zaman kesin olarak
+// dosyaya geçer. Kapatılan dosya bir daha kullanılmamalıdır.
+public func close(File f) -> void {
+    c_close(f.handle);
+}

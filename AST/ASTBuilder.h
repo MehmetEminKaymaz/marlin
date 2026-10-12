@@ -10,11 +10,37 @@
 
 class ASTBuilder : public minikBaseVisitor {
 
+    int module; // ayrıştırılan dosyanın Program::modules içindeki sırası
+
     // Düğüme kaynak konumunu yazar (henüz yazılmamışsa).
-    static void setLoc(ASTNode* node, antlr4::Token* tok) {
+    void setLoc(ASTNode* node, antlr4::Token* tok) const {
         if (!node || !tok || node->line != 0) return;
         node->line   = static_cast<int>(tok->getLine());
         node->column = static_cast<int>(tok->getCharPositionInLine()) + 1;
+        node->module = module;
+    }
+
+    // Görünürlük yazılmadıysa tanım private'tır.
+    static bool isPublic(minikParser::VisibilityContext* ctx) {
+        return ctx && ctx->getText() == "public";
+    }
+
+    ImportDecl* makeImport(minikParser::ImportDeclContext* ctx) const {
+        auto* decl = new ImportDecl();
+        setLoc(decl, ctx->getStart());
+        if (auto* whole = dynamic_cast<minikParser::ImportModuleContext*>(ctx)) {
+            decl->modulePath = whole->qualifiedName()->getText();
+            if (whole->IDENTIFIER()) decl->alias = whole->IDENTIFIER()->getText();
+        } else if (auto* some = dynamic_cast<minikParser::ImportNamesContext*>(ctx)) {
+            decl->isFrom = true;
+            decl->modulePath = some->qualifiedName()->getText();
+            for (auto* item : some->importName()) {
+                ImportDecl::Name name{item->IDENTIFIER(0)->getText(), ""};
+                if (item->IDENTIFIER().size() > 1) name.alias = item->IDENTIFIER(1)->getText();
+                decl->names.push_back(std::move(name));
+            }
+        }
+        return decl;
     }
 
     // "\n", "\t" gibi kaçış dizilerini gerçek karakterlere çevirir.
@@ -43,6 +69,8 @@ class ASTBuilder : public minikBaseVisitor {
     }
 
 public:
+    explicit ASTBuilder(int module = 0) : module(module) {}
+
     // Her kuralın ürettiği düğüme, o kuralın ilk token'ının konumunu yazar.
     // Böylece visitXxx metotlarının tek tek konum ataması gerekmez.
     std::any visit(antlr4::tree::ParseTree* tree) override {
@@ -56,8 +84,13 @@ public:
         return result;
     }
 
+    // Tek bir dosyanın ağacı: `modules` yalnızca bu dosyanın import'larını
+    // taşıyan tek bir kayıt içerir. Dosyaları ModuleLoader birleştirir.
     virtual std::any visitProgram(minikParser::ProgramContext *ctx) override {
         auto program = std::make_unique<Program>();
+        program->modules.emplace_back();
+        for (auto* importCtx : ctx->importDecl())
+            program->modules[0].imports.emplace_back(makeImport(importCtx));
         for (auto* declCtx : ctx->declaration()) {
             auto declResult = visit(declCtx);
             if (declResult.has_value()) {
@@ -71,8 +104,56 @@ public:
 
     virtual std::any visitDeclaration(minikParser::DeclarationContext *ctx) override {
     if (ctx->functionDecl()) return visit(ctx->functionDecl());
-    if (ctx->variableDefinition()) return visit(ctx->variableDefinition());
+    if (ctx->externDecl()) return visit(ctx->externDecl());
+    if (ctx->structDecl()) return visit(ctx->structDecl());
+    if (ctx->variableDefinition()) {
+        std::any result = visit(ctx->variableDefinition());
+        if (auto* var = dynamic_cast<VariableDecl*>(std::any_cast<Statement*>(result)))
+            var->isPublic = isPublic(ctx->visibility());
+        return result;
+    }
     return {};
+}
+
+virtual std::any visitExternDecl(minikParser::ExternDeclContext *ctx) override {
+    auto fn = new FunctionDecl();
+    fn->isExtern = true;
+    fn->name = ctx->IDENTIFIER()->getText();
+    if (ctx->annotation()) fn->annotation = ctx->annotation()->IDENTIFIER()->getText();
+    if (ctx->paramList()) {
+        for (auto* p : ctx->paramList()->param()) {
+            auto type = std::unique_ptr<Type>(std::any_cast<Type*>(visit(p->variableType())));
+            auto param = new ParamDecl(p->IDENTIFIER()->getText(), std::move(type));
+            setLoc(param, p->getStart());
+            fn->params.push_back(std::unique_ptr<ParamDecl>(param));
+        }
+    }
+    fn->returnType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType())));
+    return static_cast<Statement*>(fn);
+}
+
+virtual std::any visitStructDecl(minikParser::StructDeclContext *ctx) override {
+    auto decl = new StructDecl();
+    decl->name = ctx->IDENTIFIER()->getText();
+    decl->isPublic = isPublic(ctx->visibility());
+    for (auto* f : ctx->structField()) {
+        auto type = std::unique_ptr<Type>(std::any_cast<Type*>(visit(f->variableType())));
+        decl->fields.push_back({f->IDENTIFIER()->getText(), std::move(type)});
+    }
+    return static_cast<Statement*>(decl);
+}
+
+virtual std::any visitNamedType(minikParser::NamedTypeContext *ctx) override {
+    auto type = new Type(TypeKind::Named);
+    type->name = ctx->qualifiedName()->getText();
+    return type;
+}
+
+virtual std::any visitMemberAccessExpr(minikParser::MemberAccessExprContext *ctx) override {
+    auto base = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
+    auto* node = new MemberExpr(std::move(base), ctx->IDENTIFIER()->getText());
+    setLoc(node, ctx->IDENTIFIER()->getSymbol()); // hata mesajları alan adını göstersin
+    return static_cast<Expression*>(node);
 }
 
 // --- Statements ---
@@ -131,6 +212,7 @@ virtual std::any visitBlock(minikParser::BlockContext *ctx) override {
 virtual std::any visitFunctionDecl(minikParser::FunctionDeclContext *ctx) override {
     auto fn = new FunctionDecl();
     fn->name = ctx->IDENTIFIER()->getText();
+    fn->isPublic = isPublic(ctx->visibility());
     if (ctx->annotation()) fn->annotation = ctx->annotation()->IDENTIFIER()->getText();
     if (ctx->paramList()) {
         for (auto* p : ctx->paramList()->param()) {
@@ -237,7 +319,7 @@ virtual std::any visitFalseExpr(minikParser::FalseExprContext *ctx) override {
 }
 
 virtual std::any visitIdentifierExpr(minikParser::IdentifierExprContext *ctx) override {
-    return static_cast<Expression*>(new Identifier(ctx->IDENTIFIER()->getText()));
+    return static_cast<Expression*>(new Identifier(ctx->qualifiedName()->getText()));
 }
 
 virtual std::any visitListLiteralExpr(minikParser::ListLiteralExprContext *ctx) override {
@@ -411,7 +493,7 @@ virtual std::any visitBaseType(minikParser::BaseTypeContext *ctx) override {
     // 2. Düz Atama: x = 5;
     virtual std::any visitDirectAssignment(minikParser::DirectAssignmentContext *ctx) override {
         // Sol taraf (hedef) doğrudan bir Identifier
-        auto target = std::unique_ptr<Expression>(new Identifier(ctx->IDENTIFIER()->getText()));
+        auto target = std::unique_ptr<Expression>(new Identifier(ctx->qualifiedName()->getText()));
         setLoc(target.get(), ctx->getStart());
         // Sağ taraf (atanacak değer)
         auto value = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));

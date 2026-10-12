@@ -1,0 +1,7 @@
+// error: modul bulunamadi: 'moduller.yok' (aranan dosya: moduller/yok.minik)
+// error: 'std.dosya' adinda bir standart modul yok
+import moduller.yok;
+import std.dosya;
+
+func main() -> void {
+}

@@ -53,6 +53,7 @@ Value MLIRBuiltinManager::buildMath(Builtin builtin, llvm::ArrayRef<Value> args,
         case Builtin::None:
         case Builtin::Print:
         case Builtin::Push: case Builtin::Pop: case Builtin::Len: case Builtin::Free:
+        case Builtin::Str: case Builtin::ToInt: case Builtin::ToFloat:
         case Builtin::Zeros: case Builtin::Ones: case Builtin::Fill:
         case Builtin::Shape: case Builtin::Rows: case Builtin::Cols:
         case Builtin::Matmul: case Builtin::Transpose: case Builtin::Sum:
@@ -104,17 +105,67 @@ void MLIRBuiltinManager::printValue(Value value, const SemType& type, Location l
             runtime.call("minik_print_char", {value}, loc);
             return;
 
-        case SemType::Kind::String: {
-            // {ptr, i64} → (ptr, uzunluk)
-            Value ptr = b.create<LLVM::ExtractValueOp>(loc, value, llvm::ArrayRef<int64_t>{0});
-            Value len = b.create<LLVM::ExtractValueOp>(loc, value, llvm::ArrayRef<int64_t>{1});
-            runtime.call("minik_print_str", {ptr, len}, loc);
+        case SemType::Kind::String:
+            runtime.call("minik_print_str", {value}, loc);
             return;
-        }
 
         default:
             return; // Sema diğer tipleri reddeder
     }
+}
+
+// str(x): print'in yazacağı metni yeni bir string olarak üretir. Küçük
+// tamsayılar printValue'daki gibi genişletilir.
+Value MLIRBuiltinManager::buildToString(Value value, const SemType& type, Location loc) {
+    OpBuilder& b = ctx.builder;
+    mlir::Type i64 = b.getI64Type();
+
+    switch (type.kind) {
+        case SemType::Kind::Int:
+            if (type.isSigned) {
+                if (type.width < 64) value = b.create<arith::ExtSIOp>(loc, i64, value);
+                return runtime.callValue("minik_str_from_i64", {value}, i64, loc);
+            }
+            if (type.width < 64) value = b.create<arith::ExtUIOp>(loc, i64, value);
+            return runtime.callValue("minik_str_from_u64", {value}, i64, loc);
+
+        case SemType::Kind::Float:
+            return runtime.callValue(type.width == 32 ? "minik_str_from_f32" : "minik_str_from_f64",
+                                     {value}, i64, loc);
+
+        case SemType::Kind::Bool:
+            value = b.create<arith::ExtUIOp>(loc, b.getI32Type(), value);
+            return runtime.callValue("minik_str_from_bool", {value}, i64, loc);
+
+        case SemType::Kind::Char:
+            value = b.create<arith::ExtUIOp>(loc, b.getI32Type(), value);
+            return runtime.callValue("minik_str_from_char", {value}, i64, loc);
+
+        default:
+            return value; // string: kendisi (stringler değişmez, kopya gerekmez)
+    }
+}
+
+// Stringlerde + ve karşılaştırmalar.
+Value MLIRBuiltinManager::buildStringBinary(BinaryExpr::Op op, Value left, Value right,
+                                            Location loc) {
+    OpBuilder& b = ctx.builder;
+    if (op == BinaryExpr::Add)
+        return runtime.callValue("minik_str_concat", {left, right}, b.getI64Type(), loc);
+
+    // Sözlük sırası: sonuç negatif / sıfır / pozitif; işleç onu sıfırla karşılaştırır.
+    Value order = runtime.callValue("minik_str_compare", {left, right}, b.getI32Type(), loc);
+    Value zero = arith.buildIntConstant(0, b.getI32Type(), loc);
+    arith::CmpIPredicate predicate;
+    switch (op) {
+        case BinaryExpr::Eq:  predicate = arith::CmpIPredicate::eq;  break;
+        case BinaryExpr::Neq: predicate = arith::CmpIPredicate::ne;  break;
+        case BinaryExpr::Lt:  predicate = arith::CmpIPredicate::slt; break;
+        case BinaryExpr::Lte: predicate = arith::CmpIPredicate::sle; break;
+        case BinaryExpr::Gt:  predicate = arith::CmpIPredicate::sgt; break;
+        default:              predicate = arith::CmpIPredicate::sge; break;
+    }
+    return b.create<arith::CmpIOp>(loc, predicate, order, zero);
 }
 
 void MLIRBuiltinManager::buildPrint(llvm::ArrayRef<Value> args, llvm::ArrayRef<SemType> types,

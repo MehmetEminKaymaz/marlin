@@ -1,0 +1,10 @@
+// error: paralel dongude 'moduller.geometri.alan' cagrilamaz: global degisken 'moduller.geometri.cagri' uzerine yaziyor
+import moduller.geometri as g;
+
+func main() -> void {
+    // alan() modülün globaline yazıyor; paralel döngüden çağrılamaz.
+    float64[4] d;
+    parallel for i in 0 .. 4 {
+        d[i] = g.alan(1.0);
+    }
+}

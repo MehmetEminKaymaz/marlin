@@ -14,14 +14,18 @@
 // tutulur. Kod üretimi (MLIRBackend) yalnızca SemType'a bakar.
 // ---------------------------------------------------------------------------
 struct SemType {
-    enum class Kind { Error, Void, Bool, Char, Int, Float, String, Array, List, Matrix, Function };
+    enum class Kind { Error, Void, Bool, Char, Int, Float, String, Array, List, Matrix, Function, Struct };
 
     Kind kind = Kind::Error;
     unsigned width = 0;        // Int / Float
     bool isSigned = true;      // Int
     int64_t arraySize = 0;     // Array
     int rank = 0;              // Matrix: boyut sayısı (1 = vektör, 2 = matris, ...)
-    std::vector<SemType> sub;  // Array / List / Matrix: {eleman};  Function: {dönüş, param0, param1, ...}
+    // Array / List / Matrix: {eleman};  Function: {dönüş, param0, param1, ...};
+    // Struct: alanların tipleri, tanım sırasıyla
+    std::vector<SemType> sub;
+    std::string name;                     // Struct: tanımın adı (modül önekiyle)
+    std::vector<std::string> fieldNames;  // Struct: alan adları (`sub` ile aynı sırada)
 
     static SemType Error()  { return {}; }
     static SemType Void()   { return make(Kind::Void); }
@@ -64,6 +68,18 @@ struct SemType {
         return t;
     }
 
+    // Kullanıcının tanımladığı kayıt tipi. İki struct tipi adları aynıysa
+    // aynıdır. Struct değeri tek bir değer olarak saklanmaz; alanlarına
+    // ayrılır (bkz. leavesOf).
+    static SemType Struct(const std::string& name, const std::vector<std::string>& fieldNames,
+                          const std::vector<SemType>& fieldTypes) {
+        SemType t = make(Kind::Struct);
+        t.name = name;
+        t.fieldNames = fieldNames;
+        t.sub = fieldTypes;
+        return t;
+    }
+
     bool isError() const    { return kind == Kind::Error; }
     bool isVoid() const     { return kind == Kind::Void; }
     bool isBool() const     { return kind == Kind::Bool; }
@@ -75,6 +91,7 @@ struct SemType {
     bool isList() const     { return kind == Kind::List; }
     bool isMatrix() const   { return kind == Kind::Matrix; }
     bool isFunction() const { return kind == Kind::Function; }
+    bool isStruct() const   { return kind == Kind::Struct; }
     bool isNumeric() const  { return isInt() || isFloat(); }
     // Tek bir SSA değeri / memref elemanı olarak saklanabilen tipler
     bool isScalar() const   { return isNumeric() || isBool() || isChar(); }
@@ -84,9 +101,24 @@ struct SemType {
     size_t paramCount() const          { return sub.size() - 1; }
     const SemType& paramType(size_t i) const { return sub[i + 1]; }
 
+    // Struct: alanın sırası; yoksa -1.
+    int fieldIndex(const std::string& field) const {
+        for (size_t i = 0; i < fieldNames.size(); ++i)
+            if (fieldNames[i] == field) return static_cast<int>(i);
+        return -1;
+    }
+    // Tipin kendisi ya da (struct ise, iç içe) alanlarından biri matris mi?
+    bool containsMatrix() const {
+        if (isMatrix()) return true;
+        if (!isStruct()) return false;
+        for (const SemType& field : sub)
+            if (field.containsMatrix()) return true;
+        return false;
+    }
+
     bool operator==(const SemType& o) const {
         return kind == o.kind && width == o.width && arraySize == o.arraySize && rank == o.rank &&
-               (kind != Kind::Int || isSigned == o.isSigned) && sub == o.sub;
+               (kind != Kind::Int || isSigned == o.isSigned) && name == o.name && sub == o.sub;
     }
     bool operator!=(const SemType& o) const { return !(*this == o); }
 
@@ -115,6 +147,7 @@ struct SemType {
                     s += (i ? ", " : "") + paramType(i).str();
                 return s + ") -> " + returnType().str();
             }
+            case Kind::Struct: return name;
         }
         return "?";
     }
@@ -127,5 +160,48 @@ private:
         return t;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Yapraklar — struct'ın alanlarına ayrılması
+//
+// Struct tipli bir değer bellekte tek parça durmaz: her alanı kendi tipinin
+// kurallarıyla, ayrı bir değer olarak yaşar. İç içe struct'lar da açılır;
+// geriye kalan struct olmayan alanlara "yaprak" denir:
+//
+//   struct Nokta  { float64 x; float64 y; }
+//   struct Cember { Nokta merkez; float64 r; list<int> etiketler; }
+//
+//   Cember c   →   c.merkez.x   float64
+//                  c.merkez.y   float64
+//                  c.r          float64
+//                  c.etiketler  list<int>
+//
+// Struct üzerindeki her işlem (kopyalama, fonksiyona verme, döndürme) aynı
+// işlemin yapraklara tek tek uygulanmasıdır. Yaprakların sırası her yerde
+// aynıdır (tanım sırası); kod üretimi değerleri bu sırayla taşır.
+//
+// (Bu ayrım ileride list<struct> için de geçerlidir: liste, yaprak başına
+// bir veri dizisi tutar.)
+// ---------------------------------------------------------------------------
+struct SemLeaf {
+    std::string path;  // "c.merkez.x": verilen kök ad + alan yolu
+    SemType type;
+};
+
+inline void collectLeaves(const SemType& type, const std::string& path, std::vector<SemLeaf>& out) {
+    if (!type.isStruct()) {
+        out.push_back({path, type});
+        return;
+    }
+    for (size_t i = 0; i < type.sub.size(); ++i)
+        collectLeaves(type.sub[i], path + "." + type.fieldNames[i], out);
+}
+
+// Struct olmayan bir tipin tek yaprağı kendisidir; void'in yaprağı yoktur.
+inline std::vector<SemLeaf> leavesOf(const SemType& type, const std::string& root = "") {
+    std::vector<SemLeaf> leaves;
+    if (!type.isVoid()) collectLeaves(type, root, leaves);
+    return leaves;
+}
 
 #endif //SEMTYPE_H

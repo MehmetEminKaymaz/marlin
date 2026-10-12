@@ -1,0 +1,9 @@
+// expect: 1
+// output: a
+// stderr: string indeksi sinir disinda (indeks 3, uzunluk 3)
+func main() -> void {
+    string s = "abc";
+    print(s[0]);
+    int i = 3;
+    print(s[i]);
+}

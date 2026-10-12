@@ -1,0 +1,40 @@
+// output: 25
+// output: 1 2 0
+// output: 12.56636
+// output: 1
+// output: 7
+// output: true false
+// output: 6
+// output: 0 1 4 9
+// output: 3
+import moduller.geometri;
+import moduller.geometri as g;
+import moduller.ic.yardimci as y;
+from moduller.geometri import alan, kare as karesi;
+from moduller.cift import ciftMi;
+import moduller.tek;
+
+// Modüllerdeki aynı adlı fonksiyonlarla çakışmaz.
+func ad() -> int {
+    return 0;
+}
+
+func main() -> void {
+    print(moduller.geometri.kare(5));       // tam yol ile
+    print(g.ad(), y.ad(), ad());            // `as` ile verilen ad
+    print(alan(2.0));                       // `from` ile alınan isim
+    print(g.cagriSayisi());                 // modülün globali modülde yaşar
+    g.cagri = 7;                            // başka modülün globaline atama
+    print(g.cagri);
+    print(ciftMi(10), moduller.tek.tekMi(10));   // birbirini import eden modüller
+    print(karesi(2) + y.carp(1, 2));
+
+    // Modül fonksiyonları paralel döngüden çağrılabilir (etkileri izlenir).
+    int[4] d;
+    parallel for i in 0 .. 4 {
+        d[i] = g.kare(i);
+    }
+    print(d[0], d[1], d[2], d[3]);
+
+    print(g.gizliyiCagir());                // private fonksiyona public olan üzerinden
+}

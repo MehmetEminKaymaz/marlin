@@ -91,7 +91,7 @@ void Sema::checkGpuBuiltin(FunctionCallExpr* call, const std::string& name) {
 // Kullanıcı fonksiyonuna çağrı.
 void Sema::checkGpuCall(FunctionCallExpr* call) {
     auto* ident = dynamic_cast<Identifier*>(call->target.get());
-    Symbol* sym = ident ? lookup(ident->name) : nullptr;
+    Symbol* sym = ident ? lookup(ident) : nullptr;
     const bool direct = sym && sym->kind == Symbol::Function;
 
     if (!gpuFunction) return;

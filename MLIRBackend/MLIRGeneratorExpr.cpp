@@ -40,38 +40,48 @@ void MLIRGenerator::visit(CharLiteral* node) {
         static_cast<unsigned char>(node->value), ctx.builder.getIntegerType(8), locOf(node));
 }
 
-// String'i modül düzeyinde bir LLVM global dizisi olarak saklar ve
-// {ptr, i64} fat-pointer struct'ına dönüştürür.
+// String literali, çalışma zamanındaki string bloğuyla aynı düzende bir global
+// sabittir; ifadenin değeri o globalin adresidir (i64 olarak):
+//
+//   [ refs = -1 (8 bayt) | uzunluk (8 bayt) | baytlar ... | \0 ]
+//
+// refs = -1 "literal" demektir: çalışma zamanı böyle bir stringi asla
+// bırakmaz. Düzen runtime/minik_rt.c'deki MinikString ile aynı olmalıdır.
+// Başlık bayt dizisine küçük sonlu (little-endian) yazılır; desteklenen
+// hedef (x86-64) böyledir.
 void MLIRGenerator::visit(StringLiteral* node) {
     auto loc = locOf(node);
     std::string globalName = "__str_" + std::to_string(stringLiteralCount++);
 
-    // Global sabit dizi (null sonlandırmalı)
+    std::string bytes;
+    auto appendI64 = [&bytes](int64_t value) {
+        for (int i = 0; i < 8; ++i)
+            bytes += static_cast<char>((static_cast<uint64_t>(value) >> (8 * i)) & 0xFF);
+    };
+    appendI64(-1);
+    appendI64(static_cast<int64_t>(node->value.size()));
+    bytes += node->value;
+    bytes += '\0';
+
     {
         mlir::OpBuilder::InsertionGuard guard(ctx.builder);
         ctx.builder.setInsertionPointToStart(ctx.theModule.getBody());
 
-        auto strType = mlir::LLVM::LLVMArrayType::get(
-            ctx.builder.getIntegerType(8),
-            static_cast<unsigned>(node->value.size() + 1));
+        auto blockType = mlir::LLVM::LLVMArrayType::get(
+            ctx.builder.getIntegerType(8), static_cast<unsigned>(bytes.size()));
 
+        // Başlıktaki 64 bitlik alanlar hizalı okunabilsin diye 8'e hizalanır.
         ctx.builder.create<mlir::LLVM::GlobalOp>(
-            loc, strType, /*isConst=*/true,
+            loc, blockType, /*isConst=*/true,
             mlir::LLVM::Linkage::Private,
             globalName,
-            ctx.builder.getStringAttr(node->value + '\0'));
+            ctx.builder.getStringAttr(bytes),
+            /*alignment=*/8);
     }
 
     auto ptrType = mlir::LLVM::LLVMPointerType::get(&ctx.context);
-    auto addrOp  = ctx.builder.create<mlir::LLVM::AddressOfOp>(loc, ptrType, globalName);
-    auto lenOp   = ctx.builder.create<mlir::arith::ConstantIntOp>(
-        loc, static_cast<int64_t>(node->value.size()), 64);
-
-    auto undef     = ctx.builder.create<mlir::LLVM::UndefOp>(loc, typeManager.convert(node->type));
-    auto insertPtr = ctx.builder.create<mlir::LLVM::InsertValueOp>(
-        loc, undef, addrOp, ctx.builder.getDenseI64ArrayAttr({0}));
-    lastValue      = ctx.builder.create<mlir::LLVM::InsertValueOp>(
-        loc, insertPtr, lenOp, ctx.builder.getDenseI64ArrayAttr({1}));
+    mlir::Value address = ctx.builder.create<mlir::LLVM::AddressOfOp>(loc, ptrType, globalName);
+    lastValue = ctx.builder.create<mlir::LLVM::PtrToIntOp>(loc, ctx.builder.getI64Type(), address);
 }
 
 // ===========================================================================
@@ -80,6 +90,13 @@ void MLIRGenerator::visit(StringLiteral* node) {
 
 void MLIRGenerator::visit(Identifier* node) {
     auto loc = locOf(node);
+
+    // Struct tek bir değer değildir; değerini isteyenler emitStructExpr
+    // kullanır. Buraya yalnızca değeri kullanılmayan bir deyimden gelinir (p;).
+    if (node->type.isStruct()) {
+        lastValue = mlir::Value{};
+        return;
+    }
 
     switch (node->ref) {
         case Identifier::Ref::Function:
@@ -142,6 +159,20 @@ void MLIRGenerator::visit(ArrayAccessExpr* node) {
         return;
     }
 
+    // string[i] — i. bayt; sınır denetimi çalışma zamanı kütüphanesinde
+    if (node->target->type.isString()) {
+        mlir::Value text = emitExpr(node->target.get());
+        const SemType& indexType = node->indices[0]->type;
+        mlir::Value index = emitExpr(node->indices[0].get());
+        if (indexType.width != 64)
+            index = arithManager.buildCast(index, indexType, SemType::Int(64, indexType.isSigned), loc);
+        mlir::Value line = arithManager.buildIntConstant(node->line, ctx.builder.getI32Type(), loc);
+        mlir::Value byte = runtime.callValue("minik_str_at", {text, index, line},
+                                             ctx.builder.getI32Type(), loc);
+        lastValue = ctx.builder.create<mlir::arith::TruncIOp>(loc, ctx.builder.getIntegerType(8), byte);
+        return;
+    }
+
     mlir::Value memref = emitExpr(node->target.get());
     mlir::Value index  = toIndex(emitExpr(node->indices[0].get()), node->indices[0]->type, loc);
     if (node->target->type.isList())
@@ -166,19 +197,60 @@ void MLIRGenerator::visit(FunctionCallExpr* node) {
         return;
     }
 
+    // Struct oluşturma ya da struct döndüren çağrı, değeri kullanılmadan
+    // (deyim olarak): yine de üretilir, sonucu deyim sonunda bırakılır.
+    if (node->type.isStruct()) {
+        emitStructExpr(node);
+        lastValue = mlir::Value{};
+        return;
+    }
+
+    Values results = emitCall(node);
+    lastValue = results.empty() ? mlir::Value{} : results.front();
+
+    // Dönen matris yeni bir bellektir ve artık bu deyime aittir.
+    if (node->type.isMatrix())
+        setMatrixResult({matrixManager.toTensor(lastValue, /*writable=*/false, loc), lastValue});
+}
+
+MLIRGenerator::Values MLIRGenerator::emitCall(FunctionCallExpr* node) {
+    auto loc = locOf(node);
     auto* ident = dynamic_cast<Identifier*>(node->target.get());
     const bool isDirect = ident && ident->ref == Identifier::Ref::Function;
+    if (isDirect && functions.at(ident->name)->isExtern)
+        return emitExternCall(functions.at(ident->name), node);
 
     mlir::Value calleeValue;
     if (!isDirect) calleeValue = emitExpr(node->target.get());
 
     // Matris argümanı belleğiyle verilir; kopyalanmaz (çağrılan onu
     // değiştiremez). Argüman bir geçiciyse deyim sonunda bırakılır.
+    // Struct argüman yaprak yaprak verilir; her yaprak kendi tipinin kuralıyla.
     llvm::SmallVector<mlir::Value, 4> args;
     for (auto& argExpr : node->arguments) {
+        if (argExpr->type.isStruct()) {
+            Values values = emitStructExpr(argExpr.get());
+            const std::vector<SemLeaf> leaves = leavesOf(argExpr->type);
+            for (size_t i = 0; i < leaves.size(); ++i)
+                args.push_back(leaves[i].type.isMatrix() ? matrixManager.toBuffer(values[i], loc)
+                                                         : values[i]);
+            continue;
+        }
         mlir::Value arg = emitExpr(argExpr.get());
         if (argExpr->type.isMatrix()) arg = matrixManager.toBuffer(arg, loc);
         args.push_back(arg);
+    }
+
+    // Dönen struct'ın dizi alanları için yeri çağıran ayırır ve son
+    // parametreler olarak verir (bkz. MLIRTypeManager::convertFunction).
+    const std::vector<SemLeaf> resultLeaves = leavesOf(node->type);
+    Values arraySlots;
+    if (node->type.isStruct()) {
+        for (const SemLeaf& leaf : resultLeaves) {
+            if (!leaf.type.isArray()) continue;
+            arraySlots.push_back(createStorage(leaf.type, loc));
+            args.push_back(arraySlots.back());
+        }
     }
 
     mlir::Operation* callOp;
@@ -195,11 +267,50 @@ void MLIRGenerator::visit(FunctionCallExpr* node) {
         callOp = ctx.builder.create<mlir::func::CallIndirectOp>(
             loc, calleeValue, mlir::ValueRange(args));
     }
-    lastValue = callOp->getNumResults() > 0 ? callOp->getResult(0) : mlir::Value{};
 
-    // Dönen matris yeni bir bellektir ve artık bu deyime aittir.
-    if (node->type.isMatrix())
-        setMatrixResult({matrixManager.toTensor(lastValue, /*writable=*/false, loc), lastValue});
+    Values results;
+    unsigned nextResult = 0;
+    size_t nextSlot = 0;
+    for (const SemLeaf& leaf : resultLeaves) {
+        const bool viaSlot = node->type.isStruct() && leaf.type.isArray();
+        results.push_back(viaSlot ? arraySlots[nextSlot++] : callOp->getResult(nextResult++));
+    }
+    return results;
+}
+
+// Argümanlar ve sonuç C tarafının tiplerine çevrilir (bkz. externType):
+// bool ve char 32 bit olarak gider, dönüşte yeniden daraltılır.
+MLIRGenerator::Values MLIRGenerator::emitExternCall(FunctionDecl* decl, FunctionCallExpr* node) {
+    auto loc = locOf(node);
+    mlir::Type i32 = ctx.builder.getI32Type();
+
+    llvm::SmallVector<mlir::Value, 4> args;
+    for (auto& argExpr : node->arguments) {
+        mlir::Value arg = emitExpr(argExpr.get());
+        if (argExpr->type.isBool() || argExpr->type.isChar())
+            arg = ctx.builder.create<mlir::arith::ExtUIOp>(loc, i32, arg);
+        args.push_back(arg);
+    }
+
+    auto callee = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(decl->externName);
+    auto call = ctx.builder.create<mlir::func::CallOp>(loc, callee, mlir::ValueRange(args));
+    if (call.getNumResults() == 0) return {};
+
+    mlir::Value result = call.getResult(0);
+    if (node->type.isBool()) {
+        mlir::Value zero = arithManager.buildIntConstant(0, i32, loc);
+        result = ctx.builder.create<mlir::arith::CmpIOp>(
+            loc, mlir::arith::CmpIPredicate::ne, result, zero);
+    } else if (node->type.isChar()) {
+        result = ctx.builder.create<mlir::arith::TruncIOp>(loc, ctx.builder.getIntegerType(8), result);
+    }
+    return {result};
+}
+
+void MLIRGenerator::visit(MemberExpr* node) {
+    Values values = emitMember(node);
+    // Alan da struct ise tek bir değeri yoktur (bkz. visit(Identifier)).
+    lastValue = node->type.isStruct() ? mlir::Value{} : values.front();
 }
 
 void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
@@ -247,11 +358,24 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
             lastValue = listManager.pop(args[0], node->line, loc);
             return;
         case Builtin::Free:
-            listManager.free(args[0], loc);
+            if (types[0].isString()) runtime.call("minik_str_free", {args[0]}, loc);
+            else listManager.free(args[0], loc);
             return;
 
+        case Builtin::Str:
+            lastValue = builtinManager.buildToString(args[0], types[0], loc);
+            return;
+        case Builtin::ToInt:
+        case Builtin::ToFloat: {
+            mlir::Value line = arithManager.buildIntConstant(node->line, ctx.builder.getI32Type(), loc);
+            lastValue = node->builtin == Builtin::ToInt
+                ? runtime.callValue("minik_str_to_i64", {args[0], line}, ctx.builder.getI64Type(), loc)
+                : runtime.callValue("minik_str_to_f64", {args[0], line}, ctx.builder.getF64Type(), loc);
+            return;
+        }
+
         // len: listede çalışma zamanı uzunluğu, dizide sabit, stringde
-        // {ptr, uzunluk} çiftinin ikinci alanı. Sonuç int64.
+        // bloğun başlığındaki uzunluk. Sonuç int64.
         case Builtin::Len: {
             mlir::Type i64 = ctx.builder.getI64Type();
             if (types[0].isList())
@@ -260,8 +384,7 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
             else if (types[0].isArray())
                 lastValue = arithManager.buildIntConstant(types[0].arraySize, i64, loc);
             else
-                lastValue = ctx.builder.create<mlir::LLVM::ExtractValueOp>(
-                    loc, args[0], llvm::ArrayRef<int64_t>{1});
+                lastValue = runtime.callValue("minik_str_len", {args[0]}, i64, loc);
             return;
         }
 
@@ -307,6 +430,10 @@ void MLIRGenerator::visit(BinaryExpr* node) {
     }
 
     mlir::Value right = emitExpr(node->right.get());
+    if (node->left->type.isString()) {
+        lastValue = builtinManager.buildStringBinary(node->op, left, right, loc);
+        return;
+    }
     lastValue = arithManager.buildBinary(node->op, left, right, node->left->type, loc);
 }
 
@@ -343,14 +470,13 @@ void MLIRGenerator::visit(LambdaExpr* node) {
             node->blockBody->accept(*this);
             return;
         }
-        mlir::Value result = emitExpr(node->exprBody.get());
-        if (node->exprBody->type.isMatrix() && !node->type.returnType().isVoid())
-            result = takeMatrixOwnership(result, node->line, loc);
+        if (!node->type.returnType().isVoid()) {
+            emitReturn(node->exprBody.get(), node->line, loc);
+            return;
+        }
+        emitExpr(node->exprBody.get());
         flushTemporaries(loc);
-        if (node->type.returnType().isVoid())
-            ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange());
-        else
-            ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange(result));
+        ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange());
     });
 
     lastValue = ctx.builder.create<mlir::func::ConstantOp>(

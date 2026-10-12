@@ -117,6 +117,7 @@ minik_lang [kaynak.minik] [secenekler]
 | `-o dosya` | Çıktı dosyasının adı |
 | `-O0` `-O1` `-O2` `-O3` | Optimizasyon seviyesi. Varsayılan `-O0` (optimizasyon yok). |
 | `--emit=...` | Derlemeyi hangi aşamada durduracağını seçer (aşağıya bak) |
+| `-I dizin` | `import` edilen modüllerin aranacağı ek dizin (birden çok kez verilebilir) |
 | `--print-ast` | Programın ağaç yapısını (AST) ekrana yazar |
 | `--gpu=off` | `@GPU` fonksiyonları da CPU için derler. Ekran kartı olmayan makinede çalıştırmak ya da CPU ile GPU'yu karşılaştırmak için. |
 | `--help` | Kısa yardım |
@@ -212,6 +213,20 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `zaman.minik` | `time()` ile süre ölçme; çekirdeklere dağıtılan `matmul` |
 | `gpu.minik` | `@GPU` fonksiyonlar: GPU'da `parallel for`, matris işlemleri, `matmul`, `sum`, CPU ↔ GPU kopyalama |
 | `hatalar_gpu.minik` | `@GPU` fonksiyonlarda izin verilmeyen kullanımlar |
+| `stringler.minik` | Stringler: birleştirme, karşılaştırma, indeksleme, `str` / `to_int` / `to_float`, string listesi ve dizisi, `free` |
+| `string_sinir_disi.minik`, `string_sayi_degil.minik` | Sınır dışı string indeksi ve sayı olmayan metnin çevrilmesi: programın mesajla durması |
+| `hatalar_string.minik` | Stringlerin hatalı kullanımı |
+| `std_string.minik`, `std_file.minik`, `std_diger.minik` | Standart kütüphane: string fonksiyonları, dosya işlemleri, `os` / `time` / `random` / `math` / `io` |
+| `std_dosya_yok.minik` | Olmayan dosyayı okumak: programın mesajla durması |
+| `hatalar_std.minik` | Kullanıcı kodunda `extern`, std'nin iç fonksiyonlarına erişim, paralel döngüden yan etkili fonksiyon |
+| `struct.minik` | Struct'lar: oluşturma, kopyalama, her tipten alan, iç içe struct, fonksiyona verme ve döndürme, lambdalar, paralel döngü |
+| `modul_struct.minik` | Başka modülde tanımlı struct'ların kullanılması |
+| `hatalar_struct.minik` | Struct'ların hatalı kullanımı |
+| `modul_import.minik` | `import`, `as`, `from`: başka dosyalardaki fonksiyon ve globaller, alt dizin, birbirini import eden modüller |
+| `modul_gpu.minik` | Başka modüldeki `@GPU` fonksiyonların CPU'dan, GPU'dan ve çekirdek içinden çağrılması |
+| `hatalar_modul*.minik` | Bulunamayan modül, modülde olmayan isim, isim çakışması, private tanımın import edilmesi, modüldeki sözdizimi hatası, paralel döngüden güvensiz modül fonksiyonu |
+
+`tests/moduller/` dizinindeki dosyalar test değil, bu testlerin import ettiği modüllerdir (`run.sh` yalnızca `tests/` içindeki `.minik` dosyalarını çalıştırır).
 
 `@GPU` içeren testler iki kez çalıştırılır: ekran kartında ve `--gpu=off` ile tümüyle CPU'da. İkisi de aynı çıktıyı vermelidir. Makinede NVIDIA ekran kartı yoksa yalnızca `--gpu=off` ile çalışırlar.
 
@@ -414,7 +429,7 @@ func main() -> void {
 }
 ```
 
-**Tipler:** `int8` `int16` `int` `int64`, `uint8` `uint16` `uint` `uint64`, `float` (32 bit) `float64`, `bool`, `char`, `string`, sabit boyutlu diziler (`int[5]`), listeler (`list<int>`), matrisler (`matrix<float>`), fonksiyon tipleri (`(int) -> int`).
+**Tipler:** `int8` `int16` `int` `int64`, `uint8` `uint16` `uint` `uint64`, `float` (32 bit) `float64`, `bool`, `char`, `string`, sabit boyutlu diziler (`int[5]`), listeler (`list<int>`), matrisler (`matrix<float>`), fonksiyon tipleri (`(int) -> int`), struct'lar (`struct Nokta { ... }`).
 
 **Dizi mi, liste mi?**
 
@@ -428,7 +443,7 @@ func main() -> void {
 
 Listeler **başvuru** olarak dolaşır: `list<int> b = a;` listeyi kopyalamaz, `a` ve `b` aynı listeyi gösterir; birine eklenen eleman diğerinde de görünür. Fonksiyona verilen liste de aynı listedir, fonksiyon onu değiştirebilir.
 
-Listelerin belleği kendiliğinden geri verilmez; program bitene kadar yaşar. Uzun çalışan bir programda işi biten listeyi `free(l)` ile bırakabilirsin (bıraktıktan sonra o listeyi kullanma). Liste elemanları şimdilik yalnızca sayı, `bool` ya da `char` olabilir.
+Listelerin belleği kendiliğinden geri verilmez; program bitene kadar yaşar. Uzun çalışan bir programda işi biten listeyi `free(l)` ile bırakabilirsin (bıraktıktan sonra o listeyi kullanma). Liste elemanları sayı, `bool`, `char` ya da `string` olabilir.
 
 **Matrisler**
 
@@ -455,6 +470,180 @@ Listelerin belleği kendiliğinden geri verilmez; program bitene kadar yaşar. U
 - **Boyutlar ve indeksler çalışırken denetlenir.** Farklı boyutta iki matrisi toplamak, sınır dışı bir elemana erişmek ya da boyutları uymayan `matmul` programı açıklayıcı bir mesajla durdurur.
 - Matris tanımlarken başlangıç değeri şarttır (`zeros(3, 4)` gibi). `[[1, 2], [3, 4]]` yazımı yalnızca tip belliyken matris olur; iç içelik derinliği boyut sayısı kadar olmalıdır.
 - `print` son boyutu bir satır olarak yazar: vektör tek satır, matris satır satır, üç ve üstü boyutta iki boyutlu dilimler aralarında boş satırla.
+
+**Stringler**
+
+```
+string ad = "dunya";
+string selam = "merhaba " + ad;       // birleştirme: yeni bir string üretir
+print(selam, len(selam));             // merhaba dunya 13
+print(selam[0]);                      // m   (s[i] bir char'dır)
+
+if ad == "dunya" && "abc" < "abd" { } // içeriğe göre, sözlük sırasıyla
+
+string metin = "x = " + str(42);      // str: sayı, bool ya da char → string
+int64 n = to_int("40") + 2;           // to_int / to_float: string → sayı
+float64 f = to_float("2.5");
+
+list<string> isimler = ["ali", "veli"];
+push(isimler, "ayse");
+
+free(selam);                          // belleği elle bırakılır
+```
+
+- **Stringler değişmez.** `s[0] = 'a'` yazılamaz; her işlem (`+`, `str`) yeni bir string üretir. Bu yüzden atama ve fonksiyona verme kopyalamaz: `string b = a;` aynı metni gösterir ve bu güvenlidir.
+- **Bellek kendiliğinden bırakılmaz** (listelerdeki gibi); program bitene kadar yaşar. Uzun çalışan bir programda işi biten stringi `free(s)` ile bırakabilirsin; bıraktıktan sonra o stringi (ve onu gösteren başka değişkenleri) kullanma. Kaynak kodda yazılı bir stringi (`"abc"`) ya da boş stringi bırakmak zararsızdır. `a + b + c` gibi zincirlerde aradaki geçici stringe ulaşılamaz; bırakmak gerekiyorsa adımları ayrı değişkenlere yaz.
+- **Uzunluk ve indeks bayt sayar.** Metin UTF-8'dir: Türkçe harfler (ş, ğ, ı ...) iki bayt tutar, yani `len("ş")` 2'dir ve `s[i]` böyle bir harfin yarısını verebilir.
+- **Karşılaştırma** bayt bayt, sözlük sırasıyladır (`"Z" < "a"`: büyük harfler önce gelir).
+- **`to_int` ve `to_float`** metnin tamamı bir sayı değilse programı mesajla durdurur (baştaki ve sondaki boşluklar sayılmaz).
+- `+` yalnızca iki string arasında çalışır; sayıyı eklemek için `str(...)` kullan.
+- Başlangıç değeri verilmeyen string boştur. String; listede, dizide ve struct alanında tutulabilir. Global string değişkeni ve `@GPU` fonksiyonlarda string yoktur.
+- Sınır dışı indeks (`s[100]`) programı mesajla durdurur.
+
+**Struct'lar**
+
+Struct, adlandırılmış alanlardan oluşan kendi tipindir.
+
+```
+struct Nokta {
+    float64 x;
+    float64 y;
+}
+
+struct Cember {
+    Nokta merkez;                 // alan başka bir struct olabilir
+    float64 r;
+    list<int> etiketler;
+}
+
+func otele(Nokta p, float64 dx) -> Nokta {
+    p.x = p.x + dx;
+    return p;
+}
+
+func main() -> void {
+    Nokta a = Nokta(1, 2);        // alanlar tanım sırasıyla verilir
+    Nokta b = a;                  // kopya
+    b.x = 10;                     // a.x hâlâ 1
+    Nokta c;                      // başlangıç değeri yok: sayılar 0, liste boş
+    c = otele(a, 5);
+    print(c.x, otele(a, 1).x);
+
+    Cember cm = Cember(Nokta(0, 0), 2.5, [1, 2]);
+    cm.merkez.x = 7;
+    push(cm.etiketler, 3);
+}
+```
+
+- **Alan tipleri:** sayılar, `bool`, `char`, `string`, dizi (`int[3]`), liste, matris ve başka bir struct. Fonksiyon tipli alan olamaz; bir struct kendisini içeremez.
+- **Oluşturma:** `Nokta(1, 2)`. Argümanlar alanların tanım sırasıyladır ve hepsi verilmelidir.
+- **Struct üzerindeki her işlem, alanlarına tek tek uygulanan işlemdir.** Bu yüzden her alan kendi tipinin kuralına uyar:
+
+  | Alan tipi | `b = a` ile | Fonksiyona verilince |
+  |---|---|---|
+  | Sayı, `bool`, `char`, `string` | Kopyalanır | Kopyalanır |
+  | Dizi | Kopyalanır | Aynı dizi verilir: fonksiyon elemanlarını değiştirirse çağıran da görür |
+  | Matris | Kopyalanır | Kopyalanmaz ama fonksiyon değiştiremez |
+  | Liste | Paylaşılır: ikisi aynı listeyi gösterir | Aynı liste verilir |
+
+- Fonksiyonlar struct alabilir ve döndürebilir; lambdalar da. Dönen struct'ın alanına doğrudan erişilebilir: `otele(a, 1).x`.
+- `public struct` başka modüllerden kullanılabilir (`s.Nokta p = s.Nokta(1, 2);` ya da `from sekil import Nokta;`). Yazılmazsa struct private'tır.
+- Matris alanı olan struct başlangıç değeri olmadan tanımlanamaz.
+- Struct'lar `+`, `==` gibi işleçlerle kullanılamaz ve `print` ile bütün olarak yazdırılamaz; alanları tek tek kullanılır.
+- **Henüz olmayanlar:** `list<Nokta>`, struct dizisi, global struct değişkeni, `@GPU` fonksiyonlarda struct.
+
+**Modüller (`import`)**
+
+Her `.minik` dosyası bir modüldür. Bir dosya, başka bir dosyanın fonksiyonlarını ve global değişkenlerini `import` ile kullanır. `import` satırları dosyanın en başında durur.
+
+```
+import araclar.vektor;                         // araclar/vektor.minik
+import araclar.vektor as v;                    // kısa ad vererek
+from araclar.vektor import norm, ic as nokta;  // isimleri doğrudan alarak
+
+func main() -> void {
+    print(araclar.vektor.norm(3.0, 4.0));
+    print(v.norm(3.0, 4.0));
+    print(norm(3.0, 4.0), nokta(1.0, 2.0));
+    v.sayac = 0;                               // modülün global değişkeni
+}
+```
+
+- **Modül yolu dizin ayırıcısı yerine nokta ile yazılır:** `araclar.vektor`, `araclar/vektor.minik` dosyasıdır. Dosya önce import eden dosyanın dizininde, sonra `-I` ile verilen dizinlerde aranır.
+- **Bir modül yalnızca kendi tanımlarını ve import ettiklerini görür.** `a`, `b`'yi; `b` de `c`'yi import ediyorsa `a`, `c`'nin isimlerini göremez (kendisi import etmelidir).
+- **Farklı modüllerdeki aynı adlı fonksiyonlar çakışmaz.** `from` ile alınan isim dosyadaki bir tanımla çakışıyorsa `as` ile başka ad verilir.
+- **Modüller birbirini import edebilir** (`a` → `b` → `a`).
+- **Program derlenen dosyanın `main`inden başlar.** Import edilen dosyalardaki `main` sıradan bir fonksiyondur.
+- **Yalnızca `public` tanımlar import edilebilir.** Fonksiyonun ya da global değişkenin başına `public` yazılmazsa tanım private'tır: yalnızca kendi dosyasında kullanılır. `private` yazmak isteğe bağlıdır, yazmamakla aynıdır.
+
+  ```
+  public int sayac = 0;                  // başka modüller okuyup yazabilir
+  float64 PI = 3.14159;                  // private
+
+  public func alan(float64 r) -> float64 { return PI * r * r; }
+  private func yardimci() -> int { return 1; }     // `func yardimci()` ile aynı
+
+  @GPU
+  public func olcekle(matrix<float64> a, float64 k) -> matrix<float64> { return a * k; }
+  ```
+
+  `@GPU` / `@CPU` en üstte, `public` ondan sonra yazılır. Public bir fonksiyon kendi dosyasındaki private fonksiyonları çağırabilir.
+- `@CPU` / `@GPU` ve `parallel for` kuralları modüller arasında da aynen geçerlidir.
+- `std` ile başlayan modül adları standart kütüphaneye ayrılmıştır (aşağıda); kendi dosyalarına bu adı veremezsin.
+- Yerleşik fonksiyonlar (`print`, `sqrt`, `zeros` ...) import gerektirmez.
+
+**Standart kütüphane (`std`)**
+
+Derleyiciyle birlikte gelen modüller. Diğer modüller gibi `import` ile kullanılır:
+
+```
+import std.string as str;
+import std.file as file;
+
+func main() -> void {
+    file.write_text("sayilar.txt", "3,5,8\n");
+    list<string> parcalar = str.split(str.trim(file.read_text("sayilar.txt")), ",");
+    int64 toplam = 0;
+    for p in parcalar {
+        toplam = toplam + to_int(p);
+    }
+    print(toplam);      // 16
+}
+```
+
+| Modül | Fonksiyonlar |
+|---|---|
+| `std.string` | `substr(s, start, length)` `find(s, part)` `find_from(s, part, start)` `contains(s, part)` `starts_with(s, prefix)` `ends_with(s, suffix)` `replace(s, old, new)` `trim(s)` `upper(s)` `lower(s)` `split(s, sep)` `join(parts, sep)` |
+| `std.file` | `exists(path)` `read_text(path)` `write_text(path, text)` `append_text(path, text)` `read_lines(path)` `remove(path)`; satır satır: `open(path, mode)` `read_line(f)` `eof(f)` `write(f, text)` `close(f)` |
+| `std.io` | `read_line()` `eof()` — klavyeden okuma; `write(text)` — satır sonu eklemeden yazma |
+| `std.os` | `args()` — komut satırı argümanları; `env(name)`; `exit(code)` |
+| `std.time` | `now()` — 1970'ten beri geçen saniye; `sleep(seconds)` |
+| `std.random` | `seed(n)` `random()` — [0, 1); `rand_int(low, high)` — [low, high); `rand_matrix(rows, cols)` |
+| `std.math` | `PI` `E` sabitleri |
+
+Bilinmesi gerekenler:
+
+- **Hatalar iki türlüdür.** Tek adımlı fonksiyonlar işi yapamazsa programı mesajla durdurur: olmayan dosyada `read_text`, sınır dışı `substr`. Önceden denetlemek için `file.exists` var. `file.open` ise durdurmaz; döndürdüğü `File`'ın `ok` alanı açılıp açılmadığını söyler:
+
+  ```
+  file.File f = file.open("veri.txt", "r");      // "r" oku, "w" yaz, "a" sonuna ekle
+  if f.ok {
+      while !file.eof(f) {
+          print(file.read_line(f));
+      }
+      file.close(f);
+  }
+  ```
+
+- **String fonksiyonları yeni string döndürür** ve bellekleri diğer stringler gibi elle bırakılır. Konumlar bayt sayar; `find` bulamazsa -1 döner. `upper` / `lower` yalnızca İngilizce harfleri çevirir.
+- **Dosyalar metin olarak okunur ve yazılır** (ikili dosya desteği yok). `read_line` satır sonunu atar.
+- **`random`**: tohum verilmezse program her çalıştığında aynı sayılar gelir (ölçümler tekrarlanabilsin diye). Farklı sayılar için `random.seed(...)`.
+- **`parallel for` içinde** yalnızca `std.string` fonksiyonlarının çoğu çağrılabilir (`split` ve `join` hariç: liste değiştirirler). Dosya, girdi, zaman ve rastgele sayı fonksiyonları yan etkilidir; derleyici paralel döngüde reddeder.
+- **`@GPU` fonksiyonlarda kullanılamaz** (sabitler dahil): hepsi CPU'da çalışır.
+- Süre ölçmek için `std.time.now()` değil, dile gömülü `time()` kullan (saati geri gitmez).
+- HTTP henüz yok.
+
+Kütüphanenin kaynağı `std/` dizinindedir ve okunabilir. Her modül, C ile yazılmış küçük bir çekirdeğin (`runtime/std_*.c`) üzerine minik ile yazılmıştır; C fonksiyonları `extern func` ile bildirilir. `extern` yalnızca bu dizindeki dosyalarda yazılabilir.
 
 **Paralel döngü**
 
@@ -532,6 +721,7 @@ Bilinmesi gerekenler:
 | Yuvarlama | `floor ceil round trunc` (sonuç kayan noktadır: `floor(2.7)` → `2.0`) |
 | Diğer | `abs min max` (tamsayıda tamsayı, kayan noktada kayan nokta döner) |
 | Listeler | `push(l, x)` `pop(l)` `free(l)` |
+| Stringler | `str(x)` — değeri metne çevirir; `to_int(s)` (`int64`), `to_float(s)` (`float64`); `free(s)` |
 | Uzunluk | `len(x)` — liste, dizi ya da string; sonuç `int64` |
 | Matris oluşturma | `zeros(d1, ..., dn)` `ones(d1, ..., dn)` `fill(d1, ..., dn, deger)` — her boyut için bir uzunluk |
 | Matris işlemleri | `sum(a)` `shape(a, i)` — her boyut sayısında |
@@ -555,7 +745,7 @@ print("sure:", time() - once, "saniye");
 - `for` döngüsünün değişkeni döngü içinde değiştirilemez; `step` pozitif olmalı.
 - Lambdalar dışarıdaki yerel değişkenleri kullanamaz; gerekeni parametre olarak ver.
 
-**Henüz olmayanlar:** farklı boyut sayıları arasında işlem (matrise vektör eklemek gibi), dilimleme (`m[0]` ile satır almak), eksen boyunca toplam, matris karşılaştırma, global matris, iç içe listeler, string listesi, global liste, dizi döndüren fonksiyonlar, dizi ve listelerin doğrudan `print` ile yazdırılması, string işlemleri (birleştirme, karşılaştırma), azalan `for` aralıkları, kullanıcıdan girdi okuma.
+**Henüz olmayanlar:** farklı boyut sayıları arasında işlem (matrise vektör eklemek gibi), dilimleme (`m[0]` ile satır almak), eksen boyunca toplam, matris karşılaştırma, global matris, iç içe listeler, global liste, global string, dizi döndüren fonksiyonlar, dizi ve listelerin doğrudan `print` ile yazdırılması, azalan `for` aralıkları, HTTP, ikili dosyalar.
 
 ---
 
@@ -571,7 +761,9 @@ print("sure:", time() - once, "saniye");
 | `error while loading shared libraries: libmlir_cuda_runtime.so` | `@GPU` içeren programlar için aynı durum: kütüphane LLVM derlemendedir (`build-gpu/lib`). |
 | Program çalışırken `... failed with 'CUDA_ERROR_...'` yazıyor | GPU'ya ulaşılamıyor ya da GPU'da hata oldu. `nvidia-smi` ekran kartını gösteriyor mu bak. GPU belleği yetmiyor olabilir; ya da `parallel for` içinde sınır dışı indeks vardır. `--gpu=off` ile derleyip dene. |
 | `@GPU` programı derlenirken `ptxas` bulunamadı hatası | CUDA araç takımı bulunamıyor. `export PATH=/usr/local/cuda-12.9/bin:$PATH` |
-| `Syntax hatasi bulundu!` | Yazım hatası. Hemen üstünde satır ve sütunu gösteren bir `line 3:5 ...` mesajı vardır. |
+| `... hata: sozdizimi hatasi: ...` | Yazım hatası. Mesajın başında dosya, satır ve sütun yazar (`deneme.minik:3:6`); açıklaması ANTLR'dan geldiği için İngilizcedir. |
+| `'std.x' adinda bir standart modul yok` | Modül adı yanlış ya da derleyici `std/` dizinini bulamıyor. Derleyiciyi başka yere kopyaladıysan yolunu ver: `export MINIK_STD=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/std` |
+| `modul bulunamadi: 'a.b'` | `a/b.minik` dosyası import eden dosyanın dizininde yok. Yolu denetle ya da dizini `-I` ile ver. |
 | Gramerde (`minik.g4`) yaptığın değişiklik etkisiz | Derleyiciyi yeniden derle; ayrıştırıcı dosyaları gramerden otomatik üretilir. |
 | `git` komutu PowerShell'de bulunamıyor | git yalnızca WSL içinde kurulu. WSL terminalinde kullan. |
 
@@ -585,9 +777,11 @@ main.cpp            Derleyicinin giriş noktası: aşamaları sırayla çağır�
 
 AST/                Ağaç yapısı ve semantik analiz
   ASTBuilder.h        Ayrıştırma ağacından AST kurar
+  ModuleLoader.*      import edilen dosyaları bulur, ayrıştırır, tek programda birleştirir
   Sema.*              Tip denetimi, isim çözümleme, akış analizi
   SemaParallel.cpp    Paralel döngülerin güvenlik denetimi
   SemaGpu.cpp         @GPU fonksiyonların kuralları
+  SemaStruct.cpp      Struct tipleri, kurucu çağrıları, alan erişimi
   SemType.h           Çözülmüş tipler
   Builtins.h          Yerleşik fonksiyonların listesi
 
@@ -599,6 +793,7 @@ MLIRBackend/        AST → MLIR
   MLIRListManager.*          list<T>: oluşturma, erişim, push / pop
   MLIRMatrixManager.*        matrix<T>: tensor üzerinde işlemler
   MLIRGeneratorMatrix.cpp    matris ifadeleri, füzyon, bellek sahipliği
+  MLIRGeneratorStruct.cpp    struct değerleri (alanlarına ayrılarak üretilir)
   MLIRRuntime.h              runtime kütüphanesine çağrılar
 
 LLVMBackend/        MLIR → çalıştırılabilir dosya
@@ -607,7 +802,10 @@ LLVMBackend/        MLIR → çalıştırılabilir dosya
   ParallelMatmul.*    CPU'da matris çarpımını çekirdeklere dağıtır
   NativeCodegen.*     Optimizasyon, nesne dosyası, bağlama
 
-runtime/minik_rt.c  Derlenen programlara eklenen C kütüphanesi (print, hata mesajları)
+runtime/            Derlenen programlara eklenen C kütüphanesi (libminikrt.a)
+  minik_rt.c          print, stringler, hata mesajları
+  std_*.c             standart kütüphane modüllerinin C ile yazılmış kısmı
+std/                Standart kütüphane modülleri (import std.file → std/file.minik)
 tests/              Test programları ve run.sh
 ```
 

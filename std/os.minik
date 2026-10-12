@@ -1,0 +1,32 @@
+// std.os — programın çalıştığı ortam.
+//
+//   import std.os as os;
+//
+//   list<string> a = os.args();       // ./program bir iki → ["./program", "bir", "iki"]
+//   string ev = os.env("HOME");
+//   os.exit(2);
+
+// C tarafı: runtime/std_os.c
+extern func c_arg_count() -> int64;
+extern func c_arg(int64 index) -> string;
+extern func c_env(string name) -> string;
+extern func c_exit(int code) -> void;
+
+// Komut satırı argümanları. İlk eleman programın adıdır.
+public func args() -> list<string> {
+    list<string> result = [];
+    for i in 0 .. c_arg_count() {
+        push(result, c_arg(i));
+    }
+    return result;
+}
+
+// Ortam değişkeninin değeri; tanımlı değilse boş string.
+public func env(string name) -> string {
+    return c_env(name);
+}
+
+// Programı verilen çıkış koduyla (0..255) hemen bitirir.
+public func exit(int code) -> void {
+    c_exit(code);
+}

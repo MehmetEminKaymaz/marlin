@@ -1,0 +1,82 @@
+// output: merhaba dunya
+// output: 13 5
+// output: true false true
+// output: true true false true
+// output: m a
+// output: 42 -7 3.5 true x
+// output: 45 2.5
+// output: 3 bir uc
+// output: a,b,c
+// output: 0 true
+// output: Ali 30
+// output: dis
+// output: x
+// output: 0 1 2 3
+func selamla(string ad) -> string {
+    return "merhaba " + ad;
+}
+
+struct Kisi {
+    string ad;
+    int yas;
+}
+
+func main() -> void {
+    string s = selamla("dunya");            // birleştirme yeni bir string üretir
+    print(s);
+    print(len(s), len("merha"));
+
+    // Karşılaştırma: içeriğe göre, sözlük sırasıyla
+    print("a" == "a", "a" == "b", "a" != "b");
+    print("abc" < "abd", "ab" < "abc", "b" < "a", selamla("x") == "merhaba x");
+
+    print(s[0], s[len(s) - 1]);             // s[i]: char
+
+    // Değer → string, string → sayı
+    print(str(42), str(-7), str(3.5), str(true), str('x'));
+    print(to_int("40") + 5, to_float(" 2.5 "));
+
+    // String listesi
+    list<string> l = ["bir", "iki"];
+    push(l, "uc");
+    print(len(l), l[0], l[2]);
+
+    string birlesik = "";
+    for i in 0 .. 3 {
+        if i > 0 {
+            birlesik = birlesik + ",";
+        }
+        birlesik = birlesik + str("abc"[i]);
+    }
+    print(birlesik);
+
+    string bos;                             // başlangıç değeri yok: boş string
+    print(len(bos), bos == "");
+
+    Kisi k = Kisi("Ali", 30);               // struct alanı
+    print(k.ad, k.yas);
+
+    string t = "ic";
+    if len(s) > 3 {
+        t = "dis";                          // atama yalnızca neyi gösterdiğini değiştirir
+    }
+    print(t);
+
+    string[2] dizi;                         // string dizisi; elemanlar boş başlar
+    dizi[0] = "x";
+    print(dizi[0] + dizi[1]);
+
+    // Paralel döngüde string üretmek güvenlidir (her yineleme kendi stringini üretir).
+    int64[4] uzunluk;
+    parallel for i in 0 .. 4 {
+        string parca = str(i) + "!";
+        uzunluk[i] = to_int(str(i)) + len(parca) - 2;
+    }
+    print(uzunluk[0], uzunluk[1], uzunluk[2], uzunluk[3]);
+
+    // Bellek elle bırakılır; literali ya da boş stringi bırakmak zararsızdır.
+    free(s);
+    free(birlesik);
+    free("literal");
+    free(bos);
+}

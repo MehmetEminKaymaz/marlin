@@ -1,0 +1,103 @@
+// error: tanimsiz tip: 'Yok'
+// error: struct 'Dugum' kendisini iceriyor
+// error: 'x' alani birden cok kez tanimlanmis
+// error: struct en az bir alan icermeli
+// error: struct alani fonksiyon tipinde olamaz
+// error: 'Ayni' bu kapsamda zaten tanimli (ayni adda bir struct var)
+// error: global degisken olarak yalnizca
+// error: 'Nokta' 2 alan bekler, verilen 1
+// error: tip uyusmazligi: beklenen float64, bulunan string
+// error: 'Nokta' tipinde 'z' adinda bir alan yok
+// error: 'n' bir struct degil (tipi: int); '.x' ile alanina erisilemez
+// error: islenenler sayisal olmali (bulunan: Nokta ve Nokta)
+// error: bu tipte bir deger yazdirilamaz: Nokta
+// error: 'Nokta' bir struct tipi; deger olarak kullanilamaz
+// error: tip uyusmazligi: beklenen Nokta, bulunan Kutu
+// error: matris alani olan struct baslangic degeri olmadan tanimlanamaz
+// error: matris parametresi 'k.m' degistirilemez
+// error: 'k' parametresi matris iceriyor; butun olarak atanamaz
+// error: '.x' ile alan erisimi bir struct bekler (bulunan: int)
+// error: 'Kutu' tipinde 'yok' adinda bir alan yok
+// error: @GPU fonksiyonda yalnizca sayisal/bool/char degerler ve matrisler kullanilabilir (bulunan: Nokta)
+// error: paralel dongude dongu disinda tanimli 'p.x' degiskenine atama yapilamaz
+// error: 's.Gizli' private; baska bir modulden kullanilamaz
+// error: 'moduller.sekil' modulundeki 'Gizli' private; import edilemez
+import moduller.sekil as s;
+from moduller.sekil import Gizli;
+
+struct Nokta {
+    float64 x;
+    float64 y;
+}
+
+struct Kutu {
+    matrix<float64> m;
+    int n;
+}
+
+struct Dugum {
+    int deger;
+    Dugum sonraki;          // değer olarak kendisini içeremez
+}
+
+struct Cift {
+    int x;
+    int x;
+}
+
+struct Bos {
+}
+
+struct Islem {
+    (int) -> int f;
+}
+
+struct Ayni {
+    int a;
+}
+
+func Ayni() -> int {        // struct ile aynı adda fonksiyon
+    return 0;
+}
+
+Nokta globalNokta;          // global struct henüz yok
+
+func kutuYap() -> Kutu {
+    return Kutu(ones(2, 2), 1);
+}
+
+func bir() -> int {
+    return 1;
+}
+
+func degistir(Kutu k) -> void {
+    k.m[0, 0] = 1;          // matris alanı salt okunur
+    k = kutuYap();
+}
+
+@GPU
+func gpuda(Nokta p) -> float64 {
+    return 1.0;
+}
+
+func main() -> void {
+    Yok y = 3;
+    Nokta p = Nokta(1);
+    Nokta q = Nokta("a", 2);
+    print(p.z);
+    int n = 3;
+    print(n.x);
+    Nokta r = Nokta(1, 2);
+    Nokta t = r + r;
+    print(r);
+    let u = Nokta;
+    r = kutuYap();
+    Kutu k;
+    print(bir().x);
+    print(kutuYap().yok);
+    s.Gizli g = s.Gizli(1);
+
+    parallel for i in 0 .. 4 {
+        p.x = i;
+    }
+}

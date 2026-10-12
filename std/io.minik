@@ -1,0 +1,31 @@
+// std.io — klavyeden (standart girdiden) okuma.
+//
+//   import std.io as io;
+//
+//   io.write("Adin: ");
+//   string ad = io.read_line();
+//   print("merhaba", ad);
+//
+// Ekrana yazmak için dile gömülü print kullanılır; buradaki write, satır sonu
+// eklemeden yazmak (ör. soru sormak) içindir.
+
+// C tarafı: runtime/std_io.c
+extern func c_read_line() -> string;
+extern func c_eof() -> bool;
+extern func c_write(string text) -> void;
+
+// Bir satır okur (satır sonu olmadan). Girdi bittiyse boş string.
+public func read_line() -> string {
+    return c_read_line();
+}
+
+// Okunacak girdi kalmadı mı? (Dosyadan yönlendirilen girdiyi sonuna kadar
+// okumak için: while !io.eof() { ... })
+public func eof() -> bool {
+    return c_eof();
+}
+
+// Metni satır sonu eklemeden yazar.
+public func write(string text) -> void {
+    c_write(text);
+}

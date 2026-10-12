@@ -15,6 +15,7 @@
 //   * Matematik: MLIR'in math/arith operasyonlarına çevrilir; C çağrısı
 //     yazılmaz. Böylece aynı işlem CPU'da ve GPU'da hedefin kendi
 //     karşılığına iner.
+//   * String işlemleri: çalışma zamanı kütüphanesine çağrı olarak üretilir.
 //   * Liste işlemleri: memref operasyonlarına çevrilir (bkz. MLIRListManager).
 //   * Matris işlemleri: linalg/tensor operasyonlarına çevrilir
 //     (bkz. MLIRMatrixManager).
@@ -33,8 +34,12 @@ enum class Builtin {
     Pow, Atan2,
     // Tamsayı ve kayan nokta; sonuç argümanın tipinde
     Abs, Min, Max,
-    // Listeler: push(l, x), pop(l), free(l).  len liste, dizi ve string alır.
+    // Listeler: push(l, x), pop(l).  len liste, dizi ve string alır;
+    // free liste ya da stringin belleğini bırakır.
     Push, Pop, Len, Free,
+    // Stringler: str(x) değeri metne çevirir (print'in yazdığı biçimde);
+    // to_int(s) / to_float(s) metni sayıya çevirir.
+    Str, ToInt, ToFloat,
     // Matrisler
     Zeros, Ones, Fill,        // oluşturma: zeros(d1, ..., dn), ones(...), fill(d1, ..., dn, deger)
     Shape,                    // shape(m, i): i. boyutun uzunluğu
@@ -54,6 +59,7 @@ inline Builtin lookupBuiltin(const std::string& name) {
         {"abs", Builtin::Abs},     {"min", Builtin::Min},     {"max", Builtin::Max},
         {"push", Builtin::Push},   {"pop", Builtin::Pop},     {"len", Builtin::Len},
         {"free", Builtin::Free},
+        {"str", Builtin::Str},     {"to_int", Builtin::ToInt}, {"to_float", Builtin::ToFloat},
         {"zeros", Builtin::Zeros}, {"ones", Builtin::Ones},   {"fill", Builtin::Fill},
         {"rows", Builtin::Rows},   {"cols", Builtin::Cols},   {"shape", Builtin::Shape},
         {"matmul", Builtin::Matmul}, {"transpose", Builtin::Transpose}, {"sum", Builtin::Sum},

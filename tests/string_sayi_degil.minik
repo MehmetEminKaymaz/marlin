@@ -1,0 +1,7 @@
+// expect: 1
+// output: 12
+// stderr: "12a" bir tamsayi degil
+func main() -> void {
+    print(to_int("12"));
+    print(to_int("12a"));
+}

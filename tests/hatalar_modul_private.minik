@@ -1,0 +1,20 @@
+// error: 'moduller.geometri' modulundeki 'gizli' private; import edilemez
+// error: 'moduller.geometri' modulundeki 'PI' private; import edilemez
+// error: 'g.gizli' private; baska bir modulden kullanilamaz
+// error: 'g.PI' private; baska bir modulden kullanilamaz
+import moduller.geometri as g;
+from moduller.geometri import gizli;
+from moduller.geometri import PI as pi;
+
+// Kendi dosyasında private tanımlar serbestçe kullanılır.
+int sayac = 0;
+private func yerel() -> int {
+    return sayac;
+}
+
+func main() -> void {
+    print(yerel());
+    print(g.gizli());       // işaretsiz ya da private: başka modülden kullanılamaz
+    print(g.PI);
+    g.PI = 3.0;
+}

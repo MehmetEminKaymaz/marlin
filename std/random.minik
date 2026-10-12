@@ -1,0 +1,43 @@
+// std.random — rastgele sayılar.
+//
+//   import std.random as random;
+//
+//   float64 x = random.random();             // 0 ile 1 arasında (1 hariç)
+//   int64 zar = random.rand_int(1, 7);       // 1..6
+//   matrix<float64> m = random.rand_matrix(100, 100);
+//
+// Tohum (seed) verilmezse program her çalıştığında aynı sayılar gelir; böylece
+// ölçümler ve testler tekrarlanabilir. Her seferinde farklı sayılar için:
+//   random.seed(to_int(...)) ya da zamandan türetilmiş bir tohum.
+//
+// Bu fonksiyonlar paralel döngünün içinden çağrılamaz (üretecin durumu tektir).
+
+// C tarafı: runtime/std_random.c
+extern func c_seed(int64 seed) -> void;
+extern func c_random() -> float64;
+extern func c_rand_int(int64 low, int64 high) -> int64;
+
+public func seed(int64 value) -> void {
+    c_seed(value);
+}
+
+// [0, 1) aralığında bir sayı.
+public func random() -> float64 {
+    return c_random();
+}
+
+// [low, high) aralığında bir tamsayı (high dahil değil; `for i in low .. high` gibi).
+public func rand_int(int64 low, int64 high) -> int64 {
+    return c_rand_int(low, high);
+}
+
+// Elemanları [0, 1) aralığında rastgele olan matris.
+public func rand_matrix(int rows, int cols) -> matrix<float64> {
+    matrix<float64> m = zeros(rows, cols);
+    for i in 0 .. rows {
+        for j in 0 .. cols {
+            m[i, j] = c_random();
+        }
+    }
+    return m;
+}

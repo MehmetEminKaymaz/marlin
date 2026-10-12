@@ -1,0 +1,46 @@
+// output: false
+// output: true
+// output: bir
+// output: iki
+// output:
+// output: 3 bir iki uc
+// output: true bir iki true
+// output: false
+// output: 2 x=1 y=2
+// output: true false
+import std.file as file;
+
+func main() -> void {
+    string yol = "/tmp/minik_std_file_test.txt";
+    file.remove(yol);
+    print(file.exists(yol));
+
+    file.write_text(yol, "bir\niki\n");
+    print(file.exists(yol));
+    print(file.read_text(yol));                     // sondaki \n + print'in satır sonu: boş satır
+
+    file.append_text(yol, "uc");                    // son satırda satır sonu yok
+    list<string> satirlar = file.read_lines(yol);
+    print(len(satirlar), satirlar[0], satirlar[1], satirlar[2]);
+
+    // Satır satır okuma
+    file.File f = file.open(yol, "r");
+    string ilk = file.read_line(f);
+    string ikinci = file.read_line(f);
+    print(f.ok, ilk, ikinci, !file.eof(f));
+    file.close(f);
+
+    // Açılamayan dosya programı durdurmaz; ok alanı söyler.
+    file.File yok = file.open("/tmp/minik_boyle_bir_dizin_yok/a.txt", "r");
+    print(yok.ok);
+
+    // Yazma
+    file.File w = file.open(yol, "w");
+    file.write(w, "x=" + str(1) + "\n");
+    file.write(w, "y=2\n");
+    file.close(w);
+    list<string> yeni = file.read_lines(yol);
+    print(len(yeni), yeni[0], yeni[1]);
+
+    print(file.remove(yol), file.exists(yol));
+}

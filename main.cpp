@@ -1,14 +1,9 @@
-#include <fstream>
 #include <iostream>
-#include <sstream>
 #include <string>
+#include <vector>
 
-#include "antlr4-runtime.h"
-#include "minikLexer.h"
-#include "minikParser.h"
-
-#include "AST/ASTBuilder.h"
 #include "AST/ASTPrinter.h"
+#include "AST/ModuleLoader.h"
 #include "AST/Sema.h"
 #include "MLIRBackend/MLIRGenerator.h"
 #include "LLVMBackend/LLVMLowering.h"
@@ -35,8 +30,6 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Target/LLVMIR/Dialect/All.h"
-
-using namespace antlr4;
 
 // Dosya verilmezse derlenen örnek program.
 static const char* const kSampleSource = R"(
@@ -105,6 +98,8 @@ static const char* const kUsage =
     "  kaynak.minik   derlenecek dosya (verilmezse gomulu ornek program)\n"
     "  -o <dosya>     cikti dosyasi (varsayilan: exe icin a.out, obj icin a.o,\n"
     "                 metin ciktilari icin ekran)\n"
+    "  -I <dizin>     import edilen modullerin aranacagi ek dizin (birden cok\n"
+    "                 kez verilebilir; once import eden dosyanin dizinine bakilir)\n"
     "  --emit=<tur>   hattin hangi asamasinda durulacagi:\n"
     "                   mlir       ust seviye MLIR (scf, memref, arith ...)\n"
     "                   gpu-mlir   GPU cekirdekleri ayrilmis MLIR (gpu.module)\n"
@@ -140,6 +135,7 @@ static bool writeText(const std::string& path, PrintFn print) {
 
 int main(int argc, char** argv) {
     std::string inputPath, outputPath;
+    std::vector<std::string> importDirs;
     EmitKind emit = EmitKind::Executable;
     unsigned optLevel = 0;
     bool printAst = false;
@@ -148,6 +144,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-o" && i + 1 < argc) outputPath = argv[++i];
+        else if (arg == "-I" && i + 1 < argc) importDirs.push_back(argv[++i]);
         else if (arg == "--print-ast") printAst = true;
         else if (arg == "--gpu=off") gpuEnabled = false;
         else if (arg == "--gpu=on") gpuEnabled = true;
@@ -163,35 +160,18 @@ int main(int argc, char** argv) {
         else inputPath = arg;
     }
 
-    std::string sourceCode = kSampleSource;
-    if (!inputPath.empty()) {
-        std::ifstream file(inputPath);
-        if (!file) {
-            std::cerr << "Dosya acilamadi: " << inputPath << "\n";
-            return 1;
-        }
-        std::stringstream buffer;
-        buffer << file.rdbuf();
-        sourceCode = buffer.str();
-    }
-
-    // --- Ayrıştırma ---
-    ANTLRInputStream input(sourceCode);
-    minikLexer lexer(&input);
-    CommonTokenStream tokens(&lexer);
-    minikParser parser(&tokens);
-
-    minikParser::ProgramContext* tree = parser.program();
-    if (lexer.getNumberOfSyntaxErrors() > 0 || parser.getNumberOfSyntaxErrors() > 0) {
-        std::cerr << "Syntax hatasi bulundu! AST olusturulmayacak.\n";
+    // --- Ayrıştırma ve AST ---
+    // Derlenen dosya ile import ettiği bütün dosyalar ayrıştırılır ve tek bir
+    // programda birleştirilir.
+    static int anchor; // adresi yalnızca çalışan dosyanın yerini bulmak içindir
+    ModuleLoader loader(importDirs,
+                        ModuleLoader::findStdDir(llvm::sys::fs::getMainExecutable(argv[0], &anchor)));
+    std::unique_ptr<Program> astRoot = inputPath.empty() ? loader.loadSource(kSampleSource, "<ornek>")
+                                                         : loader.load(inputPath);
+    if (!astRoot) {
+        for (const auto& err : loader.getErrors()) std::cerr << err << "\n";
         return 1;
     }
-
-    // --- AST ---
-    ASTBuilder builder;
-    std::any astResult = builder.visit(tree);
-    if (!astResult.has_value()) return 1;
-    std::unique_ptr<Program> astRoot(std::any_cast<Program*>(astResult));
 
     // --- Semantik analiz ---
     // Tipleri çözer, örtük dönüşümleri AST'ye yazar ve akış yapısını işaretler.
@@ -199,8 +179,7 @@ int main(int argc, char** argv) {
     Sema sema;
     astRoot->accept(sema);
     if (sema.hasErrors()) {
-        for (const auto& err : sema.getErrors())
-            std::cerr << (inputPath.empty() ? "<ornek>" : inputPath) << ":" << err << "\n";
+        for (const auto& err : sema.getErrors()) std::cerr << err << "\n";
         return 1;
     }
 

@@ -4,8 +4,12 @@
 #include <cstdint>
 
 void Sema::error(const ASTNode* node, const std::string& msg) {
-    errors.push_back(std::to_string(node->line) + ":" + std::to_string(node->column) +
-                     ": hata: " + msg);
+    // Mesajlardaki tanım adları kullanıcının yazacağı biçimde gösterilir:
+    // "araclar$vektor$norm" → "araclar.vektor.norm".
+    std::string text = msg;
+    std::replace(text.begin(), text.end(), '$', '.');
+    errors.push_back(program->modules[node->module].path + ":" + std::to_string(node->line) +
+                     ":" + std::to_string(node->column) + ": hata: " + text);
 }
 
 // ===========================================================================
@@ -24,12 +28,176 @@ bool Sema::declare(const std::string& name, const Symbol& sym, const ASTNode* at
     return true;
 }
 
+Sema::Symbol* Sema::findGlobal(const std::string& linkName) {
+    auto found = scopes.front().find(linkName);
+    return found != scopes.front().end() ? &found->second : nullptr;
+}
+
 Sema::Symbol* Sema::lookup(const std::string& name) {
-    for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
-        auto found = it->find(name);
-        if (found != it->end()) return &found->second;
+    // Yerel kapsamlar (scopes[0] globaldir; ona modül üzerinden bakılır).
+    // Noktalı isimde (p.x) aranan, kökün (p) tanımlandığı kapsamdaki alandır:
+    // içteki bir `p`, dıştaki struct `p`nin alanlarını da gölgeler.
+    const std::string root = name.substr(0, name.find('.'));
+    for (size_t i = scopes.size(); i-- > 1;) {
+        if (!scopes[i].count(root)) continue;
+        auto found = scopes[i].find(name);
+        return found != scopes[i].end() ? &found->second : nullptr;
     }
-    return nullptr;
+    return findGlobal(linkNameOf(name));
+}
+
+Sema::Symbol* Sema::lookup(const Identifier* ident) {
+    // Global ya da fonksiyona çözülmüş düğümün adı zaten tanımın adıdır.
+    if (ident->ref == Identifier::Ref::Global || ident->ref == Identifier::Ref::Function)
+        return findGlobal(ident->name);
+    return lookup(ident->name);
+}
+
+// ===========================================================================
+// Modüller
+// ===========================================================================
+
+std::string Sema::linkNameOf(const std::string& name) const {
+    const ModuleNames& names = moduleNames[currentModule];
+
+    const size_t dot = name.rfind('.');
+    if (dot != std::string::npos) { // modul.isim
+        auto alias = names.aliases.find(name.substr(0, dot));
+        if (alias == names.aliases.end()) return "";
+        return program->modules[alias->second].prefix + name.substr(dot + 1);
+    }
+    auto imported = names.imported.find(name);
+    if (imported != names.imported.end()) return imported->second;
+    return program->modules[currentModule].prefix + name;
+}
+
+// Bütün modüllerin üst seviye tanımlarının (fonksiyon, global, struct) adlarını
+// toplar. Tipler ve gövdeler çözülmeden önce yapılır: import'ların bağlanması
+// ve struct adlarının tip olarak tanınması bu tabloya dayanır.
+void Sema::collectTopLevel() {
+    for (auto& decl : program->declarations) {
+        const std::string* name = nullptr;
+        bool isPublic = false;
+        auto* st = dynamic_cast<StructDecl*>(decl.get());
+        if (auto* fn = dynamic_cast<FunctionDecl*>(decl.get())) {
+            name = &fn->name;
+            isPublic = fn->isPublic;
+        } else if (auto* var = dynamic_cast<VariableDecl*>(decl.get())) {
+            name = &var->name;
+            isPublic = var->isPublic;
+        } else if (st) {
+            name = &st->name;
+            isPublic = st->isPublic;
+        }
+        if (!name) continue;
+
+        const bool inserted = topLevel.emplace(*name, TopLevel{decl->module, isPublic}).second;
+        // (İki fonksiyon/global arasındaki çakışmayı `declare` raporlar.)
+        if (st && !inserted) error(st, "'" + st->name + "' bu kapsamda zaten tanimli");
+        else if (st) structs[st->name].decl = st;
+        else if (!inserted && structs.count(*name))
+            error(decl.get(), "'" + *name + "' bu kapsamda zaten tanimli (ayni adda bir struct var)");
+    }
+}
+
+// Her modülün import'larını isimlere bağlar; `from` ile istenen ismin varlığı,
+// görünürlüğü ve modülün kendi tanımlarıyla çakışması denetlenir.
+void Sema::bindImports() {
+    moduleNames.assign(program->modules.size(), {});
+    for (size_t m = 0; m < program->modules.size(); ++m) {
+        const Module& self = program->modules[m];
+        ModuleNames& names = moduleNames[m];
+
+        for (auto& decl : self.imports) {
+            if (decl->target < 0) continue;
+            const Module& target = program->modules[decl->target];
+
+            if (!decl->isFrom) {
+                const std::string& alias = decl->alias.empty() ? decl->modulePath : decl->alias;
+                auto [it, inserted] = names.aliases.emplace(alias, decl->target);
+                if (!inserted && it->second != decl->target)
+                    error(decl.get(), "'" + alias + "' adi baska bir module verilmis");
+                continue;
+            }
+            for (const ImportDecl::Name& item : decl->names) {
+                const std::string& local = item.alias.empty() ? item.name : item.alias;
+                const std::string linkName = target.prefix + item.name;
+                auto found = topLevel.find(linkName);
+                if (found == topLevel.end()) {
+                    error(decl.get(), "'" + decl->modulePath + "' modulunde '" + item.name +
+                                      "' adinda bir tanim yok");
+                    continue;
+                }
+                if (!found->second.isPublic && found->second.module != static_cast<int>(m)) {
+                    error(decl.get(), "'" + decl->modulePath + "' modulundeki '" + item.name +
+                                      "' private; import edilemez (tanimina 'public' yazin)");
+                    continue;
+                }
+                if (topLevel.count(self.prefix + local)) {
+                    error(decl.get(), "'" + local + "' bu modulde zaten tanimli; 'as' ile "
+                                      "baska bir ad verin");
+                    continue;
+                }
+                auto [it, inserted] = names.imported.emplace(local, linkName);
+                if (!inserted && it->second != linkName)
+                    error(decl.get(), "'" + local + "' adi birden cok tanim icin kullanilmis; "
+                                      "'as' ile baska bir ad verin");
+            }
+        }
+    }
+}
+
+void Sema::reportUndefined(const Identifier* ident) {
+    const std::string& name = ident->name;
+    if (structs.count(linkNameOf(name))) {
+        error(ident, "'" + name + "' bir struct tipi; deger olarak kullanilamaz (olusturmak icin: " +
+                     name + "(...))");
+        return;
+    }
+
+    // p.x.y — kök yerel bir değişkense sorun alanlardadır: alanı olmayan bir
+    // değişken ya da struct'ta bulunmayan bir alan.
+    const size_t firstDot = name.find('.');
+    if (firstDot != std::string::npos) {
+        std::string prefix = name.substr(0, firstDot);
+        for (size_t i = scopes.size(); i-- > 1;) {
+            auto root = scopes[i].find(prefix);
+            if (root == scopes[i].end()) continue;
+
+            const Symbol* owner = &root->second;
+            size_t begin = firstDot + 1;
+            while (true) {
+                const size_t end = name.find('.', begin);
+                const std::string field = name.substr(begin, end - begin);
+                if (!owner->type.isStruct()) {
+                    if (!owner->type.isError())
+                        error(ident, "'" + prefix + "' bir struct degil (tipi: " + owner->type.str() +
+                                     "); '." + field + "' ile alanina erisilemez");
+                    return;
+                }
+                auto next = scopes[i].find(prefix + "." + field);
+                if (next == scopes[i].end()) {
+                    error(ident, "'" + owner->type.str() + "' tipinde '" + field + "' adinda bir alan yok");
+                    return;
+                }
+                owner = &next->second;
+                prefix += "." + field;
+                if (end == std::string::npos) return;
+                begin = end + 1;
+            }
+        }
+    }
+
+    const size_t dot = name.rfind('.');
+    if (dot == std::string::npos) {
+        error(ident, "tanimsiz isim: '" + name + "'");
+        return;
+    }
+    const std::string module = name.substr(0, dot);
+    if (!moduleNames[currentModule].aliases.count(module))
+        error(ident, "tanimsiz modul: '" + module + "' (import edilmemis)");
+    else
+        error(ident, "'" + module + "' modulunde '" + name.substr(dot + 1) + "' adinda bir tanim yok");
 }
 
 // ===========================================================================
@@ -56,8 +224,8 @@ SemType Sema::resolveType(Type* t) {
         case TypeKind::Array: {
             SemType elem = resolveType(t->elementType.get());
             if (elem.isError()) return elem;
-            if (!elem.isScalar()) {
-                error(t, "dizi elemani sayisal, bool ya da char olmali (bulunan: " + elem.str() + ")");
+            if (!elem.isScalar() && !elem.isString()) {
+                error(t, "dizi elemani sayisal, bool, char ya da string olmali (bulunan: " + elem.str() + ")");
                 return SemType::Error();
             }
             if (t->arraySize <= 0) {
@@ -69,8 +237,8 @@ SemType Sema::resolveType(Type* t) {
         case TypeKind::List: {
             SemType elem = resolveType(t->elementType.get());
             if (elem.isError()) return elem;
-            if (!elem.isScalar()) {
-                error(t, "liste elemani sayisal, bool ya da char olmali (bulunan: " + elem.str() + ")");
+            if (!elem.isScalar() && !elem.isString()) {
+                error(t, "liste elemani sayisal, bool, char ya da string olmali (bulunan: " + elem.str() + ")");
                 return SemType::Error();
             }
             return SemType::List(elem);
@@ -100,6 +268,8 @@ SemType Sema::resolveType(Type* t) {
             if (!ok || ret.isError()) return SemType::Error();
             return SemType::Function(ret, params);
         }
+        case TypeKind::Named:
+            return resolveNamedType(t);
     }
     return SemType::Error();
 }
@@ -201,6 +371,7 @@ static std::unique_ptr<Expression> wrapInCast(std::unique_ptr<Expression> operan
     auto cast = std::make_unique<CastExpr>(std::move(operand));
     cast->line = cast->operand->line;
     cast->column = cast->operand->column;
+    cast->module = cast->operand->module;
     cast->type = target;
     return cast;
 }
@@ -287,35 +458,49 @@ void Sema::checkCondition(ExprPtr& cond, const char* what) {
 // ===========================================================================
 
 void Sema::visit(Program* node) {
+    program = node;
     scopes.clear();
-    scopes.emplace_back(); // global kapsam
+    scopes.emplace_back(); // global kapsam: bütün modüllerin tanımları
+
+    // Önce isimler: üst seviye tanımlar toplanır ve import'lar bağlanır.
+    // Tiplerin çözülmesi buna dayanır (struct adları, başka modülün tipleri).
+    collectTopLevel();
+    bindImports();
+    for (auto& entry : structs) resolveStruct(entry.second);
 
     // Fonksiyonlar ve globaller, gövdelerden önce bildirilir; böylece kaynak
-    // sırasından bağımsız olarak birbirlerine erişebilirler.
+    // sırasından (ve hangi modülde olduklarından) bağımsız olarak birbirlerine
+    // erişebilirler.
     for (auto& decl : node->declarations)
-        if (auto* fn = dynamic_cast<FunctionDecl*>(decl.get()))
+        if (auto* fn = dynamic_cast<FunctionDecl*>(decl.get())) {
+            currentModule = fn->module; // imzadaki tip adları bu modüle göre çözülür
             declareFunction(fn);
+        }
     for (auto& decl : node->declarations)
-        if (auto* var = dynamic_cast<VariableDecl*>(decl.get()))
+        if (auto* var = dynamic_cast<VariableDecl*>(decl.get())) {
+            currentModule = var->module;
             checkGlobal(var);
+        }
     for (auto& decl : node->declarations)
-        if (dynamic_cast<FunctionDecl*>(decl.get()))
+        if (auto* fn = dynamic_cast<FunctionDecl*>(decl.get()); fn && !fn->isExtern)
             decl->accept(*this);
 
     // Paralel döngülerden çağrılan fonksiyonlar, ancak bütün fonksiyonlar
     // görüldükten sonra denetlenebilir.
     checkParallelCalls();
 
-    // Giriş noktası, işletim sisteminin çağırabileceği biçimde olmalı.
-    Symbol* mainFn = lookup("main");
+    // Giriş noktası, işletim sisteminin çağırabileceği biçimde olmalı. Yalnızca
+    // kök modülün (derlenen dosyanın) `main`i giriş noktasıdır.
+    const std::string rootError = node->modules[0].path + ": hata: ";
+    Symbol* mainFn = findGlobal("main");
     if (!mainFn || mainFn->kind != Symbol::Function) {
-        errors.push_back("hata: programda 'main' fonksiyonu yok");
+        errors.push_back(rootError + "programda 'main' fonksiyonu yok");
     } else if (mainFn->isGpu) {
-        errors.push_back("hata: 'main' @GPU olamaz; program CPU'da baslar");
+        errors.push_back(rootError + "'main' @GPU olamaz; program CPU'da baslar");
     } else if (!mainFn->type.returnType().isError()) {
         const SemType& ret = mainFn->type.returnType();
         if (mainFn->type.paramCount() != 0 || !(ret.isVoid() || ret == SemType::Int(32)))
-            errors.push_back("hata: 'main' parametresiz olmali ve void ya da int dondurmeli");
+            errors.push_back(rootError + "'main' parametresiz olmali ve void ya da int dondurmeli");
     }
 }
 
@@ -328,10 +513,10 @@ std::vector<SemType> Sema::resolveParams(const std::vector<std::unique_ptr<Param
 void Sema::declareParams(const std::vector<std::unique_ptr<ParamDecl>>& params,
                          const std::vector<SemType>& types) {
     for (size_t i = 0; i < params.size(); ++i)
-        declare(params[i]->name,
-                {types[i], Symbol::Variable, funcDepth, /*readOnly=*/types[i].isMatrix(),
-                 /*isParam=*/true},
-                params[i].get());
+        declareVariable(params[i]->name,
+                        {types[i], Symbol::Variable, funcDepth,
+                         /*readOnly=*/types[i].containsMatrix(), /*isParam=*/true},
+                        params[i].get());
 }
 
 void Sema::declareFunction(FunctionDecl* fn) {
@@ -339,14 +524,51 @@ void Sema::declareFunction(FunctionDecl* fn) {
     SemType ret = resolveReturnType(fn->returnType.get());
     fn->fnType = SemType::Function(ret, params);
 
-    resolveTarget(fn);
+    if (fn->isExtern) checkExtern(fn, params, ret);
+    else resolveTarget(fn);
     if (fn->isGpu) {
         for (size_t i = 0; i < params.size(); ++i) checkGpuType(params[i], fn->params[i].get());
         checkGpuType(ret, fn->returnType.get());
     }
     Symbol symbol{fn->fnType, Symbol::Function, 0};
     symbol.isGpu = fn->isGpu;
+    symbol.module = fn->module;
+    symbol.isPublic = fn->isPublic;
+    symbol.isExtern = fn->isExtern;
     declare(fn->name, symbol, fn);
+}
+
+// extern func: gövdesi çalışma zamanı kütüphanesinde, C ile yazılı.
+//
+//   * Yalnızca standart kütüphane modüllerinde yazılabilir; kullanıcı kodu
+//     C'ye doğrudan açılmaz. Her zaman private'tır (gramer `public` kabul
+//     etmez): dışarıya bir minik fonksiyonuyla sarılarak açılır.
+//   * İmzasında yalnızca C'de doğrudan karşılığı olan tipler bulunabilir.
+//     Liste, matris ve struct döndürmesi gereken işlevler, extern'lerin
+//     üzerine minik ile yazılır.
+//   * Derleyici gövdeyi göremediği için fonksiyonu yan etkili sayar (paralel
+//     döngüden çağrılamaz); yan etkisi olmayanlar @pure ile işaretlenir.
+//   * Her zaman @CPU'dur.
+void Sema::checkExtern(FunctionDecl* fn, const std::vector<SemType>& params, const SemType& ret) {
+    if (program->modules[fn->module].name.rfind("std.", 0) != 0)
+        error(fn, "'extern' yalnizca standart kutuphane dosyalarinda kullanilabilir");
+
+    if (fn->annotation == "pure") fn->isPure = true;
+    else if (!fn->annotation.empty())
+        error(fn, "extern fonksiyonda yalnizca @pure kullanilabilir (bulunan: @" + fn->annotation + ")");
+
+    auto allowed = [](const SemType& t) {
+        return t.isError() || t.isString() || t.isBool() || t.isChar() || t.isFloat() ||
+               (t.isInt() && t.width >= 32);
+    };
+    const char* rule = "extern fonksiyonda yalnizca int, int64, float, float64, bool, char ve "
+                       "string kullanilabilir (bulunan: ";
+    for (size_t i = 0; i < params.size(); ++i)
+        if (!allowed(params[i])) error(fn->params[i].get(), rule + params[i].str() + ")");
+    if (!ret.isVoid() && !allowed(ret)) error(fn->returnType.get(), rule + ret.str() + ")");
+
+    if (!fn->isPure)
+        effects[fn->name].unsafeReason = "C ile yazilmis bir kutuphane fonksiyonu (yan etkisi olabilir)";
 }
 
 void Sema::checkGlobal(VariableDecl* v) {
@@ -374,12 +596,16 @@ void Sema::checkGlobal(VariableDecl* v) {
     }
 
     v->varType = type;
-    declare(v->name, {type, Symbol::Global, 0}, v);
+    Symbol symbol{type, Symbol::Global, 0};
+    symbol.module = v->module;
+    symbol.isPublic = v->isPublic;
+    declare(v->name, symbol, v);
 }
 
 void Sema::visit(FunctionDecl* node) {
     const SemType ret = node->fnType.returnType();
 
+    currentModule = node->module; // gövdedeki isimler bu modüle göre çözülür
     funcDepth = 1;
     scopes.emplace_back();
     flow.clear();
@@ -471,12 +697,12 @@ void Sema::visit(Identifier* node) {
     const bool isCallee = identIsCallee;
     skipWholeRead = identIsCallee = false;
     node->type = SemType::Error();
-    Symbol* sym = lookup(node->name);
+    Symbol* sym = lookup(node);
     if (!sym) {
         if (lookupBuiltin(node->name) != Builtin::None)
             error(node, "yerlesik fonksiyon '" + node->name + "' yalnizca cagrilabilir; deger olarak kullanilamaz");
         else
-            error(node, "tanimsiz isim: '" + node->name + "'");
+            reportUndefined(node);
         return;
     }
     bool isLocal = sym->kind == Symbol::Variable || sym->kind == Symbol::Iterator;
@@ -485,6 +711,20 @@ void Sema::visit(Identifier* node) {
                     "' degiskenini kullanamaz (yakalama henuz desteklenmiyor); parametre olarak verin");
         return;
     }
+    // Başka modülün tanımı yalnızca public ise kullanılabilir (v.gizli).
+    if (!isLocal && !sym->isPublic && sym->module != currentModule) {
+        error(node, "'" + node->name + "' private; baska bir modulden kullanilamaz "
+                    "(tanimina 'public' yazin)");
+        return;
+    }
+    // extern fonksiyonun minik tarafında bir gövdesi yoktur; değer olarak dolaşamaz.
+    if (sym->isExtern && !isCallee) {
+        error(node, "extern fonksiyon '" + node->name + "' deger olarak kullanilamaz; "
+                    "yalnizca cagrilabilir");
+        return;
+    }
+    // Global ve fonksiyonlarda kaynaktaki ad ("v.norm") tanımın adıyla değişir.
+    if (!isLocal && node->ref == Identifier::Ref::Unresolved) node->name = linkNameOf(node->name);
     node->ref = sym->kind == Symbol::Function ? Identifier::Ref::Function
               : sym->kind == Symbol::Global   ? Identifier::Ref::Global
                                               : Identifier::Ref::Local;
@@ -583,8 +823,8 @@ void Sema::visit(ListLiteral* node) {
     for (auto& elem : node->elements) {
         SemType t = check(elem);
         if (t.isError()) { ok = false; continue; }
-        if (!t.isScalar()) {
-            error(elem.get(), "dizi elemani sayisal, bool ya da char olmali (bulunan: " + t.str() + ")");
+        if (!t.isScalar() && !t.isString()) {
+            error(elem.get(), "dizi elemani sayisal, bool, char ya da string olmali (bulunan: " + t.str() + ")");
             ok = false;
         }
         allNumeric = allNumeric && t.isNumeric();
@@ -624,8 +864,8 @@ void Sema::visit(ArrayAccessExpr* node) {
     }
 
     if (target.isError()) return;
-    if (!target.isArray() && !target.isList() && !target.isMatrix()) {
-        error(node->target.get(), "indekslenen ifade dizi, liste ya da matris degil (bulunan: " + target.str() + ")");
+    if (!target.isArray() && !target.isList() && !target.isMatrix() && !target.isString()) {
+        error(node->target.get(), "indekslenen ifade dizi, liste, matris ya da string degil (bulunan: " + target.str() + ")");
         return;
     }
 
@@ -635,6 +875,15 @@ void Sema::visit(ArrayAccessExpr* node) {
     if (node->indices.size() != expectedCount) {
         error(node, target.str() + " " + std::to_string(expectedCount) + " indeks bekler (verilen: " +
                     std::to_string(node->indices.size()) + ")");
+        return;
+    }
+
+    // s[i]: stringin i. baytı. Stringler değişmez; yalnızca okunur.
+    if (target.isString()) {
+        if (isWrite)
+            error(node, "string degistirilemez (s[i] yalnizca okunur); yeni bir string olusturun");
+        else
+            node->type = SemType::Char();
         return;
     }
 
@@ -866,7 +1115,32 @@ void Sema::checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
             noteMutatingBuiltin(node, name);
             node->type = SemType::Void();
             if (!expectArgs(1) || !ok) return;
-            expectList();
+            if (!args[0]->type.isList() && !args[0]->type.isString())
+                error(args[0].get(), "'free' liste ya da string bekler (bulunan: " +
+                                     args[0]->type.str() + ")");
+            return;
+
+        // str(x): sayı, bool ya da char → print'in yazdığı metin.
+        case Builtin::Str:
+            if (!expectArgs(1) || !ok) return;
+            if (!args[0]->type.isScalar() && !args[0]->type.isString()) {
+                error(args[0].get(), "'str' sayisal, bool, char ya da string bekler (bulunan: " +
+                                     args[0]->type.str() + ")");
+                return;
+            }
+            node->type = SemType::String();
+            return;
+
+        // to_int(s) → int64, to_float(s) → float64. Metin sayı değilse program
+        // çalışırken mesajla durur.
+        case Builtin::ToInt: case Builtin::ToFloat:
+            if (!expectArgs(1) || !ok) return;
+            if (!args[0]->type.isString()) {
+                error(args[0].get(), "'" + name + "' string bekler (bulunan: " +
+                                     args[0]->type.str() + ")");
+                return;
+            }
+            node->type = node->builtin == Builtin::ToInt ? SemType::Int(64) : SemType::Float(64);
             return;
 
         case Builtin::Len: {
@@ -886,9 +1160,15 @@ void Sema::visit(FunctionCallExpr* node) {
     const SemType expected = takeHint();
     node->type = SemType::Error();
 
-    // İsim kullanıcı tarafından tanımlanmamışsa yerleşik olabilir.
+    // İsim kullanıcı tarafından tanımlanmamışsa bir struct (Nokta(1, 2)) ya da
+    // yerleşik olabilir.
     if (auto* ident = dynamic_cast<Identifier*>(node->target.get())) {
-        if (!lookup(ident->name)) {
+        if (!lookup(ident)) {
+            auto found = structs.find(linkNameOf(ident->name));
+            if (found != structs.end()) {
+                checkConstructor(node, ident, found->second);
+                return;
+            }
             node->builtin = lookupBuiltin(ident->name);
             if (node->builtin != Builtin::None) {
                 checkBuiltinCall(node, ident->name, expected);
@@ -1004,6 +1284,24 @@ void Sema::visit(BinaryExpr* node) {
         return;
     }
 
+    // Stringler: + birleştirir (yeni bir string üretir), karşılaştırmalar
+    // sözlük sırasına göredir.
+    if (lt.isString() || rt.isString()) {
+        const bool comparison = node->op == BinaryExpr::Eq || node->op == BinaryExpr::Neq ||
+                                node->op == BinaryExpr::Lt || node->op == BinaryExpr::Lte ||
+                                node->op == BinaryExpr::Gt || node->op == BinaryExpr::Gte;
+        if (!(lt.isString() && rt.isString()))
+            error(node, "string yalnizca string ile kullanilabilir (bulunan: " + lt.str() + " ve " +
+                        rt.str() + "); diger degerleri str(...) ile cevirin");
+        else if (node->op == BinaryExpr::Add)
+            node->type = SemType::String();
+        else if (comparison)
+            node->type = SemType::Bool();
+        else
+            error(node, "stringlerle yalnizca + ve karsilastirma (== != < <= > >=) kullanilabilir");
+        return;
+    }
+
     switch (node->op) {
         case BinaryExpr::Add: case BinaryExpr::Sub: case BinaryExpr::Mul:
         case BinaryExpr::Div: case BinaryExpr::Mod:
@@ -1064,6 +1362,10 @@ void Sema::visit(VariableDecl* node) {
     } else if (type.isMatrix()) {
         error(node, "matris baslangic degeri olmadan tanimlanamaz (or. zeros(3, 4))");
         type = SemType::Error();
+    } else if (type.containsMatrix()) {
+        error(node, "matris alani olan struct baslangic degeri olmadan tanimlanamaz (or. " +
+                    type.str() + "(...))");
+        type = SemType::Error();
     }
 
     if (gpuFunction) {
@@ -1073,7 +1375,7 @@ void Sema::visit(VariableDecl* node) {
     }
 
     node->varType = type;
-    declare(node->name, {type, Symbol::Variable, funcDepth}, node);
+    declareVariable(node->name, {type, Symbol::Variable, funcDepth}, node);
 }
 
 void Sema::visit(AssignmentStmt* node) {
@@ -1085,7 +1387,7 @@ void Sema::visit(AssignmentStmt* node) {
     SemType value = checkExpecting(node->value, target);
 
     if (auto* ident = dynamic_cast<Identifier*>(node->target.get())) {
-        if (Symbol* sym = lookup(ident->name); sym && !target.isError()) {
+        if (Symbol* sym = lookup(ident); sym && !target.isError()) {
             if (sym->kind == Symbol::Function)
                 return error(ident, "'" + ident->name + "' bir fonksiyon; atama yapilamaz");
             if (sym->kind == Symbol::Iterator)
@@ -1100,13 +1402,16 @@ void Sema::visit(AssignmentStmt* node) {
     Expression* root = node->target.get();
     if (auto* access = dynamic_cast<ArrayAccessExpr*>(root)) root = access->target.get();
     if (auto* ident = dynamic_cast<Identifier*>(root)) {
-        Symbol* sym = lookup(ident->name);
+        Symbol* sym = lookup(ident);
+        if (sym && sym->readOnly && sym->type.isStruct())
+            return error(ident, "'" + ident->name + "' parametresi matris iceriyor; butun olarak "
+                                "atanamaz (matris parametreleri salt okunurdur)");
         if (sym && sym->readOnly)
             return error(ident, "matris parametresi '" + ident->name + "' degistirilemez; yerel bir "
                                 "kopya kullanin (or. matrix<float> m = " + ident->name + ";)");
     }
     if (auto* ident = dynamic_cast<Identifier*>(node->target.get()))
-        if (Symbol* sym = lookup(ident->name); sym && !target.isError())
+        if (Symbol* sym = lookup(ident); sym && !target.isError())
             noteWholeWrite(ident, *sym);
 
     if (value.isVoid())

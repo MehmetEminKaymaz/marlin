@@ -25,7 +25,8 @@ enum class TypeKind {
  Array,
  List,
  Matrix,
- Lambda
+ Lambda,
+ Named   // kullanıcının tanımladığı tip (struct); adı Type::name alanında
 };
 
 

@@ -20,12 +20,13 @@
 //                                      seçilirken kullanılır)
 //   float / float64            → f32 / f64
 //   bool / char                → i1 / i8
-//   string                     → !llvm.struct<(ptr, i64)>
+//   string                     → i64   (çalışma zamanındaki string bloğunun adresi)
 //   T[N]                       → memref<N x T>
 //   list<T>                    → memref<memref<? x T>>   (bkz. MLIRListManager)
 //   matrix<T, N>               → memref<? x ... x T> (N boyut); ifade içinde tensor
 //                                (bkz. MLIRMatrixManager)
 //   (A, B) -> R                → (A, B) -> R
+//   struct                     → karşılığı yok; yapraklarına ayrılır (bkz. convertFunction)
 //   void                       → boş Type (çağıran taraf ele alır)
 class MLIRTypeManager {
     CodegenContext& ctx;
@@ -41,11 +42,12 @@ public:
                                                                : mlir::Type(builder.getF64Type());
             case SemType::Kind::Bool:  return builder.getI1Type();
             case SemType::Kind::Char:  return builder.getIntegerType(8);
-            case SemType::Kind::String: {
-                auto ptrType = mlir::LLVM::LLVMPointerType::get(&ctx.context);
-                auto i64Type = builder.getI64Type();
-                return mlir::LLVM::LLVMStructType::getLiteral(&ctx.context, {ptrType, i64Type});
-            }
+            // String, çalışma zamanındaki string bloğunun adresidir (bkz.
+            // runtime/minik_rt.c). Adres tamsayı olarak taşınır: böylece
+            // sıradan bir skaler gibi yuvada, dizide ve listede saklanabilir
+            // (LLVM işaretçisi memref elemanı olamaz).
+            case SemType::Kind::String:
+                return builder.getI64Type();
             case SemType::Kind::Array:
                 return mlir::MemRefType::get({type.arraySize}, convert(type.elementType()));
             case SemType::Kind::List:
@@ -54,6 +56,7 @@ public:
                 return matrixBufferType(convert(type.elementType()), type.rank);
             case SemType::Kind::Function:
                 return convertFunction(type);
+            case SemType::Kind::Struct: // tek bir değer değildir; yaprakları çevrilir
             case SemType::Kind::Void:
             case SemType::Kind::Error:
                 return nullptr;
@@ -86,14 +89,31 @@ public:
         return mlir::RankedTensorType::get(shape, elementType);
     }
 
+    // Struct'ın MLIR'de karşılığı yoktur: yapraklarına ayrılarak taşınır
+    // (bkz. SemType.h, leavesOf). Fonksiyon imzasında:
+    //
+    //   * struct parametre  → yaprak başına bir parametre
+    //   * struct dönüş      → yaprak başına bir sonuç. Dizi yaprakları sonuç
+    //                         olarak dönemez (dizi yığıtta yaşar); onların
+    //                         yerini çağıran ayırır ve imzanın sonuna eklenen
+    //                         parametrelerle verir, fonksiyon oraya yazar.
+    //
+    //   func f(Kayit k) -> Kayit        Kayit { int no; int[3] d; }
+    //     →  (i32, memref<3xi32>, memref<3xi32>) -> i32
+    //         k.no  k.d            dönen .d         dönen .no
     mlir::FunctionType convertFunction(const SemType& type) {
         llvm::SmallVector<mlir::Type, 4> inputs;
         for (size_t i = 0; i < type.paramCount(); ++i)
-            inputs.push_back(convert(type.paramType(i)));
+            for (const SemLeaf& leaf : leavesOf(type.paramType(i)))
+                inputs.push_back(convert(leaf.type));
 
         llvm::SmallVector<mlir::Type, 1> results;
-        if (!type.returnType().isVoid())
-            results.push_back(convert(type.returnType()));
+        for (const SemLeaf& leaf : leavesOf(type.returnType())) {
+            if (type.returnType().isStruct() && leaf.type.isArray())
+                inputs.push_back(convert(leaf.type));
+            else
+                results.push_back(convert(leaf.type));
+        }
 
         return mlir::FunctionType::get(&ctx.context, inputs, results);
     }

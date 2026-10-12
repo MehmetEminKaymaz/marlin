@@ -16,8 +16,12 @@
 // ===========================================================================
 
 void MLIRGenerator::visit(Program* node) {
+    program = node;
     ctx.builder.setInsertionPointToEnd(ctx.theModule.getBody());
 
+    // Bütün modüllerin bildirimleri tek bir MLIR modülüne üretilir; isimler
+    // modül önekiyle ayrıştığı için (bkz. Module::prefix) çakışmazlar.
+    //
     // 1. geçiş — globaller ve tüm fonksiyon imzaları, gövdelerden ÖNCE modüle
     // eklenir. Böylece bir fonksiyon, kaynakta kendisinden sonra tanımlanan
     // bir fonksiyonu ya da globali kullanabilir (ileri referans, karşılıklı
@@ -33,9 +37,17 @@ void MLIRGenerator::visit(Program* node) {
 
     // 2. geçiş — fonksiyon gövdeleri.
     for (auto& decl : node->declarations) {
-        if (dynamic_cast<FunctionDecl*>(decl.get()))
+        if (auto* fn = dynamic_cast<FunctionDecl*>(decl.get()); fn && !fn->isExtern)
             decl->accept(*this);
     }
+}
+
+// extern fonksiyonların C tarafındaki tipi. Çağrı kuralında 32 bitten dar
+// tamsayıların üst bitlerini kimin dolduracağı platforma bağlı olduğundan
+// bool ve char 32 bit olarak geçirilir (runtime'daki imzalar da böyledir).
+mlir::Type MLIRGenerator::externType(const SemType& type) {
+    if (type.isBool() || type.isChar()) return ctx.builder.getI32Type();
+    return typeManager.convert(type);
 }
 
 // Tip ve parametre düğümleri ziyaretçi arayüzü gereği tanımlı; üretim gerektirmez.
@@ -49,6 +61,21 @@ void MLIRGenerator::visit(ParamDecl* /*node*/) {}
 void MLIRGenerator::declareFunctionSignature(FunctionDecl* node) {
     mlir::OpBuilder::InsertionGuard guard(ctx.builder);
     ctx.builder.setInsertionPointToEnd(ctx.theModule.getBody());
+
+    // extern: gövdesiz bildirim, C'deki adıyla. Tanımını bağlayıcı çalışma
+    // zamanı kütüphanesinden çözer.
+    if (node->isExtern) {
+        llvm::SmallVector<mlir::Type, 4> inputs, results;
+        for (size_t i = 0; i < node->fnType.paramCount(); ++i)
+            inputs.push_back(externType(node->fnType.paramType(i)));
+        if (!node->fnType.returnType().isVoid())
+            results.push_back(externType(node->fnType.returnType()));
+        auto declaration = ctx.builder.create<mlir::func::FuncOp>(
+            locOf(node), node->externName, ctx.builder.getFunctionType(inputs, results));
+        declaration.setPrivate();
+        return;
+    }
+
     auto funcType = typeManager.convertFunction(node->fnType);
     auto funcOp = ctx.builder.create<mlir::func::FuncOp>(locOf(node), node->name, funcType);
     if (!targetsGpu(node)) return;
@@ -150,20 +177,29 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
     matrixScopes.clear();
     loopScopeDepths.clear();
 
+    auto savedReturnSlots = std::move(returnArraySlots);
+    returnArraySlots.clear();
+
     // Diziler, fonksiyon değerleri ve matrisler doğrudan bağlanır (matris
     // parametresi salt okunurdur: çağıranın belleğidir). Diğer parametreler
-    // atanabilir olmaları için bir yuvaya kopyalanır.
+    // atanabilir olmaları için bir yuvaya kopyalanır. Struct parametre yaprak
+    // yaprak gelir; her yaprak "p.alan" adıyla ayrı bir değişken olur.
+    unsigned argIndex = 0;
     for (size_t i = 0; i < params.size(); ++i) {
-        mlir::Value arg = entryBlock->getArgument(static_cast<unsigned>(i));
-        const SemType& paramType = fnType.paramType(i);
-        if (paramType.isArray() || paramType.isFunction() || paramType.isMatrix()) {
-            scopeManager.declareVariable(params[i]->name, arg);
-            continue;
+        for (const SemLeaf& leaf : leavesOf(fnType.paramType(i), params[i]->name)) {
+            mlir::Value arg = entryBlock->getArgument(argIndex++);
+            if (leaf.type.isArray() || leaf.type.isFunction() || leaf.type.isMatrix()) {
+                scopeManager.declareVariable(leaf.path, arg);
+                continue;
+            }
+            mlir::Value storage = createStorage(leaf.type, loc);
+            storeTo(arg, storage, leaf.type, loc);
+            scopeManager.declareVariable(leaf.path, storage);
         }
-        mlir::Value storage = createStorage(paramType, loc);
-        storeTo(arg, storage, paramType, loc);
-        scopeManager.declareVariable(params[i]->name, storage);
     }
+    // Kalan argümanlar: dönen struct'ın dizi alanlarının yazılacağı yerler.
+    for (; argIndex < entryBlock->getNumArguments(); ++argIndex)
+        returnArraySlots.push_back(entryBlock->getArgument(argIndex));
 
     emitBody();
 
@@ -175,6 +211,7 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
             ctx.builder.create<mlir::LLVM::UnreachableOp>(loc);
     }
 
+    returnArraySlots = std::move(savedReturnSlots);
     temporaries = std::move(savedTemporaries);
     ownedBuffers = std::move(savedOwned);
     matrixScopes = std::move(savedMatrixScopes);
@@ -270,15 +307,6 @@ mlir::Value MLIRGenerator::emitGlobalRef(const std::string& name, mlir::Location
 // ===========================================================================
 
 mlir::Value MLIRGenerator::createStorage(const SemType& type, mlir::Location loc) {
-    // string bir LLVM struct'ıdır; memref elemanı olamadığı için llvm.alloca kullanılır.
-    if (type.isString()) {
-        mlir::OpBuilder::InsertionGuard guard(ctx.builder);
-        ctx.builder.setInsertionPointToStart(ctx.allocaBlock);
-        mlir::Value one = ctx.builder.create<mlir::arith::ConstantIntOp>(loc, 1, 64);
-        return ctx.builder.create<mlir::LLVM::AllocaOp>(
-            loc, mlir::LLVM::LLVMPointerType::get(&ctx.context), typeManager.convert(type), one);
-    }
-
     mlir::MemRefType memRefType = type.isArray()
         ? mlir::cast<mlir::MemRefType>(typeManager.convert(type))
         : mlir::MemRefType::get({}, typeManager.convert(type));
@@ -289,8 +317,6 @@ void MLIRGenerator::storeTo(mlir::Value value, mlir::Value storage, const SemTyp
                             mlir::Location loc) {
     if (type.isArray())
         ctx.builder.create<mlir::memref::CopyOp>(loc, value, storage);
-    else if (type.isString())
-        ctx.builder.create<mlir::LLVM::StoreOp>(loc, value, storage);
     else
         ctx.builder.create<mlir::memref::StoreOp>(loc, value, storage);
 }
@@ -299,8 +325,6 @@ mlir::Value MLIRGenerator::loadFrom(mlir::Value storage, const SemType& type, ml
     // Diziler ve fonksiyon değerleri zaten kendileridir.
     if (type.isArray() || type.isFunction())
         return storage;
-    if (type.isString())
-        return ctx.builder.create<mlir::LLVM::LoadOp>(loc, typeManager.convert(type), storage);
     // Matris parametresi doğrudan belleğe bağlıdır; yerel matris değişkeni
     // ise belleği tutan bir yuvadır (aşağıda okunur).
     if (type.isMatrix() && storage.getType() == typeManager.convert(type))
@@ -314,8 +338,7 @@ mlir::Value MLIRGenerator::loadFrom(mlir::Value storage, const SemType& type, ml
 
 mlir::Value MLIRGenerator::emitZero(const SemType& type, mlir::Location loc) {
     mlir::Type mlirType = typeManager.convert(type);
-    if (type.isString())
-        return ctx.builder.create<mlir::LLVM::ZeroOp>(loc, mlirType);
+    // (String için sıfır adresi boş string demektir.)
     if (auto floatType = mlir::dyn_cast<mlir::FloatType>(mlirType))
         return arithManager.buildFloatConstant(0.0, floatType, loc);
     return arithManager.buildIntConstant(0, mlirType, loc);

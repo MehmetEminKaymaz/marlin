@@ -1,0 +1,9 @@
+// Test modülü: tek.minik ile birbirini import eder (döngü).
+from tek import tekMi;
+
+public func ciftMi(int n) -> bool {
+    if n == 0 {
+        return true;
+    }
+    return tekMi(n - 1);
+}

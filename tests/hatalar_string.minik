@@ -1,0 +1,25 @@
+// error: string degistirilemez (s[i] yalnizca okunur)
+// error: string yalnizca string ile kullanilabilir (bulunan: string ve int)
+// error: stringlerle yalnizca + ve karsilastirma
+// error: 'to_int' string bekler (bulunan: int)
+// error: 'str' sayisal, bool, char ya da string bekler (bulunan: list<int>)
+// error: 'free' liste ya da string bekler (bulunan: int)
+// error: tip uyusmazligi: beklenen string, bulunan char
+// error: @GPU fonksiyonda yalnizca sayisal/bool/char degerler ve matrisler kullanilabilir (bulunan: string)
+@GPU
+func gpuda(float64 v) -> float64 {
+    string s = "x";
+    return v;
+}
+
+func main() -> void {
+    string s = "abc";
+    s[0] = 'x';
+    print(s + 1);
+    print(s - s);
+    print(to_int(5));
+    list<int> l = [1];
+    print(str(l));
+    free(5);
+    string c = s[0];        // s[i] bir char'dır; string için str(s[i])
+}

@@ -1,0 +1,9 @@
+// expect: 1
+// output: once
+// stderr: dosya okunamadi: /tmp/minik_boyle_bir_dosya_yok.txt
+import std.file as file;
+
+func main() -> void {
+    print("once");
+    print(file.read_text("/tmp/minik_boyle_bir_dosya_yok.txt"));
+}

@@ -40,6 +40,7 @@ public:
     void visit(ListLiteral* node) override;
     void visit(ArrayAccessExpr* node) override;
     void visit(FunctionCallExpr* node) override;
+    void visit(MemberExpr* node) override;
     void visit(UnaryExpr* node) override;
     void visit(BinaryExpr* node) override;
     void visit(CastExpr* node) override;
@@ -70,6 +71,11 @@ private:
         bool isParam = false;
         int scopeDepth = 0;    // tanımlandığı kapsamın `scopes` içindeki sırası (declare yazar)
         bool isGpu = false;    // fonksiyon: @GPU ile tanımlı
+        // Fonksiyon / global: tanımlandığı modül ve başka modüllerden
+        // kullanılabilir mi (`public`).
+        int module = 0;
+        bool isPublic = false;
+        bool isExtern = false; // fonksiyon: gövdesi C'de (extern func)
     };
 
     // Açık olan her if ve döngü için bir çerçeve. break/continue/return
@@ -94,7 +100,81 @@ private:
 
     // --- kapsam ---
     bool declare(const std::string& name, const Symbol& sym, const ASTNode* at);
-    Symbol* lookup(const std::string& name);
+    Symbol* lookup(const std::string& name);   // kaynakta yazılan isim
+    Symbol* lookup(const Identifier* ident);   // çözülmüş ya da çözülmemiş düğüm
+    Symbol* findGlobal(const std::string& linkName);
+
+    // -----------------------------------------------------------------------
+    // Modüller
+    //
+    // Bütün modüllerin fonksiyon ve globalleri tek bir global kapsamda,
+    // tanımın adıyla durur: kök modülde kaynaktaki ad ("topla"), diğerlerinde
+    // modül önekiyle ("araclar$vektor$norm"; bkz. Module::prefix). Kaynakta
+    // yazılan bir isim, içinde bulunulan modüle göre tanımın adına çevrilir:
+    //
+    //   x          yerel değişken değilse: `from` ile alınan isim ya da modülün
+    //              kendi tanımı
+    //   v.x        v, `import ... as v` ile verilen ad (ya da `import a.b`
+    //              için "a.b"); x o modülün tanımı
+    //
+    // Bir modül yalnızca kendi tanımlarını ve import ettiklerini görür; başka
+    // modülün tanımını ancak `public` ise kullanabilir.
+    // Çözülen Identifier'ın adı tanımın adıyla değiştirilir; kod üretimi ve
+    // fonksiyon etkilerinin takibi yalnızca bu adı kullanır.
+    // -----------------------------------------------------------------------
+    struct ModuleNames {
+        std::unordered_map<std::string, int> aliases;           // v → modül sırası
+        std::unordered_map<std::string, std::string> imported;  // yerel ad → tanımın adı
+    };
+    const Program* program = nullptr;
+    std::vector<ModuleNames> moduleNames;  // modül sırasıyla
+    int currentModule = 0;                 // denetlenmekte olan bildirimin modülü
+
+    // Bir modülün üst seviye tanımı (fonksiyon, global ya da struct).
+    struct TopLevel {
+        int module;
+        bool isPublic;
+    };
+    std::unordered_map<std::string, TopLevel> topLevel;  // tanımın adı → sahibi
+
+    void collectTopLevel();
+    void bindImports();
+    std::string linkNameOf(const std::string& name) const; // çözülemezse boş
+    void reportUndefined(const Identifier* ident);
+
+    // -----------------------------------------------------------------------
+    // Struct'lar (SemaStruct.cpp)
+    //
+    // Struct tipli bir değişken, kapsamda kendisiyle birlikte alanları için de
+    // birer sembol taşır: `Nokta p` tanımı "p", "p.x" ve "p.y" sembollerini
+    // ekler (iç içe struct'larda "c.merkez.x" gibi). Böylece `p.x` sıradan bir
+    // değişken gibi çözülür ve değişkenler için geçerli bütün denetimler
+    // (salt okunur matris parametresi, paralel döngü kuralları, lambda
+    // yakalama yasağı) alanlar için de kendiliğinden işler.
+    //
+    //   * Alanlar sayı, bool, char, string, dizi, liste, matris ya da başka
+    //     bir struct olabilir. Bir struct kendisini içeremez.
+    //   * Değer `Nokta(1.0, 2.0)` ile oluşturulur: argümanlar tanım sırasıyla
+    //     alanlardır (FunctionCallExpr::isConstructor).
+    //   * Struct üzerindeki işlem, alanlarına tek tek uygulanan işlemdir:
+    //     `q = p` her alanı kendi tipinin kuralıyla atar (matris kopyalanır,
+    //     liste paylaşılır); fonksiyona vermek alanları tek tek vermektir.
+    //   * Global struct değişkeni ve @GPU fonksiyonda struct henüz yok.
+    // -----------------------------------------------------------------------
+    struct StructInfo {
+        enum State { Pending, Resolving, Done };
+        StructDecl* decl = nullptr;
+        State state = Pending;
+        SemType type; // alanları çözülmüş tip (hatalıysa Error)
+    };
+    std::unordered_map<std::string, StructInfo> structs; // tanımın adı → struct
+
+    SemType resolveNamedType(Type* t);
+    SemType resolveStruct(StructInfo& info);
+    void checkConstructor(FunctionCallExpr* node, const Identifier* ident, StructInfo& info);
+    // Değişkeni ve (struct ise) alanlarını içinde bulunulan kapsama ekler.
+    void declareVariable(const std::string& name, const Symbol& sym, const ASTNode* at);
+    void declareFields(const std::string& name, const Symbol& owner);
 
     // --- tipler ---
     SemType resolveType(Type* t);        // void dahil
@@ -121,6 +201,7 @@ private:
 
     // --- bildirimler ---
     void declareFunction(FunctionDecl* fn);
+    void checkExtern(FunctionDecl* fn, const std::vector<SemType>& params, const SemType& ret);
     void checkGlobal(VariableDecl* v);
     std::vector<SemType> resolveParams(const std::vector<std::unique_ptr<ParamDecl>>& params);
     void declareParams(const std::vector<std::unique_ptr<ParamDecl>>& params,

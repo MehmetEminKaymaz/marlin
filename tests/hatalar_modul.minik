@@ -1,0 +1,20 @@
+// error: 'moduller.geometri' modulunde 'olmayan' adinda bir tanim yok
+// error: 'ad' bu modulde zaten tanimli
+// error: tanimsiz modul: 'h' (import edilmemis)
+// error: 'g' modulunde 'yok' adinda bir tanim yok
+// error: tanimsiz isim: 'carp'
+// error: tanimsiz isim: 'PI'
+import moduller.geometri as g;
+from moduller.geometri import olmayan;
+from moduller.geometri import ad;
+
+func ad() -> int {
+    return 0;
+}
+
+func main() -> void {
+    print(h.kare(2));
+    print(g.yok(2));
+    print(carp(1, 2));      // geometri'nin import ettiği modül buradan görünmez
+    print(PI);              // import edilen modülün isimleri önek olmadan görünmez
+}

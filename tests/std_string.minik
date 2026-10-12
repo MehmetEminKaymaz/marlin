@@ -1,0 +1,37 @@
+// output: dunya 6 -1 8
+// output: true false true true false
+// output: merh-b- | bos |
+// output: MERHABA dunya
+// output: 3 a b c
+// output: 1 abc
+// output: 4 [] [x] [] []
+// output: a-b-c | true |
+// output: 2 4
+import std.string as str;
+from std.string import split, join;
+
+func main() -> void {
+    string s = "merhaba dunya";
+    print(str.substr(s, 8, 5), str.find(s, "a d"), str.find(s, "yok"), str.find_from(s, "d", 0));
+    print(str.contains(s, "hab"), str.contains(s, "x"), str.starts_with(s, "mer"),
+          str.ends_with(s, "dunya"), str.starts_with("a", "ab"));
+    print(str.replace("merhaba", "a", "-"), "|", str.trim("  \t bos \n"), "|");
+    print(str.upper("merhaba"), str.lower("DUNYA"));
+
+    list<string> p = split("a,b,c", ",");
+    print(len(p), p[0], p[1], p[2]);
+    list<string> tek = split("abc", ",");
+    print(len(tek), tek[0]);
+    list<string> bos = split(",x,,", ",");          // baştaki, aradaki ve sondaki boş parçalar
+    print(len(bos), "[" + bos[0] + "]", "[" + bos[1] + "]", "[" + bos[2] + "]", "[" + bos[3] + "]");
+
+    list<string> hic = [];
+    print(join(p, "-"), "|", join(tek, "-") == "abc", "|");
+    print(len(join(hic, ",")) + 2, len(join(split("a b", " "), "  ")));
+
+    // @pure: string fonksiyonları paralel döngüden çağrılabilir.
+    int64[3] konum;
+    parallel for i in 0 .. 3 {
+        konum[i] = str.find("abc", str.substr("abc", i, 1));
+    }
+}

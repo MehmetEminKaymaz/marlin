@@ -38,11 +38,12 @@
 //   MLIRMatrixManager       matrix<T>: tensor üzerinde işlemler, eleman erişimi
 //   MLIRRuntime             çalışma zamanı kütüphanesine çağrılar
 //
-// Uygulama dört dosyaya bölünmüştür:
+// Uygulama beş dosyaya bölünmüştür:
 //   MLIRGenerator.cpp        program, fonksiyonlar, globaller, bellek yardımcıları
 //   MLIRGeneratorExpr.cpp    ifadeler
 //   MLIRGeneratorStmt.cpp    deyimler
 //   MLIRGeneratorMatrix.cpp  matris ifadeleri ve matris belleğinin sahipliği
+//   MLIRGeneratorStruct.cpp  struct değerleri: oluşturma, kopyalama, alan erişimi
 //
 // Değerlerin gösterimi:
 //   sayısal / bool / char  → SSA değeri; değişkense memref<T> yuvasında
@@ -52,7 +53,15 @@
 //   matris matrix<T>       → ifade değeri olarak tensor<? x ? x T>; değişkende,
 //                            parametrede ve dönüşte memref<? x ? x T>. Değer
 //                            olarak davranır; belleğinin tek bir sahibi vardır.
-//   string                 → {ptr, i64} struct; değişkense llvm.alloca yuvasında
+//   string                 → i64: çalışma zamanındaki string bloğunun adresi
+//                            (değişmez; işlemleri runtime çağrılarıdır).
+//                            Skaler gibi saklanır: değişkense memref<i64> yuvasında
+//   struct                 → tek bir değer değildir: yapraklarına (struct
+//                            olmayan alanlarına) ayrılır. `Nokta p` değişkeni
+//                            "p.x", "p.y" adlı ayrı değişkenlerdir; her biri
+//                            kendi tipinin gösterimini kullanır. Fonksiyona
+//                            yaprak yaprak verilir ve döner
+//                            (bkz. MLIRGeneratorStruct.cpp)
 //   fonksiyon / lambda     → fonksiyon tipli SSA değeri (func.constant)
 //
 // GPU
@@ -92,6 +101,8 @@ class MLIRGenerator : public ASTVisitor {
     bool        usesGpu            = false;
     // Programdaki fonksiyonlar (çağrı üretilirken hedefleri buradan okunur).
     std::unordered_map<std::string, FunctionDecl*> functions;
+    // Derlenen program; konum bilgisine dosya adını yazmak için.
+    const Program* program = nullptr;
 
     // --- Matris sahipliği (ayrıntı: MLIRGeneratorMatrix.cpp) ---
     // Üretilmekte olan deyimde hesaplanmış, henüz kimsenin sahiplenmediği
@@ -140,6 +151,7 @@ public:
     void visit(ListLiteral* node) override;
     void visit(ArrayAccessExpr* node) override;
     void visit(FunctionCallExpr* node) override;
+    void visit(MemberExpr* node) override;
     void visit(UnaryExpr* node) override;
     void visit(BinaryExpr* node) override;
     void visit(CastExpr* node) override;
@@ -161,7 +173,9 @@ public:
     void visit(ReturnStmt* node) override;
 
 private:
-    mlir::Location locOf(const ASTNode* node) { return ctx.getLoc(node->line, node->column); }
+    mlir::Location locOf(const ASTNode* node) {
+        return ctx.getLoc(program->modules[node->module].path, node->line, node->column);
+    }
 
     /// İfadeyi üretir ve değerini döndürür.
     mlir::Value emitExpr(Expression* expr) {
@@ -227,7 +241,35 @@ private:
     /// İsim, bu fonksiyonda tanımlı (sahibi olduğumuz) bir matris değişkeniyse yuvası.
     mlir::Value ownedMatrixSlot(Expression* expr);
 
+    // --- Struct'lar (MLIRGeneratorStruct.cpp) ---
+    using Values = llvm::SmallVector<mlir::Value, 8>;
+    /// Struct tipli ifadeyi üretir; yapraklarının değerlerini tanım sırasıyla
+    /// döndürür (her biri, o tipte bir ifadeyi emitExpr'in üreteceği biçimde).
+    Values emitStructExpr(Expression* expr);
+    /// f().x — tabandaki struct'ın bir alanına düşen yapraklar.
+    Values emitMember(MemberExpr* node);
+    void declareStruct(VariableDecl* node);
+    void assignStruct(AssignmentStmt* node, Identifier* target);
+    /// Üretilmekte olan fonksiyon struct döndürüyorsa, dizi alanlarının
+    /// yazılacağı yerler (çağıran ayırır; bkz. MLIRTypeManager::convertFunction).
+    std::vector<mlir::Value> returnArraySlots;
+
+    // --- Çağrılar (MLIRGeneratorExpr.cpp) ---
+    /// Kullanıcı fonksiyonuna çağrıyı üretir. Sonuçlar: dönüş tipinin yaprakları
+    /// sırasıyla (struct değilse tek değer, void ise boş).
+    Values emitCall(FunctionCallExpr* node);
+    /// extern fonksiyona (çalışma zamanı kütüphanesindeki C fonksiyonuna) çağrı.
+    Values emitExternCall(FunctionDecl* decl, FunctionCallExpr* node);
+    mlir::Type externType(const SemType& type);
+
     // --- Deyimler (MLIRGeneratorStmt.cpp) ---
+    /// `name` adında yerel bir değişken oluşturur ve `value` ile başlatır.
+    void declareLocal(const std::string& name, const SemType& type, mlir::Value value,
+                      int line, mlir::Location loc);
+    /// Başlangıç değeri verilmemiş yerel değişken.
+    void declareDefault(const std::string& name, const SemType& type, mlir::Location loc);
+    /// `return expr;` — fonksiyon ve tek ifadeli lambda gövdeleri için ortak.
+    void emitReturn(Expression* expr, int line, mlir::Location loc);
     /// Deyimleri sırayla üretir; return/break/continue'dan sonrasını (erişilemez
     /// kodu) üretmez.
     void emitStatements(const std::vector<std::unique_ptr<Statement>>& statements);

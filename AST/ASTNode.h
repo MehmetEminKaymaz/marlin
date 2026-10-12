@@ -22,6 +22,8 @@ class ASTNode {
 
     int line = 0;
     int column = 0;
+    // Düğümün yazıldığı modül (Program::modules içindeki sıra); 0 = derlenen dosya.
+    int module = 0;
 
 };
 
@@ -41,6 +43,7 @@ class Type : public ASTNode {
     // Matrix: boyut sayısı. matrix<T> yazımında 2; geçersiz yazımda (tamsayı
     // olmayan sayı) -1 olur ve Sema raporlar.
     int rank = 0;
+    std::string name;   // Named: kaynakta yazılan tip adı ("Nokta", "geometri.Nokta")
     std::unique_ptr<Type> elementType;
     std::vector<std::unique_ptr<Type>> paramTypes;
     std::unique_ptr<Type> returnType;
@@ -49,8 +52,41 @@ class Type : public ASTNode {
     void accept(ASTVisitor& visitor) override {visitor.visit(this);}
 };
 
+// import a.b;   import a.b as v;   from a.b import f, g as h;
+//
+// Ziyaretçiler bu düğümü gezmez: ModuleLoader dosyayı bulup yükler, Sema
+// isimleri bağlar.
+class ImportDecl : public ASTNode {
+public:
+    struct Name {
+        std::string name;   // modüldeki adı
+        std::string alias;  // `as` ile verilen ad (yoksa boş)
+    };
+    std::string modulePath;   // "a.b"
+    std::string alias;        // import ... as v (yoksa boş)
+    bool isFrom = false;      // from ... import ...
+    std::vector<Name> names;  // from ile alınan isimler
+    int target = -1;          // Program::modules içindeki sıra (ModuleLoader doldurur)
+    void accept(ASTVisitor&) override {}
+};
+
+// Bir kaynak dosya. Program, derlenen dosyadan (kök modül) ve onun doğrudan
+// ya da dolaylı import ettiği dosyalardan oluşur.
+struct Module {
+    std::string name;    // import yolu ("araclar.vektor"); kök modülde boş
+    std::string path;    // kaynak dosyanın yolu (hata mesajları için)
+    // Kök dışındaki modüllerin fonksiyon ve globalleri bu önekle adlandırılır
+    // ("araclar$vektor$norm"); böylece farklı modüllerdeki aynı isimler
+    // çakışmaz. '$' kaynak kodda isim içinde yazılamaz. Kök modülde boştur:
+    // `main` ve diğer isimler olduğu gibi kalır.
+    std::string prefix;
+    std::vector<std::unique_ptr<ImportDecl>> imports;
+};
+
 class Program : public ASTNode {
     public:
+    std::vector<Module> modules;   // [0] kök modül
+    // Bütün modüllerin bildirimleri (her birinin `module` alanı sahibini gösterir).
     std::vector<std::unique_ptr<Statement>> declarations;
     void accept(ASTVisitor& visitor) override {visitor.visit(this);};
 };
@@ -95,6 +131,8 @@ public:
     // İsmin neye çözüldüğü (Sema doldurur)
     enum class Ref { Unresolved, Local, Global, Function };
 
+    // Kaynakta yazılan isim ("x", "v.norm"). Global ya da fonksiyona
+    // çözüldüğünde Sema bunu tanımın adıyla değiştirir (bkz. Module::prefix).
     std::string name;
     Ref ref = Ref::Unresolved;
     explicit Identifier(const std::string& n) : name(n) {}
@@ -123,7 +161,26 @@ public:
     // Çağrı bir yerleşik fonksiyona (print, sqrt ...) aitse Sema işaretler;
     // bu durumda `target` çözülmez ve kod üretiminde kullanılmaz.
     Builtin builtin = Builtin::None;
+    // Çağrı bir struct oluşturuyorsa (Nokta(1.0, 2.0)) Sema işaretler:
+    // argümanlar tanım sırasıyla alanların değerleridir, `type` struct'ın
+    // tipidir ve `target` çözülmez.
+    bool isConstructor = false;
     FunctionCallExpr(std::unique_ptr<Expression> t) : target(std::move(t)) {}
+    void accept(ASTVisitor& visitor) override { visitor.visit(this); }
+};
+
+// Bir ifadenin alanı: f().x, (a).y
+//
+// Değişkenin alanı (p.x) bu düğümle değil, noktalı adlı bir Identifier ile
+// gösterilir (bkz. qualifiedName); bu düğüm, struct değeri bir değişken
+// olmayan ifadeler içindir.
+class MemberExpr : public Expression {
+public:
+    std::unique_ptr<Expression> base;
+    std::string field;
+    int fieldIndex = -1; // alanın struct içindeki sırası (Sema doldurur)
+    MemberExpr(std::unique_ptr<Expression> b, std::string f)
+        : base(std::move(b)), field(std::move(f)) {}
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
@@ -175,6 +232,8 @@ public:
     std::unique_ptr<Type> type;
     std::unique_ptr<Expression> initializer;
     bool isLet;
+    // Global değişken: başka modüller import edebilir (`public` ile tanımlı).
+    bool isPublic = false;
     SemType varType; // Sema doldurur (let için çıkarılan tip dahil)
     VariableDecl(std::string n, std::unique_ptr<Type> t, std::unique_ptr<Expression> init, bool let = false)
         : name(std::move(n)), type(std::move(t)), initializer(std::move(init)), isLet(let) {}
@@ -208,7 +267,15 @@ public:
     std::unique_ptr<BlockStmt> body;
     SemType fnType; // Sema doldurur
 
-    // Fonksiyonun başına yazılan @CPU / @GPU (yazılmadıysa boş).
+    // Başka modüller import edebilir (`public` ile tanımlı). Yazılmadıysa
+    // fonksiyon private'tır: yalnızca kendi modülünde kullanılabilir.
+    bool isPublic = false;
+    // extern: gövdesi çalışma zamanı kütüphanesinde, C ile yazılı (`body`
+    // boştur). Yalnızca standart kütüphane modüllerinde bulunur.
+    bool isExtern = false;
+    std::string externName;  // C'deki adı: std.file / c_exists → minik_file_exists
+    bool isPure = false;     // extern: yan etkisi yok (@pure); Sema doldurur
+    // Fonksiyonun başına yazılan @CPU / @GPU (extern'de @pure); yazılmadıysa boş.
     std::string annotation;
     // Hedef (Sema doldurur). @GPU: fonksiyonun matrisleri GPU belleğinde
     // yaşar; içindeki `parallel for` ve matris işlemleri GPU'da çalışır.
@@ -223,6 +290,23 @@ public:
         return false;
     }
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
+};
+
+// struct Nokta { float64 x; float64 y; }
+//
+// Bir tip tanımıdır, çalıştırılan bir şey değil; ziyaretçiler gezmez. Sema
+// tipini çözer (alanlar SemType'ta taşınır), kod üretimi yalnızca o tipe bakar.
+class StructDecl : public Statement {
+public:
+    struct Field {
+        std::string name;
+        std::unique_ptr<Type> type;
+    };
+    std::string name;
+    std::vector<Field> fields;
+    // Başka modüller kullanabilir (`public` ile tanımlı); yazılmadıysa private.
+    bool isPublic = false;
+    void accept(ASTVisitor&) override {}
 };
 
 class LambdaExpr : public Expression {

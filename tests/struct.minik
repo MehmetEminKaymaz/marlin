@@ -1,0 +1,118 @@
+// output: 1.0 2.0 10.0 2.0
+// output: 81.0
+// output: 1.0 6.0
+// output: 2.0
+// output: 0.0 0.0
+// output: 3.0 4.0
+// output: 4.0 3.0
+// output: 7.0 0.0 2.5
+// output: 5 k true ad
+// output: 1 3 2 6
+// output: 6.0
+// output: 8
+// output: 1.5 1 3
+// output: 1 4.0 2
+// output: 3 8.0
+// output: 3.0 2.0
+// output: 5.0 1.0 1.0 5.0
+struct Nokta {
+    float64 x;
+    float64 y;
+}
+
+// Alanı başka bir struct olan struct.
+struct Cember {
+    Nokta merkez;
+    float64 r;
+}
+
+// Her tipten alan.
+struct Kayit {
+    int no;
+    char harf;
+    bool aktif;
+    string ad;
+    int[3] puanlar;
+    list<int> etiketler;
+    matrix<float64> m;
+}
+
+func uzaklikKare(Nokta a, Nokta b) -> float64 {
+    return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y);
+}
+
+func otele(Nokta p, float64 dx) -> Nokta {
+    p.x = p.x + dx;         // sayı alanları kopyadır: çağıranın değeri değişmez
+    return p;
+}
+
+func kayitYap(int no, float64 olcek) -> Kayit {
+    list<int> e = [no, no + 1];
+    matrix<float64> m = ones(2, 2);
+    return Kayit(no, 'k', true, "ad", [1, 2, 3], e, m * olcek);
+}
+
+func toplamPuan(Kayit k) -> int {
+    int t = 0;
+    for p in k.puanlar {
+        t = t + p;
+    }
+    return t + len(k.etiketler);
+}
+
+func main() -> void {
+    Nokta a = Nokta(1, 2);
+    Nokta b = a;                        // kopya
+    b.x = 10;
+    print(a.x, a.y, b.x, b.y);
+    print(uzaklikKare(a, b));
+
+    Nokta c = otele(a, 5);
+    print(a.x, c.x);
+    print(otele(a, 1).x);               // dönen struct'ın alanı
+
+    Nokta d;                            // başlangıç değeri yok: sıfırlar
+    print(d.x, d.y);
+    d = Nokta(d.y + 3, d.x + 4);
+    print(d.x, d.y);
+    d = Nokta(d.y, d.x);                // sağ taraf eski değerleri görür
+    print(d.x, d.y);
+
+    Cember cm = Cember(Nokta(1, 1), 2.5);
+    cm.merkez.x = 7;
+    Nokta m = cm.merkez;                // iç struct değer olarak
+    cm.merkez = Nokta(0, 0);
+    print(m.x, cm.merkez.x, cm.r);
+
+    let k = kayitYap(5, 1.5);
+    print(k.no, k.harf, k.aktif, k.ad);
+    print(k.puanlar[0], k.puanlar[2], len(k.etiketler), k.etiketler[1]);
+    print(sum(k.m));
+    print(toplamPuan(k));
+
+    // Kopyada her alan kendi tipinin kuralına uyar: matris ve dizi kopyalanır,
+    // liste paylaşılır.
+    Kayit k2 = k;
+    k2.m[0, 0] = 100;
+    k2.puanlar[0] = 50;
+    push(k2.etiketler, 9);
+    print(k.m[0, 0], k.puanlar[0], len(k.etiketler));
+
+    k2 = kayitYap(1, 1.0);
+    print(k2.no, sum(k2.m), k2.puanlar[1]);
+    print(kayitYap(3, 1.0).no, sum(kayitYap(2, 2.0).m));
+    kayitYap(4, 1.0);                   // sonucu kullanılmayan çağrı
+
+    // Lambdalar
+    let topla = (Nokta p) -> float64 | p.x + p.y;
+    let ikiz = (float64 v) -> Nokta | Nokta(v, v);
+    print(topla(a), ikiz(2).y);
+
+    // Paralel döngüde yerel struct
+    float64[4] sonuc;
+    parallel for i in 0 .. 4 {
+        Nokta q = Nokta(i, i);
+        sonuc[i] = uzaklikKare(q, a);
+    }
+    print(sonuc[0], sonuc[1], sonuc[2], sonuc[3]);
+}

@@ -1,0 +1,27 @@
+// output: 1.0 4.0
+// output: 0.0 0.0
+// output: 25.0
+// output: 3.0
+import moduller.sekil as s;
+from moduller.sekil import Nokta, Dogru as Cizgi;
+
+// Başka modülün struct'ını alan olarak kullanan struct.
+struct Etiketli {
+    s.Nokta yer;
+    int no;
+}
+
+func main() -> void {
+    s.Nokta p = s.Nokta(1, 2);          // modül adıyla
+    Nokta q = p;                        // `from` ile alınan tip; ikisi aynı tiptir
+    print(q.x, s.topla(p));
+
+    q = s.orijin();
+    print(q.x, q.y);
+
+    Cizgi c = Cizgi(q, Nokta(3, 4));
+    print(s.uzunlukKare(c));
+
+    Etiketli e = Etiketli(c.son, 7);
+    print(e.yer.x);
+}

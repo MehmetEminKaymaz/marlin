@@ -1,3 +1,6 @@
+    import std.string as str;
+    import std.file as file;
+
     int globalX = 42;
     float globalPi = 3.14;
 
@@ -57,6 +60,14 @@
         print("GPU:", matmulGpu());
         print("CPU:", matmulCpu());
         print(time());
+
+        file.write_text("deneme.txt", str(matmulCpu()));
+        string s = "asd";
+        print(s+"35");
+
+        if(s == "asd"){
+            print("eşit");
+        }
 
     }
 

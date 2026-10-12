@@ -1,0 +1,102 @@
+// std.string — string fonksiyonları.
+//
+//   import std.string as str;
+//   list<string> parcalar = str.split("a,b,c", ",");
+//
+// Stringler değişmez: her fonksiyon sonucunu YENİ bir string olarak döndürür,
+// verilen stringe dokunmaz. Konumlar ve uzunluklar bayt sayar (metin UTF-8'dir).
+// Birleştirme (+), karşılaştırma, len, str, to_int ve to_float dile gömülüdür.
+
+// C tarafı: runtime/std_string.c
+@pure extern func c_substr(string s, int64 start, int64 length) -> string;
+@pure extern func c_find(string s, string part, int64 start) -> int64;
+@pure extern func c_starts_with(string s, string prefix) -> bool;
+@pure extern func c_ends_with(string s, string suffix) -> bool;
+@pure extern func c_replace(string s, string old, string new) -> string;
+@pure extern func c_trim(string s) -> string;
+@pure extern func c_upper(string s) -> string;
+@pure extern func c_lower(string s) -> string;
+
+// s'in `start` konumundan başlayan `length` baytı. Aralık stringin dışına
+// taşarsa program mesajla durur.
+public func substr(string s, int64 start, int64 length) -> string {
+    return c_substr(s, start, length);
+}
+
+// part'ın s içinde ilk geçtiği konum; yoksa -1.
+public func find(string s, string part) -> int64 {
+    return c_find(s, part, 0);
+}
+
+// Aramaya `start` konumundan başlar.
+public func find_from(string s, string part, int64 start) -> int64 {
+    return c_find(s, part, start);
+}
+
+public func contains(string s, string part) -> bool {
+    return c_find(s, part, 0) >= 0;
+}
+
+public func starts_with(string s, string prefix) -> bool {
+    return c_starts_with(s, prefix);
+}
+
+public func ends_with(string s, string suffix) -> bool {
+    return c_ends_with(s, suffix);
+}
+
+// s içindeki her `old` yerine `new` konmuş hali.
+public func replace(string s, string old, string new) -> string {
+    return c_replace(s, old, new);
+}
+
+// Baştaki ve sondaki boşluklar (boşluk, sekme, satır sonu) atılmış hali.
+public func trim(string s) -> string {
+    return c_trim(s);
+}
+
+// Büyük / küçük harfe çevirir. Yalnızca İngilizce harfler (a-z) çevrilir;
+// Türkçe harfler (ş, ğ, ı ...) olduğu gibi kalır.
+public func upper(string s) -> string {
+    return c_upper(s);
+}
+
+public func lower(string s) -> string {
+    return c_lower(s);
+}
+
+// s'i `sep` ayracından böler: split("a,b,c", ",") → ["a", "b", "c"].
+// Ayraç hiç geçmiyorsa (ya da boşsa) tek elemanlı liste döner.
+public func split(string s, string sep) -> list<string> {
+    list<string> parts = [];
+    if len(sep) == 0 {
+        push(parts, s);
+        return parts;
+    }
+    int64 start = 0;
+    int64 at = c_find(s, sep, start);
+    while at >= 0 {
+        push(parts, c_substr(s, start, at - start));
+        start = at + len(sep);
+        at = c_find(s, sep, start);
+    }
+    push(parts, c_substr(s, start, len(s) - start));
+    return parts;
+}
+
+// Parçaları aralarına `sep` koyarak birleştirir: join(["a", "b"], "-") → "a-b".
+public func join(list<string> parts, string sep) -> string {
+    string result = "";
+    for i in 0 .. len(parts) {
+        // Her adımda yeni bir string oluşur; öncekine artık gerek yoktur.
+        string previous = result;
+        if i > 0 {
+            result = previous + sep;
+            free(previous);
+            previous = result;
+        }
+        result = previous + parts[i];
+        free(previous);
+    }
+    return result;
+}

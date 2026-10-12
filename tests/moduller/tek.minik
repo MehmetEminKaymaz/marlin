@@ -1,0 +1,9 @@
+// Test modülü: cift.minik ile birbirini import eder (döngü).
+import cift;
+
+public func tekMi(int n) -> bool {
+    if n == 0 {
+        return false;
+    }
+    return cift.ciftMi(n - 1);
+}

@@ -83,6 +83,12 @@ public:
         indentLevel--;
         indentLevel--;
     }
+    void visit(MemberExpr* node) override {
+        printNode("MemberAccess: ." + node->field);
+        indentLevel++;
+        if (node->base) node->base->accept(*this);
+        indentLevel--;
+    }
     void visit(UnaryExpr* node) override {
         std::string op = (node->op == UnaryExpr::Negate) ? "Negate" : "Not";
         printNode("UnaryExpr: " + op);
@@ -235,6 +241,7 @@ public:
             case TypeKind::List:    typeStr = "List"; break;
             case TypeKind::Matrix:  typeStr = "Matrix"; break;
             case TypeKind::Lambda:  typeStr = "Lambda"; break;
+            case TypeKind::Named:   typeStr = node->name; break;
             default: typeStr = "Unknown"; break;
         }
         printNode("Type: " + typeStr);
