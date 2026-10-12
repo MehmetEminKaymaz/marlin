@@ -209,6 +209,7 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `hatalar_cok_boyutlu.minik` | Boyut sayısıyla ilgili derleme hataları |
 | `paralel.minik` | `parallel for`: liste, dizi ve matrise paralel yazma, iç içe paralel döngü |
 | `hatalar_paralel.minik` | Paralel döngüde yarışa yol açabilecek kullanımların reddedilmesi |
+| `zaman.minik` | `time()` ile süre ölçme; çekirdeklere dağıtılan `matmul` |
 | `gpu.minik` | `@GPU` fonksiyonlar: GPU'da `parallel for`, matris işlemleri, `matmul`, `sum`, CPU ↔ GPU kopyalama |
 | `hatalar_gpu.minik` | `@GPU` fonksiyonlarda izin verilmeyen kullanımlar |
 
@@ -526,6 +527,7 @@ Bilinmesi gerekenler:
 | | |
 |---|---|
 | Çıktı | `print(a, b, ...)` — değerleri boşlukla ayırıp yazar, satır sonu ekler |
+| Zaman | `time()` — saniye cinsinden zaman (`float64`). Tek başına anlamı yoktur; iki çağrının farkı aradaki süreyi verir. |
 | Matematik | `sqrt sin cos tan atan atan2 tanh exp log log2 log10 pow` |
 | Yuvarlama | `floor ceil round trunc` (sonuç kayan noktadır: `floor(2.7)` → `2.0`) |
 | Diğer | `abs min max` (tamsayıda tamsayı, kayan noktada kayan nokta döner) |
@@ -534,6 +536,16 @@ Bilinmesi gerekenler:
 | Matris oluşturma | `zeros(d1, ..., dn)` `ones(d1, ..., dn)` `fill(d1, ..., dn, deger)` — her boyut için bir uzunluk |
 | Matris işlemleri | `sum(a)` `shape(a, i)` — her boyut sayısında |
 | Yalnızca iki boyutta | `matmul(a, b)` `transpose(a)` `rows(a)` `cols(a)` |
+
+**Süre ölçmek:**
+
+```
+float64 once = time();
+matrix<float64> c = matmul(a, b);
+print("sure:", time() - once, "saniye");
+```
+
+`matmul` CPU'da işlemcinin çekirdeklerine dağıtılır (`parallel for` ile aynı yoldan); diğer matris işlemleri şimdilik tek çekirdekte çalışır. `@GPU` fonksiyonda `time()` yalnızca `parallel for` dışında kullanılabilir. Bir programda GPU ilk kullanıldığında yarım saniye kadar başlatma süresi olur; GPU'daki bir işi ölçerken ilk çağrıyı değil sonrakileri ölç.
 
 **Bilinmesi gereken kurallar:**
 
@@ -592,6 +604,7 @@ MLIRBackend/        AST → MLIR
 LLVMBackend/        MLIR → çalıştırılabilir dosya
   LLVMLowering.*      MLIR'i LLVM IR'a indirir
   GpuOffload.*        @GPU fonksiyonlardaki paralel işleri GPU çekirdeğine çevirir
+  ParallelMatmul.*    CPU'da matris çarpımını çekirdeklere dağıtır
   NativeCodegen.*     Optimizasyon, nesne dosyası, bağlama
 
 runtime/minik_rt.c  Derlenen programlara eklenen C kütüphanesi (print, hata mesajları)

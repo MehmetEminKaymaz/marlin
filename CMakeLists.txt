@@ -105,6 +105,8 @@ set(PROJECT_SOURCES
         LLVMBackend/NativeCodegen.h
         LLVMBackend/GpuOffload.cpp
         LLVMBackend/GpuOffload.h
+        LLVMBackend/ParallelMatmul.cpp
+        LLVMBackend/ParallelMatmul.h
         AST/Builtins.h
         AST/SemType.h
         AST/Sema.cpp
@@ -141,7 +143,8 @@ add_executable(minik_lang
 # (mlir::Pass'ten türeyen sınıf) da öyle derlenmeli; aksi halde bağlayıcı
 # mlir::Pass'in tip bilgisini arar ve bulamaz. Projenin geri kalanı RTTI
 # kullanır (AST üzerinde dynamic_cast, ANTLR).
-set_source_files_properties(LLVMBackend/GpuOffload.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+set_source_files_properties(LLVMBackend/GpuOffload.cpp LLVMBackend/ParallelMatmul.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
 
 # Çalışma zamanı kütüphanesi: derlenen her minik programına bağlanır (print vb.).
 # Derleyiciyle aynı dizine üretilir; minik_lang onu yanında arar, bulamazsa

@@ -10,7 +10,7 @@
 // fonksiyon olamazlar çünkü birden çok tiple çalışırlar (print(5), print("a");
 // sqrt(float), sqrt(float64)) ve dilde aşırı yükleme yoktur.
 //
-//   * print: çalışma zamanı kütüphanesindeki (runtime/minik_rt.c) C
+//   * print, time: çalışma zamanı kütüphanesindeki (runtime/minik_rt.c) C
 //     fonksiyonlarına çağrı olarak üretilir.
 //   * Matematik: MLIR'in math/arith operasyonlarına çevrilir; C çağrısı
 //     yazılmaz. Böylece aynı işlem CPU'da ve GPU'da hedefin kendi
@@ -25,6 +25,7 @@
 enum class Builtin {
     None,
     Print,
+    Time,                     // time(): saniye cinsinden zaman (float64); süre ölçmek için
     // Tek argümanlı, kayan nokta sonuçlu
     Sqrt, Sin, Cos, Tan, Atan, Tanh, Exp, Log, Log2, Log10,
     Floor, Ceil, Round, Trunc,
@@ -43,7 +44,7 @@ enum class Builtin {
 
 inline Builtin lookupBuiltin(const std::string& name) {
     static const struct { const char* name; Builtin builtin; } table[] = {
-        {"print", Builtin::Print},
+        {"print", Builtin::Print}, {"time", Builtin::Time},
         {"sqrt", Builtin::Sqrt},   {"sin", Builtin::Sin},     {"cos", Builtin::Cos},
         {"tan", Builtin::Tan},     {"atan", Builtin::Atan},   {"tanh", Builtin::Tanh},
         {"exp", Builtin::Exp},     {"log", Builtin::Log},     {"log2", Builtin::Log2},

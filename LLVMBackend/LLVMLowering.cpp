@@ -1,6 +1,7 @@
 #include "LLVMLowering.h"
 
 #include "GpuOffload.h"
+#include "ParallelMatmul.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
@@ -101,8 +102,11 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
     //      paralel döngüye, oradan GPU çekirdeğine çevrilir.
     if (usesGpu) pm.addPass(createGpuOffloadPass());
 
-    // B) Kalan (CPU'daki) linalg işlemleri (generic, matmul, fill) → scf.for
-    //    döngüleri.
+    // B) CPU'daki linalg işlemleri → döngüler.
+    //    Matris çarpımı paralel döngüye açılır ve aşağıda (C) çekirdeklere
+    //    dağıtılır (bkz. ParallelMatmul.h); kalanlar (eleman eleman işlemler,
+    //    fill ...) sıralı scf.for döngüleri olur.
+    pm.addPass(createParallelMatmulPass());
     pm.addPass(mlir::createConvertLinalgToLoopsPass());
 
     // G2

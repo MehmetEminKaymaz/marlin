@@ -71,6 +71,11 @@ void Sema::checkGpuBuiltin(FunctionCallExpr* call, const std::string& name) {
         case Builtin::Print:
             error(call, "@GPU fonksiyonda print kullanilamaz; degeri dondurup @CPU tarafinda yazdirin");
             return;
+        case Builtin::Time:
+            // Döngünün dışında (CPU'da çalışan kısımda) serbesttir.
+            if (inGpuKernel())
+                error(call, "GPU'da calisan paralel dongunun icinde '" + name + "' kullanilamaz");
+            return;
         case Builtin::Zeros: case Builtin::Ones: case Builtin::Fill:
         case Builtin::Matmul: case Builtin::Transpose: case Builtin::Sum:
             noteGpuWork("matris kullaniyor");

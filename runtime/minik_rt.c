@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 // --- Çalışma zamanı hataları ---
@@ -98,6 +99,16 @@ void minik_panic_matmul(int32_t line) {
     report_print(1, "x");
     fputs("); soldakinin sutun sayisi sagdakinin satir sayisina esit olmali\n", stderr);
     fail();
+}
+
+// --- time ---
+// Saniye cinsinden zaman. Başlangıç anı belirsizdir (makinenin açılışı);
+// yalnızca iki çağrının farkı anlamlıdır. Saat geri gitmez (sistem saati
+// değiştirilse bile), bu yüzden süre ölçmeye uygundur.
+double minik_time(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
 }
 
 // --- print ---

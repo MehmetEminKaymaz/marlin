@@ -116,8 +116,9 @@ public:
           listManager(ctx, runtime),
           matrixManager(ctx, runtime) {}
 
-    /// Program `parallel for` içeriyor mu? (İçeriyorsa çalıştırılabilir dosyaya
-    /// iş parçacığı çalışma zamanı da bağlanmalıdır.)
+    /// Program CPU'da paralel çalışan kod (`parallel for` ya da matris çarpımı)
+    /// içeriyor mu? (İçeriyorsa çalıştırılabilir dosyaya iş parçacığı çalışma
+    /// zamanı da bağlanmalıdır.)
     bool usesParallelLoops() const { return usesParallel; }
 
     /// @GPU fonksiyonlar GPU için mi üretilsin? (Varsayılan: evet.)

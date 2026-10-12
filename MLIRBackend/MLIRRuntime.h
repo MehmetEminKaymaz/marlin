@@ -36,6 +36,24 @@ public:
         b.create<mlir::func::CallOp>(loc, callee, mlir::ValueRange(args));
     }
 
+    /// Değer döndüren çalışma zamanı fonksiyonuna çağrı.
+    mlir::Value callValue(llvm::StringRef name, llvm::ArrayRef<mlir::Value> args,
+                          mlir::Type resultType, mlir::Location loc) {
+        mlir::OpBuilder& b = ctx.builder;
+
+        auto callee = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(name);
+        if (!callee) {
+            llvm::SmallVector<mlir::Type, 4> inputs;
+            for (mlir::Value arg : args) inputs.push_back(arg.getType());
+
+            mlir::OpBuilder::InsertionGuard guard(b);
+            b.setInsertionPointToStart(ctx.theModule.getBody());
+            callee = b.create<mlir::func::FuncOp>(loc, name, b.getFunctionType(inputs, {resultType}));
+            callee.setPrivate();
+        }
+        return b.create<mlir::func::CallOp>(loc, callee, mlir::ValueRange(args)).getResult(0);
+    }
+
     /// scf.if %cond { body }  — çalışma zamanı denetimleri için: koşul
     /// doğruysa gövdedeki hata çağrıları çalışır ve program durur.
     void ifThen(mlir::Value cond, mlir::Location loc, llvm::function_ref<void()> body) {

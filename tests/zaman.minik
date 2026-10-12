@@ -1,0 +1,23 @@
+// time(): saniye cinsinden zaman. Değeri her çalıştırmada farklıdır; burada
+// yalnızca geri gitmediği ve bir işin süresinin ölçülebildiği denetlenir.
+// output: true
+// output: true
+// output: 1000.0
+
+// CPU'da matris çarpımı çekirdeklere dağıtılır; sonuç değişmemeli.
+func carp(int n) -> float64 {
+    matrix<float64> a = ones(n, n);
+    matrix<float64> b = fill(n, n, 0.5);
+    return sum(matmul(a, b)) / n / n;
+}
+
+func main() -> void {
+    float64 once = time();
+    float64 sonuc = carp(200) * 10.0;
+    float64 sonra = time();
+
+    float64 sure = sonra - once;
+    print(sure >= 0.0);
+    print(sure < 60.0);
+    print(sonuc);
+}

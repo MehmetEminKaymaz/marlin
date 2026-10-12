@@ -734,6 +734,13 @@ void Sema::checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
             }
             return;
 
+        // time(): bir başlangıç anından beri geçen süre, saniye. Tek başına
+        // anlamı yoktur; iki çağrının farkı aradaki süreyi verir.
+        case Builtin::Time:
+            if (!expectArgs(0)) return;
+            node->type = SemType::Float(64);
+            return;
+
         // --- Matrisler ---
 
         // zeros(d1, ..., dn) / ones(...) / fill(d1, ..., dn, deger): her boyut

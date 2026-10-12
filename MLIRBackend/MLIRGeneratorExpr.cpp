@@ -236,6 +236,10 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
             builtinManager.buildPrint(args, types, loc);
             return;
 
+        case Builtin::Time:
+            lastValue = runtime.callValue("minik_time", {}, ctx.builder.getF64Type(), loc);
+            return;
+
         case Builtin::Push:
             listManager.push(args[0], args[1], loc);
             return;

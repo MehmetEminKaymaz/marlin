@@ -299,6 +299,9 @@ void MLIRGenerator::emitMatrixBuiltin(FunctionCallExpr* node) {
             mlir::Value lhs = emitExpr(args[0].get());
             mlir::Value rhs = emitExpr(args[1].get());
             setMatrixResult(matrixManager.matmul(lhs, rhs, node->line, loc));
+            // CPU'da matris çarpımı çekirdeklere dağıtılır (bkz. LLVMLowering,
+            // ParallelMatmul); program iş parçacığı çalışma zamanına bağlanmalı.
+            if (!ctx.onDevice) usesParallel = true;
             return;
         }
 
