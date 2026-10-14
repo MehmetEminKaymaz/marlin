@@ -91,9 +91,10 @@ void MLIRGenerator::visit(StringLiteral* node) {
 void MLIRGenerator::visit(Identifier* node) {
     auto loc = locOf(node);
 
-    // Struct tek bir değer değildir; değerini isteyenler emitStructExpr
-    // kullanır. Buraya yalnızca değeri kullanılmayan bir deyimden gelinir (p;).
-    if (node->type.isStruct()) {
+    // Struct (ve struct listesi) tek bir değer değildir; değerini isteyenler
+    // emitLeaves kullanır. Buraya yalnızca değeri kullanılmayan bir deyimden
+    // gelinir (p;).
+    if (node->type.isComposite()) {
         lastValue = mlir::Value{};
         return;
     }
@@ -132,22 +133,32 @@ void MLIRGenerator::visit(ListLiteral* node) {
         emitMatrixLiteral(node);
         return;
     }
+    if (node->type.isComposite()) { // struct listesi; değeri emitLeaves ile alınır
+        emitLeaves(node);
+        lastValue = mlir::Value{};
+        return;
+    }
     if (node->type.isList()) {
-        llvm::SmallVector<mlir::Value, 8> elements;
-        for (auto& elem : node->elements)
-            elements.push_back(emitExpr(elem.get()));
-        lastValue = listManager.create(
-            typeManager.convert(node->type.elementType()), elements, locOf(node));
+        lastValue = emitStructListLiteral(node).front();
         return;
     }
 
+    // Geçici dizi. String dizisinin elemanları diziye aittir; deyim bitince
+    // bırakılırlar.
     mlir::Value memref = createStorage(node->type, locOf(node));
     emitListInto(node, memref);
+    if (holdsStrings(node->type)) temporaries.push_back({memref, node->type});
     lastValue = memref;
 }
-
 void MLIRGenerator::visit(ArrayAccessExpr* node) {
     auto loc = locOf(node);
+
+    // liste[i], elemanı struct: tek bir değeri yoktur (bkz. visit(Identifier)).
+    if (node->type.isComposite()) {
+        emitLeaves(node);
+        lastValue = mlir::Value{};
+        return;
+    }
 
     // matris[i, j, ...] — her boyut için bir indeks; bellek üzerinden, sınır denetimli
     if (node->target->type.isMatrix()) {
@@ -173,12 +184,20 @@ void MLIRGenerator::visit(ArrayAccessExpr* node) {
         return;
     }
 
+    // liste[i] — sınır denetimli
+    if (node->target->type.isList()) {
+        lastValue = emitElement(node, 0, 1).front();
+        return;
+    }
+
     mlir::Value memref = emitExpr(node->target.get());
     mlir::Value index  = toIndex(emitExpr(node->indices[0].get()), node->indices[0]->type, loc);
-    if (node->target->type.isList())
-        lastValue = listManager.loadElement(memref, index, node->line, loc); // sınır denetimli
-    else
-        lastValue = ctx.builder.create<mlir::memref::LoadOp>(loc, memref, mlir::ValueRange(index));
+    lastValue = ctx.builder.create<mlir::memref::LoadOp>(loc, memref, mlir::ValueRange(index));
+    // Okunan string bu deyimin başvurusu olur (bkz. MLIRGeneratorString.cpp).
+    if (node->type.isString()) {
+        retainString(lastValue, loc);
+        stringResult(lastValue);
+    }
 }
 
 // ===========================================================================
@@ -199,8 +218,8 @@ void MLIRGenerator::visit(FunctionCallExpr* node) {
 
     // Struct oluşturma ya da struct döndüren çağrı, değeri kullanılmadan
     // (deyim olarak): yine de üretilir, sonucu deyim sonunda bırakılır.
-    if (node->type.isStruct()) {
-        emitStructExpr(node);
+    if (node->type.isComposite()) {
+        emitLeaves(node);
         lastValue = mlir::Value{};
         return;
     }
@@ -228,8 +247,8 @@ MLIRGenerator::Values MLIRGenerator::emitCall(FunctionCallExpr* node) {
     // Struct argüman yaprak yaprak verilir; her yaprak kendi tipinin kuralıyla.
     llvm::SmallVector<mlir::Value, 4> args;
     for (auto& argExpr : node->arguments) {
-        if (argExpr->type.isStruct()) {
-            Values values = emitStructExpr(argExpr.get());
+        if (argExpr->type.isComposite()) {
+            Values values = emitLeaves(argExpr.get());
             const std::vector<SemLeaf> leaves = leavesOf(argExpr->type);
             for (size_t i = 0; i < leaves.size(); ++i)
                 args.push_back(leaves[i].type.isMatrix() ? matrixManager.toBuffer(values[i], loc)
@@ -274,6 +293,9 @@ MLIRGenerator::Values MLIRGenerator::emitCall(FunctionCallExpr* node) {
     for (const SemLeaf& leaf : resultLeaves) {
         const bool viaSlot = node->type.isStruct() && leaf.type.isArray();
         results.push_back(viaSlot ? arraySlots[nextSlot++] : callOp->getResult(nextResult++));
+        // Dönen stringlerin başvurusu artık bu deyimindir.
+        if (leaf.type.isString()) stringResult(results.back());
+        else if (viaSlot && holdsStrings(leaf.type)) temporaries.push_back({results.back(), leaf.type});
     }
     return results;
 }
@@ -303,6 +325,8 @@ MLIRGenerator::Values MLIRGenerator::emitExternCall(FunctionDecl* decl, Function
             loc, mlir::arith::CmpIPredicate::ne, result, zero);
     } else if (node->type.isChar()) {
         result = ctx.builder.create<mlir::arith::TruncIOp>(loc, ctx.builder.getIntegerType(8), result);
+    } else if (node->type.isString()) {
+        stringResult(result); // C fonksiyonu her zaman yeni bir string döndürür
     }
     return {result};
 }
@@ -310,7 +334,7 @@ MLIRGenerator::Values MLIRGenerator::emitExternCall(FunctionDecl* decl, Function
 void MLIRGenerator::visit(MemberExpr* node) {
     Values values = emitMember(node);
     // Alan da struct ise tek bir değeri yoktur (bkz. visit(Identifier)).
-    lastValue = node->type.isStruct() ? mlir::Value{} : values.front();
+    lastValue = node->type.isComposite() ? mlir::Value{} : values.front();
 }
 
 void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
@@ -334,6 +358,34 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
             break;
     }
 
+    // Liste yerleşikleri: liste (ve eleman) struct içeriyorsa birden çok
+    // değerden oluşur; argümanlarını kendileri üretir (MLIRGeneratorList.cpp).
+    const bool onList = !node->arguments.empty() && node->arguments[0]->type.isList();
+    switch (node->builtin) {
+        case Builtin::Push:
+            emitListPush(node);
+            lastValue = mlir::Value{};
+            return;
+        case Builtin::Pop: {
+            Values values = emitListPop(node);
+            lastValue = node->type.isComposite() ? mlir::Value{} : values.front();
+            return;
+        }
+        case Builtin::Free:
+            if (!onList) break;
+            emitListFree(node);
+            lastValue = mlir::Value{};
+            return;
+        case Builtin::Len:
+            if (!onList) break;
+            lastValue = ctx.builder.create<mlir::arith::IndexCastOp>(
+                loc, ctx.builder.getI64Type(),
+                listManager.length(emitLeaves(node->arguments[0].get(), 0, 1).front(), loc));
+            return;
+        default:
+            break;
+    }
+
     llvm::SmallVector<mlir::Value, 4> args;
     llvm::SmallVector<SemType, 4> types;
     for (auto& argExpr : node->arguments) {
@@ -351,19 +403,15 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
             lastValue = runtime.callValue("minik_time", {}, ctx.builder.getF64Type(), loc);
             return;
 
-        case Builtin::Push:
-            listManager.push(args[0], args[1], loc);
-            return;
-        case Builtin::Pop:
-            lastValue = listManager.pop(args[0], node->line, loc);
-            return;
+        // free(s): stringlerin belleği kendiliğinden bırakılır; çağrı bir şey
+        // yapmaz (eski kod derlenmeye devam etsin diye kabul edilir).
         case Builtin::Free:
-            if (types[0].isString()) runtime.call("minik_str_free", {args[0]}, loc);
-            else listManager.free(args[0], loc);
             return;
 
         case Builtin::Str:
             lastValue = builtinManager.buildToString(args[0], types[0], loc);
+            // (str(s) stringin kendisidir; yeni bir değer üretmez.)
+            if (!types[0].isString()) stringResult(lastValue);
             return;
         case Builtin::ToInt:
         case Builtin::ToFloat: {
@@ -374,14 +422,11 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
             return;
         }
 
-        // len: listede çalışma zamanı uzunluğu, dizide sabit, stringde
-        // bloğun başlığındaki uzunluk. Sonuç int64.
+        // len: dizide sabit, stringde bloğun başlığındaki uzunluk (listede
+        // çalışma zamanı uzunluğu; yukarıda ele alındı). Sonuç int64.
         case Builtin::Len: {
             mlir::Type i64 = ctx.builder.getI64Type();
-            if (types[0].isList())
-                lastValue = ctx.builder.create<mlir::arith::IndexCastOp>(
-                    loc, i64, listManager.length(args[0], loc));
-            else if (types[0].isArray())
+            if (types[0].isArray())
                 lastValue = arithManager.buildIntConstant(types[0].arraySize, i64, loc);
             else
                 lastValue = runtime.callValue("minik_str_len", {args[0]}, i64, loc);
@@ -432,6 +477,7 @@ void MLIRGenerator::visit(BinaryExpr* node) {
     mlir::Value right = emitExpr(node->right.get());
     if (node->left->type.isString()) {
         lastValue = builtinManager.buildStringBinary(node->op, left, right, loc);
+        if (node->op == BinaryExpr::Add) stringResult(lastValue);
         return;
     }
     lastValue = arithManager.buildBinary(node->op, left, right, node->left->type, loc);

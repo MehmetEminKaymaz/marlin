@@ -88,15 +88,10 @@ public func split(string s, string sep) -> list<string> {
 public func join(list<string> parts, string sep) -> string {
     string result = "";
     for i in 0 .. len(parts) {
-        // Her adımda yeni bir string oluşur; öncekine artık gerek yoktur.
-        string previous = result;
         if i > 0 {
-            result = previous + sep;
-            free(previous);
-            previous = result;
+            result = result + sep;
         }
-        result = previous + parts[i];
-        free(previous);
+        result = result + parts[i];
     }
     return result;
 }

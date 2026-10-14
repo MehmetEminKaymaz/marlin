@@ -517,6 +517,17 @@ virtual std::any visitBaseType(minikParser::BaseTypeContext *ctx) override {
         return static_cast<Statement*>(new AssignmentStmt(std::move(target), std::move(value)));
     }
 
+    // Liste elemanının alanına atama: l[i].x = 5;
+    virtual std::any visitMemberAssignment(minikParser::MemberAssignmentContext *ctx) override {
+        auto base = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
+        auto target = std::unique_ptr<Expression>(
+            new MemberExpr(std::move(base), ctx->IDENTIFIER()->getText()));
+        setLoc(target.get(), ctx->IDENTIFIER()->getSymbol());
+        auto value = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(1))));
+
+        return static_cast<Statement*>(new AssignmentStmt(std::move(target), std::move(value)));
+    }
+
     // 4. Boş Değişken Tanımı: int x;
     virtual std::any visitVariableTypeDefinitionEmpty(minikParser::VariableTypeDefinitionEmptyContext *ctx) override {
         std::string name = ctx->IDENTIFIER()->getText();

@@ -19,7 +19,7 @@
 //   * Değişkene yeni değer atanınca eski belleği bırakılır.
 //
 //   * Blok bitince, o blokta tanımlanan matris değişkenleri bırakılır
-//     (freeMatrixScopes). return / break / continue ile çıkışlarda da aynısı.
+//     (freeScopes). return / break / continue ile çıkışlarda da aynısı.
 //
 //   * Parametreler ödünç alınmıştır: çağıranın belleğidir, fonksiyon onu ne
 //     değiştirir (Sema engeller) ne de bırakır.
@@ -27,6 +27,7 @@
 #include "MLIRGenerator.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include <algorithm>
@@ -36,7 +37,7 @@
 // ===========================================================================
 
 void MLIRGenerator::setMatrixResult(MLIRMatrixManager::Result result) {
-    temporaries.push_back(result.buffer);
+    temporaries.push_back({result.buffer, SemType::Matrix(SemType::Float(64), 2)});
     ownedBuffers[result.tensor] = result.buffer;
     lastValue = result.tensor;
 }
@@ -45,7 +46,8 @@ mlir::Value MLIRGenerator::takeMatrixOwnership(mlir::Value tensor, int line, mli
     // Yeni hesaplanmış bir geçici: belleği olduğu gibi devral.
     auto owned = ownedBuffers.find(tensor);
     if (owned != ownedBuffers.end()) {
-        auto position = std::find(temporaries.begin(), temporaries.end(), owned->second);
+        auto position = std::find_if(temporaries.begin(), temporaries.end(),
+            [&](const Owned& temporary) { return temporary.value == owned->second; });
         if (position != temporaries.end()) temporaries.erase(position);
         ownedBuffers.erase(owned);
         return matrixManager.toBuffer(tensor, loc);
@@ -61,8 +63,9 @@ mlir::Value MLIRGenerator::takeMatrixOwnership(mlir::Value tensor, int line, mli
 
 void MLIRGenerator::flushTemporaries(mlir::Location loc, size_t from) {
     for (size_t i = from; i < temporaries.size(); ++i) {
-        mlir::Value buffer = temporaries[i];
-        matrixManager.freeBuffer(buffer, loc);
+        releaseOwned(temporaries[i], /*isSlot=*/false, loc);
+        if (!temporaries[i].type.isMatrix()) continue;
+        mlir::Value buffer = temporaries[i].value;
         for (auto it = ownedBuffers.begin(); it != ownedBuffers.end(); ++it) {
             if (it->second != buffer) continue;
             ownedBuffers.erase(it);
@@ -72,12 +75,11 @@ void MLIRGenerator::flushTemporaries(mlir::Location loc, size_t from) {
     temporaries.resize(std::min(from, temporaries.size()));
 }
 
-void MLIRGenerator::freeMatrixScopes(size_t fromDepth, mlir::Location loc, mlir::Value keep) {
-    for (size_t depth = fromDepth; depth < matrixScopes.size(); ++depth) {
-        for (mlir::Value slot : matrixScopes[depth]) {
-            if (slot == keep) continue;
-            mlir::Value buffer = ctx.builder.create<mlir::memref::LoadOp>(loc, slot);
-            matrixManager.freeBuffer(buffer, loc);
+void MLIRGenerator::freeScopes(size_t fromDepth, mlir::Location loc, mlir::Value keep) {
+    for (size_t depth = fromDepth; depth < ownedScopes.size(); ++depth) {
+        for (const Owned& owned : ownedScopes[depth]) {
+            if (owned.value == keep) continue;
+            releaseOwned(owned, /*isSlot=*/true, loc);
         }
     }
 }
@@ -87,9 +89,9 @@ mlir::Value MLIRGenerator::ownedMatrixSlot(Expression* expr) {
     if (!ident || ident->ref != Identifier::Ref::Local || !ident->type.isMatrix())
         return {};
     mlir::Value storage = scopeManager.lookupVariable(ident->name);
-    for (auto& scope : matrixScopes)
-        if (std::find(scope.begin(), scope.end(), storage) != scope.end())
-            return storage;
+    for (auto& scope : ownedScopes)
+        for (const Owned& owned : scope)
+            if (owned.value == storage) return storage;
     return {}; // parametre: sahibi biz değiliz
 }
 
@@ -98,7 +100,12 @@ mlir::Value MLIRGenerator::emitMatrixBuffer(Expression* expr) {
     auto* ident = dynamic_cast<Identifier*>(expr);
     if (ident && ident->ref == Identifier::Ref::Local)
         return loadFrom(scopeManager.lookupVariable(ident->name), ident->type, locOf(expr));
-    return matrixManager.toBuffer(emitExpr(expr), locOf(expr));
+    // Liste elemanının matrisi (l[i].m): tensor zaten bir bellekten okunmuştur;
+    // o bellek doğrudan kullanılır (l[i].m[r, c] = ... yerinde yazmalı).
+    mlir::Value tensor = emitExpr(expr);
+    if (auto toTensor = tensor.getDefiningOp<mlir::bufferization::ToTensorOp>())
+        return toTensor.getMemref();
+    return matrixManager.toBuffer(tensor, locOf(expr));
 }
 
 // ===========================================================================

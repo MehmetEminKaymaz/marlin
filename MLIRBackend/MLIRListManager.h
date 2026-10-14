@@ -59,10 +59,13 @@ public:
     mlir::Value length(mlir::Value list, mlir::Location loc);
 
     /// liste[index]. İndeks sınır dışındaysa program hata mesajıyla durur;
-    /// `line` o mesajda gösterilen kaynak satırıdır.
-    mlir::Value loadElement(mlir::Value list, mlir::Value index, int line, mlir::Location loc);
+    /// `line` o mesajda gösterilen kaynak satırıdır. `checked` = false: indeks
+    /// aynı uzunluktaki başka bir listede zaten denetlendi (struct listesinin
+    /// sütunları; bkz. MLIRGeneratorList.cpp).
+    mlir::Value loadElement(mlir::Value list, mlir::Value index, int line, mlir::Location loc,
+                            bool checked = true);
     void storeElement(mlir::Value list, mlir::Value index, mlir::Value value, int line,
-                      mlir::Location loc);
+                      mlir::Location loc, bool checked = true);
 
     void push(mlir::Value list, mlir::Value value, mlir::Location loc);
     /// Son elemanı çıkarıp döndürür; liste boşsa program hata mesajıyla durur.

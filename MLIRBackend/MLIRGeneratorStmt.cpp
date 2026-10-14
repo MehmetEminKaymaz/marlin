@@ -21,14 +21,14 @@ void MLIRGenerator::emitStatements(const std::vector<std::unique_ptr<Statement>>
 
 void MLIRGenerator::visit(BlockStmt* node) {
     scopeManager.pushScope();
-    matrixScopes.emplace_back();
+    ownedScopes.emplace_back();
     emitStatements(node->statements);
 
     // Blok bitti: burada tanımlanan matris değişkenlerinin belleğini bırak.
     // (Blok return / break / continue ile bittiyse onlar zaten bıraktı.)
     if (!MLIRControlFlowManager::isTerminated(ctx.builder.getInsertionBlock()))
-        freeMatrixScopes(matrixScopes.size() - 1, locOf(node));
-    matrixScopes.pop_back();
+        freeScopes(ownedScopes.size() - 1, locOf(node));
+    ownedScopes.pop_back();
     scopeManager.popScope();
 }
 
@@ -47,8 +47,8 @@ void MLIRGenerator::visit(VariableDecl* node) {
     auto loc = locOf(node);
     const SemType& type = node->varType;
 
-    // Struct: her yaprak ayrı bir değişkendir.
-    if (type.isStruct()) {
+    // Struct ve struct listesi: her yaprak ayrı bir değişkendir.
+    if (type.isComposite()) {
         declareStruct(node);
         return;
     }
@@ -58,6 +58,7 @@ void MLIRGenerator::visit(VariableDecl* node) {
         // int[3] a = [1, 2, 3];  → elemanlar geçici dizi olmadan doğrudan yazılır
         mlir::Value storage = createStorage(type, loc);
         emitListInto(list, storage);
+        if (holdsStrings(type)) ownedScopes.back().push_back({storage, type});
         scopeManager.declareVariable(node->name, storage);
     } else if (node->initializer) {
         declareLocal(node->name, type, emitExpr(node->initializer.get()), node->line, loc);
@@ -83,7 +84,14 @@ void MLIRGenerator::declareLocal(const std::string& name, const SemType& type, m
     if (type.isMatrix()) {
         mlir::Value buffer = takeMatrixOwnership(value, line, loc);
         ctx.builder.create<mlir::memref::StoreOp>(loc, buffer, storage);
-        matrixScopes.back().push_back(storage);
+        ownedScopes.back().push_back({storage, type});
+    } else if (type.isString()) {
+        // String: değişken bir başvuru tutar; blok bitince bırakılır.
+        ctx.builder.create<mlir::memref::StoreOp>(loc, ownString(value, loc), storage);
+        ownedScopes.back().push_back({storage, type});
+    } else if (type.isArray()) {
+        copyArray(value, storage, type, /*releaseOld=*/false, loc);
+        if (holdsStrings(type)) ownedScopes.back().push_back({storage, type});
     } else {
         // (list<T> için değer bir başvurudur: yuvaya yalnızca o yazılır)
         storeTo(value, storage, type, loc);
@@ -115,14 +123,22 @@ void MLIRGenerator::declareDefault(const std::string& name, const SemType& type,
                 b.create<mlir::scf::YieldOp>(l);
             });
     }
+    if (holdsStrings(type)) ownedScopes.back().push_back({storage, type});
     scopeManager.declareVariable(name, storage);
 }
 
 void MLIRGenerator::visit(AssignmentStmt* node) {
     auto loc = locOf(node);
 
-    if (auto* ident = dynamic_cast<Identifier*>(node->target.get()); ident && ident->type.isStruct()) {
+    if (auto* ident = dynamic_cast<Identifier*>(node->target.get()); ident && ident->type.isComposite()) {
         assignStruct(node, ident);
+        return;
+    }
+    // liste[i].alan = ...  ya da  liste[i] = struct
+    auto* element = dynamic_cast<ArrayAccessExpr*>(node->target.get());
+    if (dynamic_cast<MemberExpr*>(node->target.get()) || node->target->type.isComposite() ||
+        (element && element->target->type.isList())) {
+        assignElement(node);
         return;
     }
 
@@ -140,6 +156,14 @@ void MLIRGenerator::visit(AssignmentStmt* node) {
             mlir::Value oldBuffer = ctx.builder.create<mlir::memref::LoadOp>(loc, storage);
             ctx.builder.create<mlir::memref::StoreOp>(loc, newBuffer, storage);
             matrixManager.freeBuffer(oldBuffer, loc);
+        } else if (ident->type.isString()) {
+            // Önce yeni değer tutulur, sonra eskisi bırakılır (s = s + "x").
+            mlir::Value newValue = ownString(value, loc);
+            mlir::Value oldValue = ctx.builder.create<mlir::memref::LoadOp>(loc, storage);
+            ctx.builder.create<mlir::memref::StoreOp>(loc, newValue, storage);
+            releaseString(oldValue, loc);
+        } else if (ident->type.isArray()) {
+            copyArray(value, storage, ident->type, /*releaseOld=*/true, loc);
         } else {
             storeTo(value, storage, ident->type, loc);
         }
@@ -160,13 +184,18 @@ void MLIRGenerator::visit(AssignmentStmt* node) {
         return;
     }
 
-    // dizi[indeks] = deger
+    // dizi[indeks] = deger   (liste elemanı: assignElement)
     mlir::Value memref = emitExpr(access->target.get());
     mlir::Value index  = toIndex(emitExpr(access->indices[0].get()), access->indices[0]->type, loc);
-    if (access->target->type.isList())
-        listManager.storeElement(memref, index, value, node->line, loc); // sınır denetimli
-    else
+    if (node->value->type.isString()) {
+        mlir::Value newValue = ownString(value, loc);
+        mlir::Value oldValue = ctx.builder.create<mlir::memref::LoadOp>(
+            loc, memref, mlir::ValueRange(index));
+        ctx.builder.create<mlir::memref::StoreOp>(loc, newValue, memref, mlir::ValueRange(index));
+        releaseString(oldValue, loc);
+    } else {
         ctx.builder.create<mlir::memref::StoreOp>(loc, value, memref, mlir::ValueRange(index));
+    }
     flushTemporaries(loc);
 }
 
@@ -218,9 +247,13 @@ void MLIRGenerator::visit(WhileStmt* node) {
 
 // Döngü gövdesi. break/continue'nun hangi blokların matris değişkenlerini
 // bırakacağını bilmesi için gövdenin başladığı derinlik kaydedilir.
-void MLIRGenerator::emitLoopBody(BlockStmt* body) {
-    loopScopeDepths.push_back(matrixScopes.size());
+void MLIRGenerator::emitLoopBody(BlockStmt* body, llvm::ArrayRef<Owned> iterators) {
+    loopScopeDepths.push_back(ownedScopes.size());
+    ownedScopes.emplace_back(iterators.begin(), iterators.end());
     body->accept(*this);
+    if (!MLIRControlFlowManager::isTerminated(ctx.builder.getInsertionBlock()))
+        freeScopes(ownedScopes.size() - 1, locOf(body));
+    ownedScopes.pop_back();
     loopScopeDepths.pop_back();
 }
 
@@ -293,51 +326,63 @@ void MLIRGenerator::emitParallelFor(ForRangeStmt* node, mlir::Value start, mlir:
 // for x in dizi  →  0 .. N arası indeks döngüsü; x her yinelemede okunan eleman.
 void MLIRGenerator::visit(ForCollectionStmt* node) {
     auto loc = locOf(node);
+    if (node->collection->type.isList()) {
+        emitStructListLoop(node);
+        return;
+    }
     mlir::Value collection = emitExpr(node->collection.get());
+    // Üzerinde dönülen dizi bir geçiciyse (for s in ["a", x + y]) döngü
+    // boyunca yaşamalıdır: deyimin değil, içinde bulunulan bloğun olur.
+    for (size_t i = 0; i < temporaries.size();) {
+        if (!temporaries[i].type.isArray()) { ++i; continue; }
+        ownedScopes.back().push_back(temporaries[i]);
+        temporaries.erase(temporaries.begin() + i);
+    }
     flushTemporaries(loc);
 
-    // Listenin uzunluğu döngüye girerken bir kez okunur. Eleman ise her
-    // yinelemede listeden (sınır denetimiyle) okunur; böylece gövde listeyi
-    // değiştirse bile geçersiz belleğe erişilmez.
-    const bool isList = node->collection->type.isList();
     mlir::Type indexType = ctx.builder.getIndexType();
     mlir::Value zero = arithManager.buildIntConstant(0, indexType, loc);
-    mlir::Value size = isList
-        ? listManager.length(collection, loc)
-        : arithManager.buildIntConstant(node->collection->type.arraySize, indexType, loc);
+    mlir::Value size = arithManager.buildIntConstant(node->collection->type.arraySize, indexType, loc);
     mlir::Value one  = arithManager.buildIntConstant(1, indexType, loc);
 
     cfManager.buildCountedLoop(loc, zero, size, one, /*isSigned=*/true,
         /*structured=*/!node->needsCFG, node->hasContinue,
         [&](mlir::Value index) {
-            mlir::Value elem = isList
-                ? listManager.loadElement(collection, index, node->line, loc)
-                : ctx.builder.create<mlir::memref::LoadOp>(
-                      loc, collection, mlir::ValueRange(index)).getResult();
+            mlir::Value elem = ctx.builder.create<mlir::memref::LoadOp>(
+                loc, collection, mlir::ValueRange(index));
             scopeManager.pushScope();
+            // String: döngü değişkeni yineleme boyunca kendi başvurusunu tutar
+            // (gövde diziyi değiştirse de değer geçerli kalır).
+            llvm::SmallVector<Owned, 1> iterators;
+            if (node->iterType.isString()) {
+                retainString(elem, loc);
+                mlir::Value storage = createStorage(node->iterType, loc);
+                storeTo(elem, storage, node->iterType, loc);
+                iterators.push_back({storage, node->iterType});
+                elem = storage;
+            }
             scopeManager.declareVariable(node->iteratorName, elem);
-            emitLoopBody(node->body.get());
+            emitLoopBody(node->body.get(), iterators);
             scopeManager.popScope();
         });
 }
-
 // break / continue: döngü gövdesinden çıkılırken, gövdede (ve içindeki
 // bloklarda) tanımlanmış matris değişkenleri bırakılır.
 
 void MLIRGenerator::visit(BreakStmt* node) {
-    freeMatrixScopes(loopScopeDepths.back(), locOf(node));
+    freeScopes(loopScopeDepths.back(), locOf(node));
     cfManager.emitBreak(locOf(node));
 }
 
 void MLIRGenerator::visit(ContinueStmt* node) {
-    freeMatrixScopes(loopScopeDepths.back(), locOf(node));
+    freeScopes(loopScopeDepths.back(), locOf(node));
     cfManager.emitContinue(locOf(node));
 }
 
 void MLIRGenerator::visit(ReturnStmt* node) {
     auto loc = locOf(node);
     if (!node->expr) {
-        freeMatrixScopes(0, loc);
+        freeScopes(0, loc);
         ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange());
         return;
     }
@@ -347,21 +392,24 @@ void MLIRGenerator::visit(ReturnStmt* node) {
 void MLIRGenerator::emitReturn(Expression* expr, int line, mlir::Location loc) {
     // Struct yaprak yaprak döner. Matris yapraklarının sahipliği çağırana
     // geçer; dizi yaprakları çağıranın ayırdığı yerlere kopyalanır.
-    if (expr->type.isStruct()) {
-        Values values = emitStructExpr(expr);
+    if (expr->type.isComposite()) {
+        Values values = emitLeaves(expr);
         const std::vector<SemLeaf> leaves = leavesOf(expr->type);
         Values results;
         size_t arraySlot = 0;
         for (size_t i = 0; i < leaves.size(); ++i) {
             if (leaves[i].type.isArray())
-                ctx.builder.create<mlir::memref::CopyOp>(loc, values[i], returnArraySlots[arraySlot++]);
+                copyArray(values[i], returnArraySlots[arraySlot++], leaves[i].type,
+                          /*releaseOld=*/false, loc);
             else if (leaves[i].type.isMatrix())
                 results.push_back(takeMatrixOwnership(values[i], line, loc));
+            else if (leaves[i].type.isString())
+                results.push_back(ownString(values[i], loc));
             else
                 results.push_back(values[i]);
         }
         flushTemporaries(loc);
-        freeMatrixScopes(0, loc);
+        freeScopes(0, loc);
         ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange(results));
         return;
     }
@@ -380,9 +428,11 @@ void MLIRGenerator::emitReturn(Expression* expr, int line, mlir::Location loc) {
             : takeMatrixOwnership(emitExpr(expr), line, loc);
     } else {
         value = emitExpr(expr);
+        // Dönen string çağıranın başvurusu olur.
+        if (expr->type.isString()) value = ownString(value, loc);
     }
 
     flushTemporaries(loc);
-    freeMatrixScopes(0, loc, movedSlot);
+    freeScopes(0, loc, movedSlot);
     ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange(value));
 }

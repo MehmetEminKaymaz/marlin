@@ -101,6 +101,12 @@ struct SemType {
     size_t paramCount() const          { return sub.size() - 1; }
     const SemType& paramType(size_t i) const { return sub[i + 1]; }
 
+    // Tek bir değer olarak saklanmayıp yapraklarına ayrılan tipler: struct ve
+    // elemanı böyle olan liste (list<Nokta>; bkz. leavesOf).
+    bool isComposite() const {
+        return isStruct() || (isList() && elementType().isComposite());
+    }
+
     // Struct: alanın sırası; yoksa -1.
     int fieldIndex(const std::string& field) const {
         for (size_t i = 0; i < fieldNames.size(); ++i)
@@ -180,8 +186,20 @@ private:
 // işlemin yapraklara tek tek uygulanmasıdır. Yaprakların sırası her yerde
 // aynıdır (tanım sırası); kod üretimi değerleri bu sırayla taşır.
 //
-// (Bu ayrım ileride list<struct> için de geçerlidir: liste, yaprak başına
-// bir veri dizisi tutar.)
+// STRUCT LİSTESİ
+//
+// list<Nokta> de tek parça durmaz: elemanın her yaprağı için ayrı bir liste
+// tutulur ("alan başına bir sütun"). Listenin yaprakları, elemanın
+// yapraklarının listeleridir ve aynı sıradadır:
+//
+//   list<Cember> l   →   l.merkez.x   list<float64>
+//                        l.merkez.y   list<float64>
+//                        l.r          list<float64>
+//                        l.etiketler  list<list<int>>
+//
+// Sütunların uzunlukları her zaman eşittir (eleman ekleme/çıkarma hepsine
+// birden uygulanır). Sütun adları kaynakta yazılamaz; yalnızca kod üretiminin
+// değişken tablosunda yaşar.
 // ---------------------------------------------------------------------------
 struct SemLeaf {
     std::string path;  // "c.merkez.x": verilen kök ad + alan yolu
@@ -189,12 +207,18 @@ struct SemLeaf {
 };
 
 inline void collectLeaves(const SemType& type, const std::string& path, std::vector<SemLeaf>& out) {
-    if (!type.isStruct()) {
-        out.push_back({path, type});
+    if (type.isStruct()) {
+        for (size_t i = 0; i < type.sub.size(); ++i)
+            collectLeaves(type.sub[i], path + "." + type.fieldNames[i], out);
         return;
     }
-    for (size_t i = 0; i < type.sub.size(); ++i)
-        collectLeaves(type.sub[i], path + "." + type.fieldNames[i], out);
+    if (type.isComposite()) { // struct listesi: elemanın her yaprağı için bir liste
+        const size_t first = out.size();
+        collectLeaves(type.elementType(), path, out);
+        for (size_t i = first; i < out.size(); ++i) out[i].type = SemType::List(out[i].type);
+        return;
+    }
+    out.push_back({path, type});
 }
 
 // Struct olmayan bir tipin tek yaprağı kendisidir; void'in yaprağı yoktur.

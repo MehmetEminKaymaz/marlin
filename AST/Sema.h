@@ -159,6 +159,10 @@ private:
     //   * Struct üzerindeki işlem, alanlarına tek tek uygulanan işlemdir:
     //     `q = p` her alanı kendi tipinin kuralıyla atar (matris kopyalanır,
     //     liste paylaşılır); fonksiyona vermek alanları tek tek vermektir.
+    //   * Struct listesi (list<Nokta>): elemanlar değerdir. `l[i]` bir kopya
+    //     verir; elemanın alanına `l[i].x = ...` ile yazılır (AssignmentStmt'in
+    //     hedefi MemberExpr olur; taban bir liste elemanı olmalıdır). Listenin
+    //     kendisi için alan sembolü tanımlanmaz: `l.x` yazılamaz.
     //   * Global struct değişkeni ve @GPU fonksiyonda struct henüz yok.
     // -----------------------------------------------------------------------
     struct StructInfo {
@@ -269,6 +273,7 @@ private:
     void noteWholeRead(Identifier* ident, const Symbol& sym);
     void noteWholeWrite(Identifier* ident, const Symbol& sym);
     void noteElementAccess(ArrayAccessExpr* access, bool isWrite);
+    void noteNestedWrite(Expression* target);
     void noteMutatingBuiltin(const ASTNode* at, const std::string& name);
     void noteCall(FunctionCallExpr* call);
     void finishParallelLoop(ParallelLoop& loop);

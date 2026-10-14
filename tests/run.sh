@@ -12,6 +12,9 @@
 #                        gibi) denemek için; genellikle "// expect: 1" ile.
 #   // error: metin   -> derleme başarısız olmalı ve hata çıktısı bu metni
 #                        içermeli. (Bu satırlardan varsa program çalıştırılmaz.)
+#   // leaks: 0       -> program biterken bırakılmamış string kalmamalı.
+#                        (Stringlerin belleği kendiliğinden bırakılır; listeler
+#                        elle bırakıldığı için test listelerini free etmelidir.)
 #
 # Çalıştırılan her test hem -O0 hem -O2 ile derlenir.
 #
@@ -62,7 +65,7 @@ for src in *.minik; do
         if ! "$COMPILER" "$src" $opt -o "$TMP/prog" 2> "$TMP/err"; then
             bad "$src $opt" "derlenemedi: $(head -3 "$TMP/err")"; continue
         fi
-        "$TMP/prog" > "$TMP/actual" 2> "$TMP/stderr"
+        MINIK_STRING_CHECK=1 "$TMP/prog" > "$TMP/actual" 2> "$TMP/stderr"
         code=$?
         missing=""
         while IFS= read -r msg; do
@@ -73,6 +76,8 @@ for src in *.minik; do
             bad "$src $opt" "cikis kodu: beklenen $expected_code, bulunan $code $(head -2 "$TMP/stderr")"
         elif [ -n "$missing" ]; then
             bad "$src $opt" "beklenen hata mesaji yok:$missing"
+        elif grep -q '^// leaks: 0' "$src" && grep -q 'string denetimi:' "$TMP/stderr"; then
+            bad "$src $opt" "$(grep 'string denetimi:' "$TMP/stderr")"
         elif grep -q "failed with 'CUDA" "$TMP/stderr"; then
             # GPU çalışma zamanı hatayı yalnızca stderr'e yazar, programı durdurmaz.
             bad "$src $opt" "GPU hatasi: $(head -2 "$TMP/stderr")"

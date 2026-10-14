@@ -82,18 +82,19 @@ Value MLIRListManager::length(Value list, Location loc) {
     return ctx.builder.create<memref::DimOp>(loc, loadData(list, loc), 0);
 }
 
-Value MLIRListManager::loadElement(Value list, Value index, int line, Location loc) {
+Value MLIRListManager::loadElement(Value list, Value index, int line, Location loc,
+                                    bool checked) {
     OpBuilder& b = ctx.builder;
     Value data = loadData(list, loc);
-    checkIndex(index, b.create<memref::DimOp>(loc, data, 0), line, loc);
+    if (checked) checkIndex(index, b.create<memref::DimOp>(loc, data, 0), line, loc);
     return b.create<memref::LoadOp>(loc, data, ValueRange(index));
 }
 
 void MLIRListManager::storeElement(Value list, Value index, Value value, int line,
-                                   Location loc) {
+                                   Location loc, bool checked) {
     OpBuilder& b = ctx.builder;
     Value data = loadData(list, loc);
-    checkIndex(index, b.create<memref::DimOp>(loc, data, 0), line, loc);
+    if (checked) checkIndex(index, b.create<memref::DimOp>(loc, data, 0), line, loc);
     b.create<memref::StoreOp>(loc, value, data, ValueRange(index));
 }
 

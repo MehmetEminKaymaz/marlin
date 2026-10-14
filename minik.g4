@@ -88,6 +88,7 @@ block
 assignmentStatement
     : qualifiedName '=' expression ';'                 #DirectAssignment
     | expression '[' exprList ']' '=' expression ';'   #ArrayElementAssignment
+    | expression '.' IDENTIFIER '=' expression ';'     #MemberAssignment        // l[i].x = 5  (p.x = 5: DirectAssignment)
     ;
 
 functionDecl

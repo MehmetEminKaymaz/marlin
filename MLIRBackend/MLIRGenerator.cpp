@@ -170,11 +170,12 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
     // Matris sahipliği de fonksiyona özgüdür (geçiciler, blok değişkenleri).
     auto savedTemporaries = std::move(temporaries);
     auto savedOwned = std::move(ownedBuffers);
-    auto savedMatrixScopes = std::move(matrixScopes);
+    auto savedMatrixScopes = std::move(ownedScopes);
     auto savedLoopDepths = std::move(loopScopeDepths);
     temporaries.clear();
     ownedBuffers.clear();
-    matrixScopes.clear();
+    ownedScopes.clear();
+    ownedScopes.emplace_back(); // fonksiyonun kendisi: string parametreler
     loopScopeDepths.clear();
 
     auto savedReturnSlots = std::move(returnArraySlots);
@@ -184,6 +185,7 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
     // parametresi salt okunurdur: çağıranın belleğidir). Diğer parametreler
     // atanabilir olmaları için bir yuvaya kopyalanır. Struct parametre yaprak
     // yaprak gelir; her yaprak "p.alan" adıyla ayrı bir değişken olur.
+    // String parametre fonksiyonun kendi başvurusunu tutar (çıkışta bırakılır).
     unsigned argIndex = 0;
     for (size_t i = 0; i < params.size(); ++i) {
         for (const SemLeaf& leaf : leavesOf(fnType.paramType(i), params[i]->name)) {
@@ -194,6 +196,10 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
             }
             mlir::Value storage = createStorage(leaf.type, loc);
             storeTo(arg, storage, leaf.type, loc);
+            if (leaf.type.isString()) {
+                retainString(arg, loc);
+                ownedScopes.back().push_back({storage, leaf.type});
+            }
             scopeManager.declareVariable(leaf.path, storage);
         }
     }
@@ -204,9 +210,10 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
     emitBody();
 
     if (!MLIRControlFlowManager::isTerminated(ctx.builder.getInsertionBlock())) {
-        if (fnType.returnType().isVoid())
+        if (fnType.returnType().isVoid()) {
+            freeScopes(0, loc);
             ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange());
-        else
+        } else
             // Sema her yolun return ettiğini doğruladı; buraya gelinemez.
             ctx.builder.create<mlir::LLVM::UnreachableOp>(loc);
     }
@@ -214,7 +221,7 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
     returnArraySlots = std::move(savedReturnSlots);
     temporaries = std::move(savedTemporaries);
     ownedBuffers = std::move(savedOwned);
-    matrixScopes = std::move(savedMatrixScopes);
+    ownedScopes = std::move(savedMatrixScopes);
     loopScopeDepths = std::move(savedLoopDepths);
     cfManager.leaveFunction(std::move(savedFlow));
     ctx.allocaBlock = savedAllocaBlock;
@@ -356,6 +363,7 @@ void MLIRGenerator::emitListInto(ListLiteral* list, mlir::Value memref) {
     auto loc = locOf(list);
     for (size_t i = 0; i < list->elements.size(); ++i) {
         mlir::Value elem = emitExpr(list->elements[i].get());
+        if (list->elements[i]->type.isString()) elem = ownString(elem, loc); // eleman diziye aittir
         mlir::Value index = ctx.builder.create<mlir::arith::ConstantIndexOp>(
             loc, static_cast<int64_t>(i));
         ctx.builder.create<mlir::memref::StoreOp>(loc, elem, memref, mlir::ValueRange(index));

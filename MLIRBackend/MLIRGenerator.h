@@ -38,12 +38,14 @@
 //   MLIRMatrixManager       matrix<T>: tensor üzerinde işlemler, eleman erişimi
 //   MLIRRuntime             çalışma zamanı kütüphanesine çağrılar
 //
-// Uygulama beş dosyaya bölünmüştür:
+// Uygulama yedi dosyaya bölünmüştür:
 //   MLIRGenerator.cpp        program, fonksiyonlar, globaller, bellek yardımcıları
 //   MLIRGeneratorExpr.cpp    ifadeler
 //   MLIRGeneratorStmt.cpp    deyimler
 //   MLIRGeneratorMatrix.cpp  matris ifadeleri ve matris belleğinin sahipliği
 //   MLIRGeneratorStruct.cpp  struct değerleri: oluşturma, kopyalama, alan erişimi
+//   MLIRGeneratorList.cpp    liste elemanları: push / pop / free, struct listesi
+//   MLIRGeneratorString.cpp  stringlerin belleği: başvuru sayımı
 //
 // Değerlerin gösterimi:
 //   sayısal / bool / char  → SSA değeri; değişkense memref<T> yuvasında
@@ -54,7 +56,8 @@
 //                            parametrede ve dönüşte memref<? x ? x T>. Değer
 //                            olarak davranır; belleğinin tek bir sahibi vardır.
 //   string                 → i64: çalışma zamanındaki string bloğunun adresi
-//                            (değişmez; işlemleri runtime çağrılarıdır).
+//                            (değişmez; işlemleri runtime çağrılarıdır; belleği
+//                            başvuru sayımıyla kendiliğinden bırakılır).
 //                            Skaler gibi saklanır: değişkense memref<i64> yuvasında
 //   struct                 → tek bir değer değildir: yapraklarına (struct
 //                            olmayan alanlarına) ayrılır. `Nokta p` değişkeni
@@ -62,6 +65,9 @@
 //                            kendi tipinin gösterimini kullanır. Fonksiyona
 //                            yaprak yaprak verilir ve döner
 //                            (bkz. MLIRGeneratorStruct.cpp)
+//   struct listesi         → o da yapraklarına ayrılır: list<Nokta> l, alan
+//                            başına bir listedir ("l.x", "l.y")
+//                            (bkz. MLIRGeneratorList.cpp)
 //   fonksiyon / lambda     → fonksiyon tipli SSA değeri (func.constant)
 //
 // GPU
@@ -104,19 +110,29 @@ class MLIRGenerator : public ASTVisitor {
     // Derlenen program; konum bilgisine dosya adını yazmak için.
     const Program* program = nullptr;
 
-    // --- Matris sahipliği (ayrıntı: MLIRGeneratorMatrix.cpp) ---
+    // --- Sahiplik: matrisler ve stringler ---
+    // (ayrıntı: MLIRGeneratorMatrix.cpp, MLIRGeneratorString.cpp)
+    //
+    // Sahibi olan bir değer. `type` ne olduğunu ve nasıl bırakılacağını söyler:
+    //   matris        geçicide belleğin kendisi, değişkende belleği tutan yuva
+    //   string        geçicide değerin kendisi, değişkende değeri tutan yuva
+    //   string dizisi dizinin belleği (elemanlarının her biri bırakılır)
+    struct Owned {
+        mlir::Value value;
+        SemType type;
+    };
     // Üretilmekte olan deyimde hesaplanmış, henüz kimsenin sahiplenmediği
-    // matris bellekleri. Deyim bitince bırakılırlar (flushTemporaries).
-    llvm::SmallVector<mlir::Value, 8> temporaries;
-    // tensor → arkasındaki sahipsiz bellek (yalnızca geçiciler için)
+    // değerler. Deyim bitince bırakılırlar (flushTemporaries).
+    llvm::SmallVector<Owned, 8> temporaries;
+    // tensor → arkasındaki sahipsiz bellek (yalnızca matris geçicileri için)
     llvm::DenseMap<mlir::Value, mlir::Value> ownedBuffers;
-    // Açık her blok için, o blokta tanımlanan matris değişkenlerinin yuvaları.
-    // Bloktan çıkılırken (normal, return, break, continue) bellekleri bırakılır.
-    std::vector<std::vector<mlir::Value>> matrixScopes;
-    // İçinde bulunulan döngülerin gövdesi başladığında matrixScopes'un boyutu:
+    // Açık her blok için, o blokta tanımlanan matris ve string değişkenleri.
+    // Bloktan çıkılırken (normal, return, break, continue) bırakılırlar. İlk
+    // sıra fonksiyonun kendisidir (string parametreler).
+    std::vector<std::vector<Owned>> ownedScopes;
+    // İçinde bulunulan döngülerin gövdesi başladığında ownedScopes'un boyutu:
     // break/continue bu derinlikten sonrasını bırakır.
     std::vector<size_t> loopScopeDepths;
-
 public:
     MLIRGenerator(mlir::MLIRContext& context, mlir::OpBuilder& builder, mlir::ModuleOp moduleOp)
         : ctx(builder, context, moduleOp),
@@ -235,19 +251,65 @@ private:
     mlir::Value takeMatrixOwnership(mlir::Value tensor, int line, mlir::Location loc);
     /// `from` indeksinden sonraki geçici bellekleri bırakır.
     void flushTemporaries(mlir::Location loc, size_t from = 0);
-    /// `fromDepth` ve daha içteki blokların matris değişkenlerini bırakır
+    /// `fromDepth` ve daha içteki blokların matris ve string değişkenlerini bırakır
     /// (`keep` yuvası hariç: return ile dışarı taşınan değişken).
-    void freeMatrixScopes(size_t fromDepth, mlir::Location loc, mlir::Value keep = {});
+    void freeScopes(size_t fromDepth, mlir::Location loc, mlir::Value keep = {});
     /// İsim, bu fonksiyonda tanımlı (sahibi olduğumuz) bir matris değişkeniyse yuvası.
     mlir::Value ownedMatrixSlot(Expression* expr);
 
-    // --- Struct'lar (MLIRGeneratorStruct.cpp) ---
+    // --- Stringler: başvuru sayımı (MLIRGeneratorString.cpp) ---
+    /// Tip string ya da string dizisi mi? (Bırakılması gereken değerler.)
+    static bool holdsStrings(const SemType& type) {
+        return type.isString() || (type.isArray() && type.elementType().isString());
+    }
+    void retainString(mlir::Value value, mlir::Location loc);
+    void releaseString(mlir::Value value, mlir::Location loc);
+    /// Yeni üretilmiş (başvurusu bu deyime ait) stringi geçici olarak kaydeder.
+    mlir::Value stringResult(mlir::Value value);
+    /// Stringi saklamak üzere sahiplenir: deyimin geçicisiyse başvurusunu
+    /// devralır, başkasınınsa sayacını artırır.
+    mlir::Value ownString(mlir::Value value, mlir::Location loc);
+    /// Diziyi kopyalar. String dizisinde her elemanın sayacı artar;
+    /// `releaseOld`: hedefin eski elemanları bırakılır (hedef başlatılmışsa).
+    void copyArray(mlir::Value source, mlir::Value target, const SemType& type, bool releaseOld,
+                   mlir::Location loc);
+    void releaseStringArray(mlir::Value array, const SemType& type, mlir::Location loc);
+    void releaseOwned(const Owned& owned, bool isSlot, mlir::Location loc);
+    /// 0 .. count arası her indeks için gövdeyi üretir (scf.for).
+    void forEachIndex(int64_t count, mlir::Location loc,
+                      llvm::function_ref<void(mlir::Value index)> body);
+
+    // --- Struct'lar ve struct listeleri (MLIRGeneratorStruct.cpp) ---
     using Values = llvm::SmallVector<mlir::Value, 8>;
-    /// Struct tipli ifadeyi üretir; yapraklarının değerlerini tanım sırasıyla
-    /// döndürür (her biri, o tipte bir ifadeyi emitExpr'in üreteceği biçimde).
-    Values emitStructExpr(Expression* expr);
+    /// Bileşik (struct ya da struct listesi) ifadeyi üretir; yapraklarının
+    /// değerlerini tanım sırasıyla döndürür (her biri, o tipte bir ifadeyi
+    /// emitExpr'in üreteceği biçimde). Bileşik olmayan ifadede tek değer döner.
+    Values emitLeaves(Expression* expr);
+    /// Yalnızca [begin, begin + count) aralığındaki yapraklar.
+    Values emitLeaves(Expression* expr, size_t begin, size_t count);
+    /// Parçası seçilemeyen ifadeler (oluşturma, çağrı, literal): bütün yapraklar.
+    Values emitWholeLeaves(Expression* expr);
     /// f().x — tabandaki struct'ın bir alanına düşen yapraklar.
     Values emitMember(MemberExpr* node);
+    static size_t leafOffset(const MemberExpr* node);
+
+    // --- Listeler (MLIRGeneratorList.cpp) ---
+    /// Değeri listede saklanacak hale getirir (matris ve dizi için listeye ait
+    /// yeni bir bellek).
+    mlir::Value adoptElement(mlir::Value value, const SemType& type, int line, mlir::Location loc);
+    /// Listede saklanan elemanın ifade olarak değeri (ödünç: bellek listenindir).
+    mlir::Value borrowElement(mlir::Value stored, const SemType& type, mlir::Location loc);
+    void releaseElement(mlir::Value stored, const SemType& type, mlir::Location loc);
+    /// liste[i] — elemanın [begin, begin + count) yaprakları.
+    Values emitElement(ArrayAccessExpr* node, size_t begin, size_t count);
+    Values emitStructListLiteral(ListLiteral* node);
+    void emitListPush(FunctionCallExpr* node);
+    Values emitListPop(FunctionCallExpr* node);
+    void emitListFree(FunctionCallExpr* node);
+    /// liste[i] = ...;   liste[i].alan = ...;
+    void assignElement(AssignmentStmt* node);
+    /// for p in liste — elemanı struct olan liste üzerinde.
+    void emitStructListLoop(ForCollectionStmt* node);
     void declareStruct(VariableDecl* node);
     void assignStruct(AssignmentStmt* node, Identifier* target);
     /// Üretilmekte olan fonksiyon struct döndürüyorsa, dizi alanlarının
@@ -274,7 +336,9 @@ private:
     /// kodu) üretmez.
     void emitStatements(const std::vector<std::unique_ptr<Statement>>& statements);
     std::function<void()> buildElseChain(IfStmt* node, size_t idx);
-    void emitLoopBody(BlockStmt* body);
+    /// `iterators`: döngü değişkeninin sahip olduğu değerler (string); her
+    /// yinelemenin sonunda bırakılırlar.
+    void emitLoopBody(BlockStmt* body, llvm::ArrayRef<Owned> iterators = {});
     void emitParallelFor(ForRangeStmt* node, mlir::Value start, mlir::Value end, mlir::Value step);
 };
 

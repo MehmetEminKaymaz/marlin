@@ -2,7 +2,7 @@
 // error: global degisken olarak yalnizca
 // error: bos liste literalinin tipi cikarilamiyor
 // error: 'push' ilk arguman olarak liste bekler (bulunan: int)
-// error: liste elemani sayisal, bool, char ya da string olmali (bulunan: list<int>)
+// error: liste elemani sayisal, bool, char, string ya da struct olmali (bulunan: list<int>)
 // error: bu tipte bir deger yazdirilamaz: list<int>
 // error: tip uyusmazligi: beklenen list<float>, bulunan list<int>
 // error: 'len' liste, dizi ya da string bekler (bulunan: int)

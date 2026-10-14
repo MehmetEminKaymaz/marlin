@@ -92,6 +92,51 @@ void Sema::noteElementAccess(ArrayAccessExpr* access, bool isWrite) {
     }
 }
 
+// l[i].x = ...,  l[i].dizi[j] = ...,  f()[i] = ...  — hedefi bir değişkenin
+// doğrudan elemanı olmayan yazma. Kökteki değişkenin indekslendiği erişim
+// (l[i]) bulunur ve yazma o elemana yapılmış sayılır: her yineleme farklı bir
+// elemanın içine yazıyorsa yarış yoktur.
+void Sema::noteNestedWrite(Expression* target) {
+    ArrayAccessExpr* rootAccess = nullptr;
+    int listLevels = 0;
+    Expression* expr = target;
+    while (true) {
+        if (auto* member = dynamic_cast<MemberExpr*>(expr)) {
+            expr = member->base.get();
+            continue;
+        }
+        auto* access = dynamic_cast<ArrayAccessExpr*>(expr);
+        if (!access) break;
+        if (access->target->type.isList()) ++listLevels;
+        rootAccess = access;
+        expr = access->target.get();
+    }
+    if (!rootAccess) return;
+
+    auto* root = dynamic_cast<Identifier*>(expr);
+    Symbol* sym = root ? lookup(root) : nullptr;
+    if (!sym || (sym->kind != Symbol::Variable && sym->kind != Symbol::Global)) {
+        // Kök bir değişken değil (ör. fonksiyonun döndürdüğü liste): neye
+        // yazıldığı bilinmez.
+        noteUnsafe("bir ifadenin dondurdugu listeyi degistiriyor");
+        if (inParallel())
+            error(target, "paralel dongude yalnizca bir degiskenin elemanina yazilabilir");
+        return;
+    }
+
+    // Elemanın içindeki liste bir başvurudur: iki eleman aynı listeyi
+    // gösterebilir, bu yüzden farklı yinelemeler aynı belleğe yazabilir.
+    if (listLevels > 1) {
+        for (auto& loop : parallelLoops) {
+            if (!isOutside(*sym, loop)) continue;
+            error(target, "paralel dongude '" + root->name + "' elemanlarinin icindeki listelere "
+                          "yazilamaz (iki eleman ayni listeyi paylasiyor olabilir)");
+            return;
+        }
+    }
+    noteElementAccess(rootAccess, /*isWrite=*/true);
+}
+
 void Sema::noteMutatingBuiltin(const ASTNode* at, const std::string& name) {
     noteUnsafe("'" + name + "' ile bir listeyi degistiriyor");
     if (inParallel())

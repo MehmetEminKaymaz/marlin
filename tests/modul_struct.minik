@@ -2,6 +2,7 @@
 // output: 0.0 0.0
 // output: 25.0
 // output: 3.0
+// output: 3 6.0 10.0
 import moduller.sekil as s;
 from moduller.sekil import Nokta, Dogru as Cizgi;
 
@@ -24,4 +25,10 @@ func main() -> void {
 
     Etiketli e = Etiketli(c.son, 7);
     print(e.yer.x);
+
+    // Başka modülün struct'ından liste.
+    list<s.Nokta> noktalar = [p, Nokta(5, 6)];
+    push(noktalar, s.orijin());
+    noktalar[2].x = 9;
+    print(len(noktalar), noktalar[1].y, s.topla(noktalar[2]));
 }

@@ -1,0 +1,186 @@
+// output: bir2uc4.5 13
+// output: bir-22-bir true
+// output: sabit birxy birxybirxybirxy!
+// output: kosul true
+// output: 3
+// output: 3 bir1 bir12 birxy? bir1+
+// output: bir1/
+// output: bir12/
+// output: sabitsabit yok
+// output: zbir2!
+// output: bir2!
+// output: z
+// output: birk
+// output: 2m
+// output: 6 0
+// output: birveli!?birveli!? birveli!? x! 4
+// output: birbir+ birbir b:bir 22
+// output: 2 bir2# 2! 2!
+// output: bir2#.1
+// output: 2!.7
+// output: b:q~ birbir+ 1
+// output: bir2bir birbir-birbir
+// output: 18 18
+// leaks: 0
+// Stringlerin belleği kendiliğinden bırakılır (başvuru sayımı). Bu test hiç
+// `free(string)` yazmaz; program biterken bırakılmamış string kalmamalıdır.
+struct Kisi {
+    string ad;
+    int yas;
+}
+
+struct Etiketler {
+    string[2] adlar;
+    string baslik;
+}
+
+func birlestir(string a, string b) -> string {
+    return a + "-" + b;
+}
+
+// Parametre fonksiyon içinde yeniden atanabilir.
+func tekrarla(string s, int n) -> string {
+    string sonuc = "";
+    for i in 0 .. n {
+        sonuc = sonuc + s;
+    }
+    s = s + "!";
+    return sonuc + s;
+}
+
+// Var olan bir stringi (listenin elemanını) döndürür.
+func ilk(list<string> l) -> string {
+    return l[0];
+}
+
+// Aldığı stringi saklar.
+func sakla(list<string> l, string s) -> void {
+    push(l, s);
+}
+
+func kisiYap(string ad, int yas) -> Kisi {
+    return Kisi(ad + "!", yas);
+}
+
+func etiketYap(string a) -> Etiketler {
+    return Etiketler([a, a + a], "b:" + a);
+}
+
+func erkenDon(list<string> l, string aranan) -> string {
+    for s in l {
+        string buyuk = s + s;
+        if s == aranan {
+            return buyuk;
+        }
+    }
+    return "yok";
+}
+
+func main() -> int {
+    // Ara değerler: a + b + c
+    string a = "bir";
+    string b = str(2);
+    string c = a + b + "uc" + str(4.5);
+    print(c, len(a + b + c));
+    print(birlestir(a, b) + birlestir(b, a), birlestir(a + b, b + a) == "bir2-2bir");
+
+    // Yeniden atama: eski değer bırakılır.
+    string s = a + "x";
+    s = s + "y";
+    s = s;
+    string t = s;
+    s = "sabit";
+    print(s, t, tekrarla(t, 2));
+
+    // Koşullar ve kısa devre içindeki geçiciler.
+    if a + b == "bir2" && len(b + b) == 2 {
+        print("kosul", str(1) + str(2) == "12" || a + a == "x");
+    }
+    int sayac = 0;
+    while str(sayac) + "0" != "30" {
+        sayac = sayac + 1;
+    }
+    print(sayac);
+
+    // Listeler: eleman listeye aittir.
+    list<string> l = [a + "1", b, "sabit"];
+    push(l, a + b);
+    sakla(l, t + "?");
+    l[1] = l[0] + l[1];
+    l[2] = l[2];
+    string ilkEleman = ilk(l);
+    string cikan = pop(l);
+    pop(l);
+    print(len(l), ilkEleman, l[1], cikan, ilk(l) + "+");
+    for x in l {
+        string y = x + "/";
+        if y == "sabit/" { continue; }
+        print(y);
+    }
+    print(erkenDon(l, "sabit"), erkenDon(l, "olmayan"));
+    free(l);
+
+    // Diziler.
+    string[3] d = [a, a + b, "z"];
+    string[3] e = d;
+    e[1] = e[1] + "!";
+    d = e;
+    d[0] = d[2] + d[1];
+    string[3] f;
+    f[2] = d[0];
+    f = f;
+    for x in d {
+        print(x);
+    }
+    for x in [a + "k", b + "m"] {
+        print(x);
+    }
+    print(len(f[2]), len(f[0]));
+
+    // Struct alanları.
+    Kisi k = kisiYap(a + "veli", 30);
+    Kisi k2 = k;
+    k2.ad = k2.ad + "?";
+    k = k2;
+    k = Kisi(k.ad + k.ad, 1);
+    print(k.ad, k2.ad, kisiYap("x", 1).ad, len(kisiYap(a, 2).ad));
+
+    Etiketler et = etiketYap(a);
+    Etiketler et2 = et;
+    et2.adlar[0] = et.adlar[1] + "+";
+    et = et2;
+    print(et.adlar[0], et.adlar[1], et.baslik, etiketYap(b).adlar[1]);
+
+    // Struct listesi: string sütunu ve string dizisi alanı.
+    list<Kisi> kisiler = [k, Kisi(a + b, 5)];
+    push(kisiler, kisiYap(b, 7));
+    kisiler[0].ad = kisiler[1].ad + "#";
+    kisiler[1] = kisiler[2];
+    Kisi son = pop(kisiler);
+    print(len(kisiler), kisiler[0].ad, kisiler[1].ad, son.ad);
+    for kisi in kisiler {
+        print(kisi.ad + "." + str(kisi.yas));
+    }
+    free(kisiler);
+
+    list<Etiketler> etiketler;
+    push(etiketler, et);
+    push(etiketler, etiketYap("q"));
+    etiketler[0].adlar[1] = etiketler[1].baslik + "~";
+    etiketler[1] = etiketler[0];
+    Etiketler alinan = pop(etiketler);
+    print(alinan.adlar[1], etiketler[0].adlar[0], len(etiketler));
+    free(etiketler);
+
+    // Lambda ve paralel döngü.
+    let ekle = (string x, string y) -> string | x + y + x;
+    print(ekle(a, b), ekle(a + a, "-"));
+    list<int64> uzunluklar = [0, 0, 0, 0];
+    parallel for i in 0 .. 4 {
+        string parca = a + str(i) + t;
+        uzunluklar[i] = len(parca + parca);
+    }
+    print(uzunluklar[0], uzunluklar[3]);
+    free(uzunluklar);
+    return 0;
+}

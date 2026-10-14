@@ -89,6 +89,8 @@ set(PROJECT_SOURCES
         MLIRBackend/MLIRMatrixManager.h
         MLIRBackend/MLIRGeneratorMatrix.cpp
         MLIRBackend/MLIRGeneratorStruct.cpp
+        MLIRBackend/MLIRGeneratorList.cpp
+        MLIRBackend/MLIRGeneratorString.cpp
         MLIRBackend/MLIRListManager.cpp
         MLIRBackend/MLIRListManager.h
         MLIRBackend/MLIRRuntime.h

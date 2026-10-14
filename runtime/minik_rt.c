@@ -178,9 +178,10 @@ void minik_print_f32(float value) {
 //
 //   [ refs | length | baytlar ... | \0 ]
 //
-//   refs    -1: kaynak koddaki bir literal (programın sabit verisidir, asla
-//               bırakılmaz); 1: çalışırken oluşturulmuş. İleride başvuru
-//               sayımına geçilirse sayaç burada tutulacak.
+//   refs    başvuru sayısı: stringi kaç yerin (değişken, liste elemanı, deyimin
+//           geçicisi ...) tuttuğu. Sıfıra inince bellek geri verilir.
+//           -1: kaynak koddaki bir literal (programın sabit verisidir; sayılmaz
+//           ve asla bırakılmaz).
 //   length  bayt sayısı (sondaki \0 hariç). Metin UTF-8'dir; uzunluk ve
 //           indeksler bayt sayar.
 //
@@ -188,8 +189,18 @@ void minik_print_f32(float value) {
 // StringLiteral); iki taraf uyumlu olmalıdır.
 //
 // Stringler DEĞİŞMEZ: her işlem yeni bir string üretir, var olanı değiştirmez.
-// Bu yüzden bir stringi kopyalamak adresini kopyalamaktır. Bellekleri
-// kendiliğinden bırakılmaz; `free(s)` ile bırakılır (listelerdeki gibi).
+// Bu yüzden bir stringi kopyalamak adresini kopyalayıp sayacını artırmaktır.
+//
+// BELLEK — başvuru sayımı
+//
+// Sayacı derleyicinin ürettiği kod yönetir (bkz. MLIRGeneratorString.cpp):
+// string bir yere yazılırken minik_str_retain, oradan silinirken
+// minik_str_release çağrılır. Buradaki kurallar:
+//
+//   * String üreten her fonksiyon (birleştirme, str(x), std fonksiyonları)
+//     sayacı 1 olan YENİ bir string döndürür; o başvuru çağıranındır.
+//   * Fonksiyonlar argümanlarını ödünç alır: sayacı değiştirmez, saklamaz.
+//   * Sayaç atomiktir: paralel döngünün yinelemeleri aynı stringi tutabilir.
 //
 // 0 adresi boş string sayılır: başlangıç değeri verilmemiş değişkenler ve
 // sıfırlanmış dizi elemanları böyledir.
@@ -206,6 +217,17 @@ static const MinikString* str_of(int64_t handle) { return (const MinikString*)(i
 static int64_t str_length(int64_t handle) { return handle ? str_of(handle)->length : 0; }
 static const char* str_data(int64_t handle) { return handle ? str_of(handle)->data : ""; }
 
+// Yaşayan (henüz bırakılmamış) string sayısı. MINIK_STRING_CHECK ortam
+// değişkeni tanımlıysa program biterken sıfır olup olmadığı bildirilir
+// (testler sızıntıyı böyle yakalar; bkz. tests/run.sh).
+static int64_t live_strings = 0;
+
+__attribute__((destructor)) static void report_live_strings(void) {
+    if (!getenv("MINIK_STRING_CHECK")) return;
+    const int64_t live = __atomic_load_n(&live_strings, __ATOMIC_RELAXED);
+    if (live != 0) fprintf(stderr, "string denetimi: %lld string birakilmadi\n", (long long)live);
+}
+
 // `length` baytlık yeni bir string ayırır; içeriğini çağıran doldurur.
 static MinikString* str_alloc(int64_t length) {
     MinikString* s = malloc(sizeof(MinikString) + (size_t)length + 1);
@@ -215,6 +237,7 @@ static MinikString* str_alloc(int64_t length) {
         fail();
     }
     s->refs = 1;
+    __atomic_add_fetch(&live_strings, 1, __ATOMIC_RELAXED);
     s->length = length;
     s->data[length] = '\0';
     return s;
@@ -232,9 +255,18 @@ void minik_print_str(int64_t s) { fwrite(str_data(s), 1, (size_t)str_length(s), 
 
 int64_t minik_str_len(int64_t s) { return str_length(s); }
 
-// free(s): literaller programın sabit verisidir, dokunulmaz.
-void minik_str_free(int64_t s) {
-    if (s && str_of(s)->refs != STRING_LITERAL) free((void*)(intptr_t)s);
+// Stringi tutan yeni bir yer daha var. (Boş string ve literaller sayılmaz.)
+void minik_str_retain(int64_t s) {
+    if (!s || str_of(s)->refs == STRING_LITERAL) return;
+    __atomic_add_fetch(&((MinikString*)(intptr_t)s)->refs, 1, __ATOMIC_RELAXED);
+}
+
+// Stringi tutan yerlerden biri onu bıraktı; kimse kalmadıysa bellek geri verilir.
+void minik_str_release(int64_t s) {
+    if (!s || str_of(s)->refs == STRING_LITERAL) return;
+    if (__atomic_sub_fetch(&((MinikString*)(intptr_t)s)->refs, 1, __ATOMIC_ACQ_REL) != 0) return;
+    __atomic_sub_fetch(&live_strings, 1, __ATOMIC_RELAXED);
+    free((void*)(intptr_t)s);
 }
 
 // a + b

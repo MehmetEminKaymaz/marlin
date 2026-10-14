@@ -1,0 +1,128 @@
+// output: 6 2 8.0 3 20
+// output: 60.0
+// output: 109.0 12.0 50 3
+// output: 2 7
+// output: 12.0 42 5 2
+// output: 9.0 3
+// output: 18.0
+// output: 7 9
+// output: 3 109.0 50
+// output: 106.0 109.0
+// output: 20 2.0 22
+// output: 3 109.0 50 5
+// output: 106.0 4
+// output: 108.0
+// output: 2 4.0 109.0
+// output: bir 1 2
+// output: 2.5 12.0 4.0
+// output: 35.5
+// Eleman struct'ının matris, dizi ve liste alanları.
+struct Kayit {
+    int no;
+    matrix<float64> m;
+    int[3] puanlar;
+    list<int> etiketler;
+}
+
+struct Ic {
+    float64 a;
+    matrix<float64> m;
+}
+
+struct Dis {
+    string ad;
+    list<Ic> icler;
+}
+
+func yap(int no, float64 deger) -> Kayit {
+    return Kayit(no, fill(2, 2, deger), [no, no + 1, no + 2], [no * 10]);
+}
+
+func matrisToplami(list<Kayit> l) -> float64 {
+    float64 t = 0.0;
+    for k in l {
+        t = t + sum(k.m);
+    }
+    return t;
+}
+
+func main() -> int {
+    list<Kayit> l;
+    for i in 0 .. 6 {
+        push(l, yap(i, i));
+    }
+    print(len(l), l[2].no, sum(l[2].m), l[2].puanlar[1], l[2].etiketler[0]);
+    print(matrisToplami(l));
+
+    // Matris değerdir: okunan eleman kopyadır.
+    Kayit k = l[3];
+    k.m[0, 0] = 100.0;
+    k.puanlar[0] = 50;
+    print(sum(k.m), sum(l[3].m), k.puanlar[0], l[3].puanlar[0]);
+
+    // Liste başvurudur: kopya ile eleman aynı listeyi paylaşır.
+    push(k.etiketler, 7);
+    print(len(l[3].etiketler), l[3].etiketler[1]);
+
+    // Elemanın matrisine, dizisine ve listesine yerinde yazma.
+    l[1].m[0, 1] = 9.0;
+    l[1].puanlar[2] = 42;
+    l[1].etiketler[0] = 5;
+    push(l[1].etiketler, 6);
+    print(sum(l[1].m), l[1].puanlar[2], l[1].etiketler[0], len(l[1].etiketler));
+
+    // Matris alanına bütün olarak atama (eskisi bırakılır).
+    l[0].m = ones(3, 3);
+    print(sum(l[0].m), rows(l[0].m));
+    l[0].m = l[0].m + l[0].m;
+    print(sum(l[0].m));
+    l[0].puanlar = [7, 8, 9];
+    print(l[0].puanlar[0], l[0].puanlar[2]);
+
+    // Elemanın bütün olarak atanması.
+    l[5] = k;
+    print(l[5].no, sum(l[5].m), l[5].puanlar[0]);
+    l[4] = l[5];
+    l[4].m[1, 1] = 0.0;
+    print(sum(l[4].m), sum(l[5].m));
+    l[2] = yap(20, 0.5);
+    print(l[2].no, sum(l[2].m), l[2].puanlar[2]);
+
+    // pop: eleman listeden çıkar.
+    Kayit son = pop(l);
+    print(son.no, sum(son.m), son.puanlar[0], len(l));
+    print(sum(pop(l).m), len(l));
+
+    matrix<float64> carpim = matmul(l[0].m, l[0].m);
+    print(sum(carpim));
+
+    // Literal.
+    list<Kayit> iki = [yap(1, 1.0), k];
+    print(len(iki), sum(iki[0].m), sum(iki[1].m));
+
+    // İç içe: struct listesi içinde struct listesi, onun içinde matris.
+    list<Dis> d;
+    push(d, Dis("bir", []));
+    push(d, Dis("iki", [Ic(1.5, ones(2, 2))]));
+    push(d[0].icler, Ic(2.5, fill(2, 3, 2.0)));
+    push(d[1].icler, Ic(3.5, zeros(1, 1)));
+    print(d[0].ad, len(d[0].icler), len(d[1].icler));
+    print(d[0].icler[0].a, sum(d[0].icler[0].m), sum(d[1].icler[0].m));
+    d[1].icler[1].m = fill(2, 2, 4.0);
+    d[1].icler[1].m[0, 0] = 1.0;
+    d[1].icler[0].a = 0.5;
+    float64 t = 0.0;
+    for x in d {
+        for y in x.icler {
+            t = t + y.a + sum(y.m);
+        }
+    }
+    print(t);
+
+    free(d[0].icler);
+    free(d[1].icler);
+    free(d);
+    free(iki);
+    free(l);
+    return 0;
+}

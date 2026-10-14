@@ -1,0 +1,168 @@
+// output: 0
+// output: 3
+// output: 1.0 2.0
+// output: 5.0 6.0
+// output: 9.0
+// output: 30.0 4.0
+// output: 7.0 8.0
+// output: 2
+// output: 7.0 8.0 2
+// output: 1.0 2.0
+// output: 30.0 4.0
+// output: 2 ali 30 true a
+// output: veli 41
+// output: 71
+// output: 3 1.0 1.0 2.5
+// output: 10.0 1.0
+// output: 2 4.0
+// output: 3 12.0
+// output: 6.0
+// output: 2 1.0 9.0
+// output: 3
+// output: 1 2
+// output: 0.0 0.0 4.0 -1.0
+// output: 2.0 7.0 6.0 6.0
+// output: 40.0 396.0
+struct Nokta {
+    float64 x;
+    float64 y;
+}
+
+struct Kisi {
+    string ad;
+    int yas;
+    bool aktif;
+    char harf;
+}
+
+// İç içe struct.
+struct Cember {
+    Nokta merkez;
+    float64 r;
+}
+
+// Alanı struct listesi olan struct.
+struct Sekil {
+    int no;
+    list<Nokta> noktalar;
+}
+
+// Liste başvurudur: fonksiyon çağıranın listesini değiştirir.
+func ekle(list<Nokta> l, float64 x, float64 y) -> void {
+    push(l, Nokta(x, y));
+}
+
+func toplamX(list<Nokta> l) -> float64 {
+    float64 t = 0.0;
+    for p in l {
+        t = t + p.x;
+    }
+    return t;
+}
+
+// Struct listesi döndüren fonksiyon.
+func uret(int n) -> list<Nokta> {
+    list<Nokta> l = [];
+    for i in 0 .. n {
+        push(l, Nokta(i, i * 2));
+    }
+    return l;
+}
+
+func main() -> int {
+    list<Nokta> l;
+    print(len(l));
+
+    push(l, Nokta(1.0, 2.0));
+    push(l, Nokta(3.0, 4.0));
+    ekle(l, 5.0, 6.0);
+    print(len(l));
+    print(l[0].x, l[0].y);
+
+    // Eleman bütün olarak okunur (kopya) ve yazılır.
+    Nokta p = l[2];
+    print(p.x, p.y);
+    print(toplamX(l));
+
+    // Tek alana yazma.
+    l[1].x = 30.0;
+    print(l[1].x, l[1].y);
+
+    l[2] = Nokta(7.0, 8.0);
+    Nokta son = pop(l);
+    print(son.x, son.y);
+    print(len(l));
+    print(p.x + 2.0, pop(l).y + 4.0, len(l) + 1);
+
+    // Başvuru: b ve l aynı listedir.
+    list<Nokta> b = l;
+    push(b, Nokta(30.0, 4.0));
+    for q in l {
+        print(q.x, q.y);
+    }
+
+    // Her tipten skaler alan ve string.
+    list<Kisi> kisiler = [Kisi("ali", 30, true, 'a'), Kisi("veli", 41, false, 'v')];
+    print(len(kisiler), kisiler[0].ad, kisiler[0].yas, kisiler[0].aktif, kisiler[0].harf);
+    kisiler[1].ad = kisiler[1].ad;
+    print(kisiler[1].ad, kisiler[1].yas);
+    int yaslar = 0;
+    for k in kisiler {
+        yaslar = yaslar + k.yas;
+    }
+    print(yaslar);
+
+    // İç içe struct: l[i].merkez.x ve alt struct'ın bütün olarak atanması.
+    list<Cember> cemberler;
+    for i in 0 .. 3 {
+        push(cemberler, Cember(Nokta(i, i), 2.5));
+    }
+    print(len(cemberler), cemberler[1].merkez.x, cemberler[1].merkez.y, cemberler[1].r);
+    cemberler[1].merkez = Nokta(10.0, 1.0);
+    Nokta m = cemberler[1].merkez;
+    print(m.x, m.y);
+    cemberler[2].merkez.y = 4.0;
+    Cember c = cemberler[2];
+    print(len(cemberler) - 1, c.merkez.y);
+
+    // Büyüme: kapasite birkaç kez artar.
+    list<Nokta> uzun = uret(100);
+    print(len(uzun) - 97, uzun[6].y);
+    print(uzun[99].x - uzun[93].x);
+
+    // Struct içinde struct listesi.
+    Sekil s = Sekil(1, [Nokta(1.0, 1.0)]);
+    push(s.noktalar, Nokta(9.0, 9.0));
+    print(len(s.noktalar), s.noktalar[0].x, s.noktalar[1].y);
+    s.noktalar[0].x = 3.0;
+    Sekil t = s;                 // liste alanı paylaşılır
+    push(t.noktalar, Nokta(0.0, 0.0));
+    print(len(s.noktalar));
+
+    // Struct listesinin listesi: elemanın alanı struct listesi.
+    list<Sekil> sekiller;
+    push(sekiller, s);
+    push(sekiller, Sekil(2, []));
+    push(sekiller[1].noktalar, Nokta(4.0, 5.0));
+    push(sekiller[1].noktalar, Nokta(6.0, 7.0));
+    print(sekiller[0].no, len(sekiller[1].noktalar));
+    sekiller[1].noktalar[1].x = 2.0;
+    sekiller[1].noktalar[0] = Nokta(0.0, 0.0);
+    for sekil in sekiller {
+        for n in sekil.noktalar {
+            if sekil.no == 2 {
+                print(n.x, n.y, n.x + 4.0, n.y - 1.0 + sekil.no * 0.0);
+            }
+        }
+    }
+
+    // Paralel döngü: her yineleme kendi elemanının alanına yazar.
+    parallel for i in 0 .. len(uzun) {
+        uzun[i].x = uzun[i].x * 2.0 + uzun[i].y;
+    }
+    print(uzun[10].x, uzun[99].x);
+
+    free(uzun);
+    free(kisiler);
+    return 0;
+}

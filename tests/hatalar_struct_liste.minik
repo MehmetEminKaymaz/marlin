@@ -1,0 +1,76 @@
+// error: struct 'Dugum' kendisini iceriyor
+// error: 'l' bir struct degil (tipi: list<Nokta>); '.x' ile alanina erisilemez
+// error: '.x' alanina atama yapilamaz: hedef bir degiskenin (p.x) ya da liste elemaninin (l[i].x) alani olmali
+// error: dongu degiskeni 'p.x' degistirilemez
+// error: dongu degiskeni 'k.m' degistirilemez; listedeki elemani indeksle degistirin (or. liste[i].m)
+// error: struct listesi literalinin tipi belirtilmeli (or. list<Nokta> l = [...];)
+// error: tip uyusmazligi: beklenen Nokta, bulunan int
+// error: 'Nokta' tipinde 'z' adinda bir alan yok
+// error: liste elemanlari ayni tipte olmali: beklenen Nokta, bulunan int
+// error: bu tipte bir deger yazdirilamaz: Nokta
+// error: paralel dongude 'l' elemanina yalnizca dongu degiskeni 'i' ile indekslenerek yazilabilir
+// error: paralel dongude 'kayitlar' elemanlarinin icindeki listelere yazilamaz
+// error: paralel dongude 'push' kullanilamaz
+// error: @GPU fonksiyonda yalnizca sayisal/bool/char degerler ve matrisler kullanilabilir (bulunan: list<Nokta>)
+struct Nokta {
+    float64 x;
+    float64 y;
+}
+
+struct Kayit {
+    matrix<float64> m;
+    list<int> etiketler;
+}
+
+// Struct listesi, alan başına bir liste olarak saklanır; kendisini içeren
+// yapı sonsuza açılırdı.
+struct Dugum {
+    int deger;
+    list<Dugum> cocuklar;
+}
+
+func nokta() -> Nokta {
+    return Nokta(1.0, 2.0);
+}
+
+@GPU
+func gpuda(list<Nokta> l) -> int {
+    return 0;
+}
+
+func main() -> int {
+    list<Nokta> l = [Nokta(1.0, 2.0)];
+    list<Kayit> kayitlar;
+
+    // Listenin alanı yoktur; alan elemanındır.
+    float64 a = l.x;
+
+    // Geçici bir değerin alanına atama.
+    nokta().x = 3.0;
+
+    // Döngü değişkeni elemanın kopyasıdır (matris alanı ise elemanın kendisi).
+    for p in l {
+        p.x = 1.0;
+    }
+    for k in kayitlar {
+        k.m[0, 0] = 1.0;
+    }
+
+    let b = [Nokta(1.0, 2.0)];
+    push(l, 5);
+    l[0].z = 1.0;
+    list<Nokta> c = [Nokta(1.0, 2.0), 5];
+    print(l[0]);
+
+    // Paralel döngü: her yineleme yalnızca kendi elemanına yazabilir.
+    parallel for i in 0 .. len(l) {
+        l[0].x = 1.0;
+    }
+    parallel for i in 0 .. len(kayitlar) {
+        kayitlar[i].etiketler[0] = 1;
+    }
+    parallel for i in 0 .. len(l) {
+        push(l, Nokta(1.0, 1.0));
+    }
+    return 0;
+}

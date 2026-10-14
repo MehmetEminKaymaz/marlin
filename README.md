@@ -213,7 +213,8 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `zaman.minik` | `time()` ile süre ölçme; çekirdeklere dağıtılan `matmul` |
 | `gpu.minik` | `@GPU` fonksiyonlar: GPU'da `parallel for`, matris işlemleri, `matmul`, `sum`, CPU ↔ GPU kopyalama |
 | `hatalar_gpu.minik` | `@GPU` fonksiyonlarda izin verilmeyen kullanımlar |
-| `stringler.minik` | Stringler: birleştirme, karşılaştırma, indeksleme, `str` / `to_int` / `to_float`, string listesi ve dizisi, `free` |
+| `stringler.minik` | Stringler: birleştirme, karşılaştırma, indeksleme, `str` / `to_int` / `to_float`, string listesi ve dizisi |
+| `string_bellek.minik` | Stringlerin belleğinin kendiliğinden bırakılması: ara değerler, yeniden atama, liste / dizi / struct alanı, fonksiyonlar, döngüler; program bitince bırakılmamış string kalmamalı |
 | `string_sinir_disi.minik`, `string_sayi_degil.minik` | Sınır dışı string indeksi ve sayı olmayan metnin çevrilmesi: programın mesajla durması |
 | `hatalar_string.minik` | Stringlerin hatalı kullanımı |
 | `std_string.minik`, `std_file.minik`, `std_diger.minik` | Standart kütüphane: string fonksiyonları, dosya işlemleri, `os` / `time` / `random` / `math` / `io` |
@@ -222,6 +223,9 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `struct.minik` | Struct'lar: oluşturma, kopyalama, her tipten alan, iç içe struct, fonksiyona verme ve döndürme, lambdalar, paralel döngü |
 | `modul_struct.minik` | Başka modülde tanımlı struct'ların kullanılması |
 | `hatalar_struct.minik` | Struct'ların hatalı kullanımı |
+| `struct_liste.minik` | `list<struct>`: ekleme, çıkarma, alan okuma ve yazma, iç içe struct, struct içinde struct listesi, paralel döngü |
+| `struct_liste_alanlar.minik` | Elemanı matris, dizi ve liste alanı taşıyan struct listeleri |
+| `hatalar_struct_liste.minik` | Struct listelerinin hatalı kullanımı |
 | `modul_import.minik` | `import`, `as`, `from`: başka dosyalardaki fonksiyon ve globaller, alt dizin, birbirini import eden modüller |
 | `modul_gpu.minik` | Başka modüldeki `@GPU` fonksiyonların CPU'dan, GPU'dan ve çekirdek içinden çağrılması |
 | `hatalar_modul*.minik` | Bulunamayan modül, modülde olmayan isim, isim çakışması, private tanımın import edilmesi, modüldeki sözdizimi hatası, paralel döngüden güvensiz modül fonksiyonu |
@@ -296,6 +300,22 @@ func main() -> void {
 ```
 
 `// output:` satırları hatadan önce yazılanları denetler.
+
+### String sızıntısını denetleyen test
+
+Stringlerin belleğini derleyici yönetir. Bir programın hiç string sızdırmadığını denetlemek için dosyanın başına `// leaks: 0` yaz; program biterken bırakılmamış string kalırsa test kalır:
+
+```
+// leaks: 0
+// output: ab
+func main() -> void {
+    list<string> l = ["a" + "b"];
+    print(l[0]);
+    free(l);        // listeler elle bırakılır; içindeki stringler de onunla
+}
+```
+
+Kendi programında aynı denetimi `MINIK_STRING_CHECK=1 ./program` ile yapabilirsin: sızıntı varsa program biterken sayısını hata çıktısına yazar.
 
 ### Bir test kaldığında
 
@@ -487,12 +507,12 @@ float64 f = to_float("2.5");
 
 list<string> isimler = ["ali", "veli"];
 push(isimler, "ayse");
-
-free(selam);                          // belleği elle bırakılır
 ```
 
 - **Stringler değişmez.** `s[0] = 'a'` yazılamaz; her işlem (`+`, `str`) yeni bir string üretir. Bu yüzden atama ve fonksiyona verme kopyalamaz: `string b = a;` aynı metni gösterir ve bu güvenlidir.
-- **Bellek kendiliğinden bırakılmaz** (listelerdeki gibi); program bitene kadar yaşar. Uzun çalışan bir programda işi biten stringi `free(s)` ile bırakabilirsin; bıraktıktan sonra o stringi (ve onu gösteren başka değişkenleri) kullanma. Kaynak kodda yazılı bir stringi (`"abc"`) ya da boş stringi bırakmak zararsızdır. `a + b + c` gibi zincirlerde aradaki geçici stringe ulaşılamaz; bırakmak gerekiyorsa adımları ayrı değişkenlere yaz.
+- **Belleği derleyici yönetir.** Stringler kendiliğinden bırakılır; `free` gerekmez. Her stringin onu kaç yerin (değişken, liste ya da dizi elemanı, struct alanı) tuttuğunu sayan bir sayacı vardır; tutan kalmayınca bellek geri verilir. `a + b + c` ya da `print("x" + str(n))` gibi ifadelerdeki ara değerler deyim bitince bırakılır; `s = s + "x"` eski değeri bırakır.
+  - Bir string listeye konduğunda liste de onu tutar. Listeler elle bırakıldığı için içindeki stringler `free(l)` çağrılınca (ya da eleman çıkarılınca, üzerine yazılınca) bırakılır.
+  - `free(s)` hâlâ yazılabilir ama hiçbir şey yapmaz.
 - **Uzunluk ve indeks bayt sayar.** Metin UTF-8'dir: Türkçe harfler (ş, ğ, ı ...) iki bayt tutar, yani `len("ş")` 2'dir ve `s[i]` böyle bir harfin yarısını verebilir.
 - **Karşılaştırma** bayt bayt, sözlük sırasıyladır (`"Z" < "a"`: büyük harfler önce gelir).
 - **`to_int` ve `to_float`** metnin tamamı bir sayı değilse programı mesajla durdurur (baştaki ve sondaki boşluklar sayılmaz).
@@ -550,7 +570,36 @@ func main() -> void {
 - `public struct` başka modüllerden kullanılabilir (`s.Nokta p = s.Nokta(1, 2);` ya da `from sekil import Nokta;`). Yazılmazsa struct private'tır.
 - Matris alanı olan struct başlangıç değeri olmadan tanımlanamaz.
 - Struct'lar `+`, `==` gibi işleçlerle kullanılamaz ve `print` ile bütün olarak yazdırılamaz; alanları tek tek kullanılır.
-- **Henüz olmayanlar:** `list<Nokta>`, struct dizisi, global struct değişkeni, `@GPU` fonksiyonlarda struct.
+- **Henüz olmayanlar:** struct dizisi (`Nokta[3]`), global struct değişkeni, `@GPU` fonksiyonlarda struct.
+
+**Struct listesi (`list<Nokta>`)**
+
+```
+list<Nokta> l = [Nokta(1, 2), Nokta(3, 4)];   // ya da: list<Nokta> l;  (boş)
+push(l, Nokta(5, 6));
+
+print(len(l), l[0].x);       // alan okuma
+l[1].x = 30.0;               // tek alana yazma
+l[2] = Nokta(7, 8);          // elemanı bütün olarak değiştirme
+Nokta p = l[0];              // eleman okunur: p bir kopyadır
+Nokta son = pop(l);
+
+for q in l {                 // q her yinelemede elemanın kopyasıdır
+    print(q.x, q.y);
+}
+```
+
+- Liste yine **başvurudur** (`list<Nokta> b = l;` aynı listeyi gösterir), elemanları ise **değerdir**: `Nokta p = l[0];` bir kopya verir, `p.x = 9` listeyi değiştirmez. Listedeki elemanı değiştirmek için indeksle yazılır: `l[0].x = 9`.
+- Eleman struct'ı her tipten alan taşıyabilir. Alanlar yukarıdaki tablodaki kurallara uyar:
+  - **Matris ve dizi alanı elemana aittir.** `push(l, k)` ve `l[i] = k` bunları kopyalar; `l[i].m[0, 0] = 1.0` ve `l[i].puanlar[2] = 5` listedeki elemanı yerinde değiştirir.
+  - **Liste alanı paylaşılır.** `Kayit k = l[i];` sonrasında `k.etiketler` ile `l[i].etiketler` aynı listedir.
+- `free(l)` listeyi, elemanlarının matris ve dizilerini bırakır; elemanların tuttuğu stringler de bırakılır. Elemanların içindeki listeler bırakılmaz (başka yerden de gösteriliyor olabilirler); gerekiyorsa önce onlar bırakılır: `free(l[i].etiketler)`.
+- Struct'ın alanı da struct listesi olabilir (`struct Sekil { list<Nokta> noktalar; }`), bunların listesi de (`list<Sekil>`): `sekiller[1].noktalar[0].x = 2.0`.
+- `for p in l` döngü değişkeni değiştirilemez (`p.x = 1` hatadır).
+- `parallel for` içinde her yineleme yalnızca kendi elemanına yazabilir: `l[i].x = l[i].x * 2` geçerlidir, `l[0].x = ...` ve `push(l, ...)` değildir. Elemanların içindeki listelere (`l[i].etiketler[0] = ...`) paralel döngüde yazılamaz: iki eleman aynı listeyi paylaşıyor olabilir.
+- Literal yalnızca tipi belli olan yerde yazılabilir: `let l = [Nokta(1, 2)];` hatadır, `list<Nokta> l = [Nokta(1, 2)];` yazılır.
+- Bir struct, kendi listesini içeremez (`struct Dugum { list<Dugum> cocuklar; }` hatadır). Bunun sebebi saklama biçimidir: `list<Nokta>` bellekte alan başına bir liste olarak durur (bütün `x`'ler bir arada, bütün `y`'ler bir arada), kendisini içeren bir yapı sonsuza açılırdı.
+- Global struct listesi ve `@GPU` fonksiyonlarda struct listesi yoktur.
 
 **Modüller (`import`)**
 
@@ -635,7 +684,7 @@ Bilinmesi gerekenler:
   }
   ```
 
-- **String fonksiyonları yeni string döndürür** ve bellekleri diğer stringler gibi elle bırakılır. Konumlar bayt sayar; `find` bulamazsa -1 döner. `upper` / `lower` yalnızca İngilizce harfleri çevirir.
+- **String fonksiyonları yeni string döndürür**; bellekleri diğer stringler gibi kendiliğinden bırakılır. Konumlar bayt sayar; `find` bulamazsa -1 döner. `upper` / `lower` yalnızca İngilizce harfleri çevirir.
 - **Dosyalar metin olarak okunur ve yazılır** (ikili dosya desteği yok). `read_line` satır sonunu atar.
 - **`random`**: tohum verilmezse program her çalıştığında aynı sayılar gelir (ölçümler tekrarlanabilsin diye). Farklı sayılar için `random.seed(...)`.
 - **`parallel for` içinde** yalnızca `std.string` fonksiyonlarının çoğu çağrılabilir (`split` ve `join` hariç: liste değiştirirler). Dosya, girdi, zaman ve rastgele sayı fonksiyonları yan etkilidir; derleyici paralel döngüde reddeder.
@@ -721,7 +770,7 @@ Bilinmesi gerekenler:
 | Yuvarlama | `floor ceil round trunc` (sonuç kayan noktadır: `floor(2.7)` → `2.0`) |
 | Diğer | `abs min max` (tamsayıda tamsayı, kayan noktada kayan nokta döner) |
 | Listeler | `push(l, x)` `pop(l)` `free(l)` |
-| Stringler | `str(x)` — değeri metne çevirir; `to_int(s)` (`int64`), `to_float(s)` (`float64`); `free(s)` |
+| Stringler | `str(x)` — değeri metne çevirir; `to_int(s)` (`int64`), `to_float(s)` (`float64`) |
 | Uzunluk | `len(x)` — liste, dizi ya da string; sonuç `int64` |
 | Matris oluşturma | `zeros(d1, ..., dn)` `ones(d1, ..., dn)` `fill(d1, ..., dn, deger)` — her boyut için bir uzunluk |
 | Matris işlemleri | `sum(a)` `shape(a, i)` — her boyut sayısında |
@@ -794,6 +843,8 @@ MLIRBackend/        AST → MLIR
   MLIRMatrixManager.*        matrix<T>: tensor üzerinde işlemler
   MLIRGeneratorMatrix.cpp    matris ifadeleri, füzyon, bellek sahipliği
   MLIRGeneratorStruct.cpp    struct değerleri (alanlarına ayrılarak üretilir)
+  MLIRGeneratorList.cpp      liste elemanları ve struct listeleri (alan başına bir liste)
+  MLIRGeneratorString.cpp    stringlerin belleği (başvuru sayımı)
   MLIRRuntime.h              runtime kütüphanesine çağrılar
 
 LLVMBackend/        MLIR → çalıştırılabilir dosya

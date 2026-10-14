@@ -237,8 +237,8 @@ SemType Sema::resolveType(Type* t) {
         case TypeKind::List: {
             SemType elem = resolveType(t->elementType.get());
             if (elem.isError()) return elem;
-            if (!elem.isScalar() && !elem.isString()) {
-                error(t, "liste elemani sayisal, bool, char ya da string olmali (bulunan: " + elem.str() + ")");
+            if (!elem.isScalar() && !elem.isString() && !elem.isStruct()) {
+                error(t, "liste elemani sayisal, bool, char, string ya da struct olmali (bulunan: " + elem.str() + ")");
                 return SemType::Error();
             }
             return SemType::List(elem);
@@ -819,10 +819,17 @@ void Sema::visit(ListLiteral* node) {
         return;
     }
 
-    bool ok = true, allNumeric = true;
+    // [Nokta(1, 2), Nokta(3, 4)] — struct listesi. Struct dizisi olmadığı
+    // için literal yalnızca liste beklenen yerde yazılabilir.
+    const bool wantsStructs = expected.isList() && expected.elementType().isStruct();
+    bool ok = true, allNumeric = true, anyStruct = false;
     for (auto& elem : node->elements) {
-        SemType t = check(elem);
+        SemType t = wantsStructs ? checkExpecting(elem, expected.elementType()) : check(elem);
         if (t.isError()) { ok = false; continue; }
+        if (t.isStruct()) {
+            anyStruct = true;
+            continue;
+        }
         if (!t.isScalar() && !t.isString()) {
             error(elem.get(), "dizi elemani sayisal, bool, char ya da string olmali (bulunan: " + t.str() + ")");
             ok = false;
@@ -830,6 +837,23 @@ void Sema::visit(ListLiteral* node) {
         allNumeric = allNumeric && t.isNumeric();
     }
     if (!ok) return;
+
+    if (anyStruct) {
+        const SemType elemType = node->elements.front()->type;
+        for (auto& elem : node->elements) {
+            if (elem->type == elemType) continue;
+            error(elem.get(), "liste elemanlari ayni tipte olmali: beklenen " + elemType.str() +
+                              ", bulunan " + elem->type.str());
+            return;
+        }
+        if (!expected.isList()) {
+            error(node, "struct listesi literalinin tipi belirtilmeli (or. list<" + elemType.str() +
+                        "> l = [...];)");
+            return;
+        }
+        node->type = SemType::List(elemType);
+        return;
+    }
 
     SemType elemType;
     if (allNumeric) {
@@ -1111,9 +1135,11 @@ void Sema::checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
             node->type = args[0]->type.elementType();
             return;
 
+        // free(liste). String için de yazılabilir ama bir şey yapmaz: stringlerin
+        // belleği kendiliğinden bırakılır.
         case Builtin::Free:
-            noteMutatingBuiltin(node, name);
             node->type = SemType::Void();
+            if (args.size() != 1 || !args[0]->type.isString()) noteMutatingBuiltin(node, name);
             if (!expectArgs(1) || !ok) return;
             if (!args[0]->type.isList() && !args[0]->type.isString())
                 error(args[0].get(), "'free' liste ya da string bekler (bulunan: " +
@@ -1380,11 +1406,29 @@ void Sema::visit(VariableDecl* node) {
 
 void Sema::visit(AssignmentStmt* node) {
     // Hedef okunmuyor, yazılıyor: paralel döngü denetimi için işaretle.
-    if (dynamic_cast<ArrayAccessExpr*>(node->target.get())) accessIsWrite = true;
-    else skipWholeRead = true;
+    auto* targetAccess = dynamic_cast<ArrayAccessExpr*>(node->target.get());
+    auto* targetMember = dynamic_cast<MemberExpr*>(node->target.get());
+    if (targetAccess) accessIsWrite = true;
+    else if (!targetMember) skipWholeRead = true;
     SemType target = check(node->target);
     accessIsWrite = skipWholeRead = false;
     SemType value = checkExpecting(node->value, target);
+
+    // l[i].x = ... — alanına atanan struct bir liste elemanı olmalı. (Değişkenin
+    // alanı `p.x = ...` noktalı isim olarak gelir; f().x ise geçici bir değerdir.)
+    if (targetMember && !target.isError()) {
+        Expression* base = targetMember->base.get();
+        while (auto* inner = dynamic_cast<MemberExpr*>(base)) base = inner->base.get();
+        auto* element = dynamic_cast<ArrayAccessExpr*>(base);
+        if (!element || !element->target->type.isList())
+            return error(node->target.get(), "'." + targetMember->field + "' alanina atama yapilamaz: "
+                         "hedef bir degiskenin (p.x) ya da liste elemaninin (l[i].x) alani olmali");
+    }
+    // Hedef, bir değişkenin doğrudan elemanı değilse (l[i].x, l[i].dizi[j])
+    // paralel döngü denetimi için ayrıca kaydedilir.
+    if (!target.isError() &&
+        (targetMember || (targetAccess && !dynamic_cast<Identifier*>(targetAccess->target.get()))))
+        noteNestedWrite(node->target.get());
 
     if (auto* ident = dynamic_cast<Identifier*>(node->target.get())) {
         if (Symbol* sym = lookup(ident); sym && !target.isError()) {
@@ -1400,9 +1444,20 @@ void Sema::visit(AssignmentStmt* node) {
     // Matris parametreleri salt okunurdur: çağıranın matrisi kopyalanmadan
     // verilir, bu yüzden fonksiyon onu değiştiremez (değer semantiği).
     Expression* root = node->target.get();
-    if (auto* access = dynamic_cast<ArrayAccessExpr*>(root)) root = access->target.get();
+    while (true) {
+        if (auto* access = dynamic_cast<ArrayAccessExpr*>(root)) root = access->target.get();
+        else if (auto* member = dynamic_cast<MemberExpr*>(root)) root = member->base.get();
+        else break;
+    }
     if (auto* ident = dynamic_cast<Identifier*>(root)) {
         Symbol* sym = lookup(ident);
+        // `for p in liste` değişkeninin dizi ve matris alanları listedeki
+        // elemanın kendisidir; döngü değişkeni üzerinden değiştirilemez.
+        if (sym && sym->kind == Symbol::Iterator && root != node->target.get() &&
+            (sym->type.isArray() || sym->type.isMatrix()))
+            return error(ident, "dongu degiskeni '" + ident->name + "' degistirilemez; listedeki "
+                                "elemani indeksle degistirin (or. liste[i]." +
+                                ident->name.substr(ident->name.rfind('.') + 1) + ")");
         if (sym && sym->readOnly && sym->type.isStruct())
             return error(ident, "'" + ident->name + "' parametresi matris iceriyor; butun olarak "
                                 "atanamaz (matris parametreleri salt okunurdur)");
@@ -1504,7 +1559,7 @@ void Sema::visit(ForCollectionStmt* node) {
     }
 
     scopes.emplace_back();
-    declare(node->iteratorName, {node->iterType, Symbol::Iterator, funcDepth}, node);
+    declareVariable(node->iteratorName, {node->iterType, Symbol::Iterator, funcDepth}, node);
     visitLoopBody(node);
     scopes.pop_back();
 }
