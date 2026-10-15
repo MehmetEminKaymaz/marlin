@@ -2,7 +2,7 @@
 //
 // String, çalışma zamanındaki bir bloğun adresidir ve değişmez; bu yüzden
 // kopyalanmaz, PAYLAŞILIR. Bloğun başındaki sayaç onu kaç yerin tuttuğunu
-// söyler (bkz. runtime/minik_rt.c); sıfıra inince bellek geri verilir. Sayacı
+// söyler (bkz. runtime/marlin_rt.c); sıfıra inince bellek geri verilir. Sayacı
 // burada üretilen kod yönetir; kullanıcı string için `free` yazmaz.
 //
 // KURALLAR
@@ -44,11 +44,11 @@
 #include <algorithm>
 
 void MLIRGenerator::retainString(mlir::Value value, mlir::Location loc) {
-    runtime.call("minik_str_retain", {value}, loc);
+    runtime.call("marlin_str_retain", {value}, loc);
 }
 
 void MLIRGenerator::releaseString(mlir::Value value, mlir::Location loc) {
-    runtime.call("minik_str_release", {value}, loc);
+    runtime.call("marlin_str_release", {value}, loc);
 }
 
 mlir::Value MLIRGenerator::stringResult(mlir::Value value) {

@@ -18,7 +18,7 @@
 //     komutuna ineceklerine hedefe göre indirme hattı karar verir.
 //
 //   * print, çalışma zamanı kütüphanesindeki tipe özel C fonksiyonlarına
-//     (minik_print_i64, minik_print_str ...) çağrı olarak üretilir (bkz.
+//     (marlin_print_i64, marlin_print_str ...) çağrı olarak üretilir (bkz.
 //     MLIRRuntime). İleride GPU çekirdeklerinde print'in yasaklanması ya da
 //     yönlendirilmesi bu sınırda yapılır.
 //

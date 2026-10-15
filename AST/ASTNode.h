@@ -273,7 +273,7 @@ public:
     // extern: gövdesi çalışma zamanı kütüphanesinde, C ile yazılı (`body`
     // boştur). Yalnızca standart kütüphane modüllerinde bulunur.
     bool isExtern = false;
-    std::string externName;  // C'deki adı: std.file / c_exists → minik_file_exists
+    std::string externName;  // C'deki adı: std.file / c_exists → marlin_file_exists
     bool isPure = false;     // extern: yan etkisi yok (@pure); Sema doldurur
     // Fonksiyonun başına yazılan @CPU / @GPU (extern'de @pure); yazılmadıysa boş.
     std::string annotation;

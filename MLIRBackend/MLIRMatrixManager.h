@@ -124,8 +124,8 @@ private:
     void checkSameShape(llvm::ArrayRef<mlir::Value> inputs, int line, mlir::Location loc);
     void checkIndex(mlir::Value buffer, llvm::ArrayRef<mlir::Value> indices, int line,
                     mlir::Location loc);
-    /// Hata mesajı için değerleri çalışma zamanına bildirir (bkz. minik_rt.c:
-    /// minik_report_push). `slot`: 0 ya da 1 numaralı liste.
+    /// Hata mesajı için değerleri çalışma zamanına bildirir (bkz. marlin_rt.c:
+    /// marlin_report_push). `slot`: 0 ya da 1 numaralı liste.
     void report(int slot, llvm::ArrayRef<mlir::Value> indexValues, mlir::Location loc);
     llvm::SmallVector<mlir::Value, 4> shapeOf(mlir::Value tensor, mlir::Location loc);
     mlir::Value zeroOf(mlir::Type elementType, mlir::Location loc);

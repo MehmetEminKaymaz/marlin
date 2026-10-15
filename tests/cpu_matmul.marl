@@ -1,0 +1,115 @@
+// output: 1 1 1 true
+// output: 3 5 7 true
+// output: 4 8 8 true
+// output: 64 64 64 true
+// output: 65 17 63 true
+// output: 70 33 95 true
+// output: 130 129 3 true
+// output: 67 300 261 true
+// output: 2 0 3 true
+// output: 70 33 95 true
+// output: 70 33 95 true
+// output: 2.5
+// CPU'da matris çarpımı döşemelerle hesaplanır: görev başına 64x256'lık
+// bloklar, 256'lık derinlik şeritleri, yazmaçlarda 6 satırlık vektör
+// parçaları. Boyutlar bu sayıların katı olmadığında kalan satır ve sütunlar
+// doğru işlenmeli. Her sonuç, elle hesaplanan çarpımla karşılaştırılır.
+
+func veri(int satir, int sutun, int p) -> matrix<int> {
+    matrix<int> m = zeros(satir, sutun);
+    for i in 0 .. satir {
+        for j in 0 .. sutun {
+            m[i, j] = (i * p + j * 3) % 11 - 5;
+        }
+    }
+    return m;
+}
+
+func elle(matrix<int> a, matrix<int> b) -> matrix<int> {
+    int64 r = shape(a, 0);
+    int64 k = shape(a, 1);
+    int64 c = shape(b, 1);
+    matrix<int> sonuc = zeros(r, c);
+    for i in 0 .. r {
+        for j in 0 .. c {
+            int t = 0;
+            for x in 0 .. k {
+                t = t + a[i, x] * b[x, j];
+            }
+            sonuc[i, j] = t;
+        }
+    }
+    return sonuc;
+}
+
+func esit(matrix<int> x, matrix<int> y) -> bool {
+    if shape(x, 0) != shape(y, 0) || shape(x, 1) != shape(y, 1) { return false; }
+    for i in 0 .. shape(x, 0) {
+        for j in 0 .. shape(x, 1) {
+            if x[i, j] != y[i, j] { return false; }
+        }
+    }
+    return true;
+}
+
+func dene(int r, int k, int c) -> void {
+    matrix<int> a = veri(r, k, 7);
+    matrix<int> b = veri(k, c, 5);
+    print(r, k, c, esit(matmul(a, b), elle(a, b)));
+}
+
+// Çarpımın sonucu başka bir işlemde kullanılıyor.
+func karisik(matrix<float64> a, matrix<float64> b) -> float64 {
+    matrix<float64> c = matmul(a, b) * 0.5 + 1.0;
+    return sum(c) / shape(c, 0) / shape(c, 1);
+}
+
+func main() -> void {
+    dene(1, 1, 1);
+    dene(3, 5, 7);
+    dene(4, 8, 8);
+    dene(64, 64, 64);
+    dene(65, 17, 63);
+    dene(70, 33, 95);
+    dene(130, 129, 3);
+    dene(67, 300, 261);
+    dene(2, 0, 3);
+
+    // Kayan noktalı: aynı veriler float32 ve float64 olarak.
+    matrix<int> a = veri(70, 33, 7);
+    matrix<int> b = veri(33, 95, 5);
+    matrix<int> beklenen = elle(a, b);
+    matrix<float> a32 = zeros(70, 33);
+    matrix<float> b32 = zeros(33, 95);
+    matrix<float64> a64 = zeros(70, 33);
+    matrix<float64> b64 = zeros(33, 95);
+    for i in 0 .. 70 {
+        for j in 0 .. 33 {
+            a32[i, j] = a[i, j];
+            a64[i, j] = a[i, j];
+        }
+    }
+    for i in 0 .. 33 {
+        for j in 0 .. 95 {
+            b32[i, j] = b[i, j];
+            b64[i, j] = b[i, j];
+        }
+    }
+    matrix<float> c32 = matmul(a32, b32);
+    matrix<float64> c64 = matmul(a64, b64);
+    bool tamam32 = true;
+    bool tamam64 = true;
+    for i in 0 .. 70 {
+        for j in 0 .. 95 {
+            int e = beklenen[i, j];
+            if c32[i, j] != e { tamam32 = false; }
+            if c64[i, j] != e { tamam64 = false; }
+        }
+    }
+    print(70, 33, 95, tamam32);
+    print(70, 33, 95, tamam64);
+
+    matrix<float64> birler = ones(3, 4);
+    matrix<float64> ikiler = fill(4, 2, 0.75);
+    print(karisik(birler, ikiler));
+}

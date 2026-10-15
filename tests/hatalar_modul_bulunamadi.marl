@@ -1,4 +1,4 @@
-// error: modul bulunamadi: 'moduller.yok' (aranan dosya: moduller/yok.minik)
+// error: modul bulunamadi: 'moduller.yok' (aranan dosya: moduller/yok.marl)
 // error: 'std.dosya' adinda bir standart modul yok
 import moduller.yok;
 import std.dosya;

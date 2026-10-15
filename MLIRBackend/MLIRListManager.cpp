@@ -47,7 +47,7 @@ void MLIRListManager::checkIndex(Value index, Value length, int line, Location l
     Value outOfBounds = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, index, length);
     emitIf(outOfBounds, loc, [&] {
         Value lineValue = b.create<arith::ConstantIntOp>(loc, line, 32);
-        runtime.call("minik_panic_index", {toI64(index, loc), toI64(length, loc), lineValue}, loc);
+        runtime.call("marlin_panic_index", {toI64(index, loc), toI64(length, loc), lineValue}, loc);
     });
 }
 
@@ -146,7 +146,7 @@ Value MLIRListManager::pop(Value list, int line, Location loc) {
     Value isEmpty = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, length, zero);
     emitIf(isEmpty, loc, [&] {
         Value lineValue = b.create<arith::ConstantIntOp>(loc, line, 32);
-        runtime.call("minik_panic_pop", {lineValue}, loc);
+        runtime.call("marlin_panic_pop", {lineValue}, loc);
     });
 
     // Bellek küçültülmez; yalnızca uzunluk bir azalır.

@@ -4,11 +4,11 @@
 
 #ifndef ASTBUILDER_H
 #define ASTBUILDER_H
-#include <minikBaseVisitor.h>
+#include <marlinBaseVisitor.h>
 #include "ASTNode.h"
 
 
-class ASTBuilder : public minikBaseVisitor {
+class ASTBuilder : public marlinBaseVisitor {
 
     int module; // ayrıştırılan dosyanın Program::modules içindeki sırası
 
@@ -21,17 +21,17 @@ class ASTBuilder : public minikBaseVisitor {
     }
 
     // Görünürlük yazılmadıysa tanım private'tır.
-    static bool isPublic(minikParser::VisibilityContext* ctx) {
+    static bool isPublic(marlinParser::VisibilityContext* ctx) {
         return ctx && ctx->getText() == "public";
     }
 
-    ImportDecl* makeImport(minikParser::ImportDeclContext* ctx) const {
+    ImportDecl* makeImport(marlinParser::ImportDeclContext* ctx) const {
         auto* decl = new ImportDecl();
         setLoc(decl, ctx->getStart());
-        if (auto* whole = dynamic_cast<minikParser::ImportModuleContext*>(ctx)) {
+        if (auto* whole = dynamic_cast<marlinParser::ImportModuleContext*>(ctx)) {
             decl->modulePath = whole->qualifiedName()->getText();
             if (whole->IDENTIFIER()) decl->alias = whole->IDENTIFIER()->getText();
-        } else if (auto* some = dynamic_cast<minikParser::ImportNamesContext*>(ctx)) {
+        } else if (auto* some = dynamic_cast<marlinParser::ImportNamesContext*>(ctx)) {
             decl->isFrom = true;
             decl->modulePath = some->qualifiedName()->getText();
             for (auto* item : some->importName()) {
@@ -59,8 +59,8 @@ class ASTBuilder : public minikBaseVisitor {
         return out;
     }
 
-    Expression* makeBinary(BinaryExpr::Op op, minikParser::ExpressionContext* l,
-                           minikParser::ExpressionContext* r, antlr4::Token* opTok) {
+    Expression* makeBinary(BinaryExpr::Op op, marlinParser::ExpressionContext* l,
+                           marlinParser::ExpressionContext* r, antlr4::Token* opTok) {
         auto left = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(l)));
         auto right = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(r)));
         auto* node = new BinaryExpr(op, std::move(left), std::move(right));
@@ -74,7 +74,7 @@ public:
     // Her kuralın ürettiği düğüme, o kuralın ilk token'ının konumunu yazar.
     // Böylece visitXxx metotlarının tek tek konum ataması gerekmez.
     std::any visit(antlr4::tree::ParseTree* tree) override {
-        std::any result = minikBaseVisitor::visit(tree);
+        std::any result = marlinBaseVisitor::visit(tree);
         auto* ctx = dynamic_cast<antlr4::ParserRuleContext*>(tree);
         if (!ctx || !result.has_value()) return result;
 
@@ -86,7 +86,7 @@ public:
 
     // Tek bir dosyanın ağacı: `modules` yalnızca bu dosyanın import'larını
     // taşıyan tek bir kayıt içerir. Dosyaları ModuleLoader birleştirir.
-    virtual std::any visitProgram(minikParser::ProgramContext *ctx) override {
+    virtual std::any visitProgram(marlinParser::ProgramContext *ctx) override {
         auto program = std::make_unique<Program>();
         program->modules.emplace_back();
         for (auto* importCtx : ctx->importDecl())
@@ -102,7 +102,7 @@ public:
         return static_cast<Program*>(program.release());
     }
 
-    virtual std::any visitDeclaration(minikParser::DeclarationContext *ctx) override {
+    virtual std::any visitDeclaration(marlinParser::DeclarationContext *ctx) override {
     if (ctx->functionDecl()) return visit(ctx->functionDecl());
     if (ctx->externDecl()) return visit(ctx->externDecl());
     if (ctx->structDecl()) return visit(ctx->structDecl());
@@ -115,7 +115,7 @@ public:
     return {};
 }
 
-virtual std::any visitExternDecl(minikParser::ExternDeclContext *ctx) override {
+virtual std::any visitExternDecl(marlinParser::ExternDeclContext *ctx) override {
     auto fn = new FunctionDecl();
     fn->isExtern = true;
     fn->name = ctx->IDENTIFIER()->getText();
@@ -132,7 +132,7 @@ virtual std::any visitExternDecl(minikParser::ExternDeclContext *ctx) override {
     return static_cast<Statement*>(fn);
 }
 
-virtual std::any visitStructDecl(minikParser::StructDeclContext *ctx) override {
+virtual std::any visitStructDecl(marlinParser::StructDeclContext *ctx) override {
     auto decl = new StructDecl();
     decl->name = ctx->IDENTIFIER()->getText();
     decl->isPublic = isPublic(ctx->visibility());
@@ -143,13 +143,13 @@ virtual std::any visitStructDecl(minikParser::StructDeclContext *ctx) override {
     return static_cast<Statement*>(decl);
 }
 
-virtual std::any visitNamedType(minikParser::NamedTypeContext *ctx) override {
+virtual std::any visitNamedType(marlinParser::NamedTypeContext *ctx) override {
     auto type = new Type(TypeKind::Named);
     type->name = ctx->qualifiedName()->getText();
     return type;
 }
 
-virtual std::any visitMemberAccessExpr(minikParser::MemberAccessExprContext *ctx) override {
+virtual std::any visitMemberAccessExpr(marlinParser::MemberAccessExprContext *ctx) override {
     auto base = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     auto* node = new MemberExpr(std::move(base), ctx->IDENTIFIER()->getText());
     setLoc(node, ctx->IDENTIFIER()->getSymbol()); // hata mesajları alan adını göstersin
@@ -157,31 +157,31 @@ virtual std::any visitMemberAccessExpr(minikParser::MemberAccessExprContext *ctx
 }
 
 // --- Statements ---
-virtual std::any visitVariableDefStatement(minikParser::VariableDefStatementContext *ctx) override {
+virtual std::any visitVariableDefStatement(marlinParser::VariableDefStatementContext *ctx) override {
     return visit(ctx->variableDefinition());
 }
 
-virtual std::any visitIfStmt(minikParser::IfStmtContext *ctx) override {
+virtual std::any visitIfStmt(marlinParser::IfStmtContext *ctx) override {
     return visit(ctx->ifStatement());
 }
 
-virtual std::any visitWhileStmt(minikParser::WhileStmtContext *ctx) override {
+virtual std::any visitWhileStmt(marlinParser::WhileStmtContext *ctx) override {
     return visit(ctx->whileStatement());
 }
 
-virtual std::any visitForStmt(minikParser::ForStmtContext *ctx) override {
+virtual std::any visitForStmt(marlinParser::ForStmtContext *ctx) override {
     return visit(ctx->forStatement());
 }
 
-virtual std::any visitBreakStatement(minikParser::BreakStatementContext *ctx) override {
+virtual std::any visitBreakStatement(marlinParser::BreakStatementContext *ctx) override {
     return static_cast<Statement*>(new BreakStmt());
 }
 
-virtual std::any visitContinueStatement(minikParser::ContinueStatementContext *ctx) override {
+virtual std::any visitContinueStatement(marlinParser::ContinueStatementContext *ctx) override {
     return static_cast<Statement*>(new ContinueStmt());
 }
 
-virtual std::any visitReturnStatement(minikParser::ReturnStatementContext *ctx) override {
+virtual std::any visitReturnStatement(marlinParser::ReturnStatementContext *ctx) override {
     auto ret = new ReturnStmt();
     if (ctx->expression()) {
         ret->expr = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
@@ -189,16 +189,16 @@ virtual std::any visitReturnStatement(minikParser::ReturnStatementContext *ctx) 
     return static_cast<Statement*>(ret);
 }
 
-virtual std::any visitExpressionStatement(minikParser::ExpressionStatementContext *ctx) override {
+virtual std::any visitExpressionStatement(marlinParser::ExpressionStatementContext *ctx) override {
     auto expr = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     return static_cast<Statement*>(new ExprStmt(std::move(expr)));
 }
 
-virtual std::any visitBlockStatement(minikParser::BlockStatementContext *ctx) override {
+virtual std::any visitBlockStatement(marlinParser::BlockStatementContext *ctx) override {
     return visit(ctx->block());
 }
 
-virtual std::any visitBlock(minikParser::BlockContext *ctx) override {
+virtual std::any visitBlock(marlinParser::BlockContext *ctx) override {
     auto block = new BlockStmt();
     for (auto* stmtCtx : ctx->statement()) {
         auto stmtRes = visit(stmtCtx);
@@ -209,7 +209,7 @@ virtual std::any visitBlock(minikParser::BlockContext *ctx) override {
     return static_cast<Statement*>(block);
 }
 
-virtual std::any visitFunctionDecl(minikParser::FunctionDeclContext *ctx) override {
+virtual std::any visitFunctionDecl(marlinParser::FunctionDeclContext *ctx) override {
     auto fn = new FunctionDecl();
     fn->name = ctx->IDENTIFIER()->getText();
     fn->isPublic = isPublic(ctx->visibility());
@@ -227,20 +227,20 @@ virtual std::any visitFunctionDecl(minikParser::FunctionDeclContext *ctx) overri
     return static_cast<Statement*>(fn);
 }
 
-virtual std::any visitVariableTypeDefinitionWithExpression(minikParser::VariableTypeDefinitionWithExpressionContext *ctx) override {
+virtual std::any visitVariableTypeDefinitionWithExpression(marlinParser::VariableTypeDefinitionWithExpressionContext *ctx) override {
     std::string name = ctx->IDENTIFIER()->getText();
     auto type = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType())));
     auto init = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     return static_cast<Statement*>(new VariableDecl(name, std::move(type), std::move(init), false));
 }
 
-virtual std::any visitVariableLetDefinitionWithExpression(minikParser::VariableLetDefinitionWithExpressionContext *ctx) override {
+virtual std::any visitVariableLetDefinitionWithExpression(marlinParser::VariableLetDefinitionWithExpressionContext *ctx) override {
     std::string name = ctx->IDENTIFIER()->getText();
     auto init = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     return static_cast<Statement*>(new VariableDecl(name, nullptr, std::move(init), true));
 }
 
-virtual std::any visitIfStatement(minikParser::IfStatementContext *ctx) override {
+virtual std::any visitIfStatement(marlinParser::IfStatementContext *ctx) override {
     auto ifNode = new IfStmt();
     ifNode->condition = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
     ifNode->trueBlock = std::unique_ptr<BlockStmt>(static_cast<BlockStmt*>(std::any_cast<Statement*>(visit(ctx->block(0)))));
@@ -260,14 +260,14 @@ virtual std::any visitIfStatement(minikParser::IfStatementContext *ctx) override
     return static_cast<Statement*>(ifNode);
 }
 
-virtual std::any visitWhileStatement(minikParser::WhileStatementContext *ctx) override {
+virtual std::any visitWhileStatement(marlinParser::WhileStatementContext *ctx) override {
     auto w = new WhileStmt();
     w->condition = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     w->body = std::unique_ptr<BlockStmt>(static_cast<BlockStmt*>(std::any_cast<Statement*>(visit(ctx->block()))));
     return static_cast<Statement*>(w);
 }
 
-virtual std::any visitForRangeStatement(minikParser::ForRangeStatementContext *ctx) override {
+virtual std::any visitForRangeStatement(marlinParser::ForRangeStatementContext *ctx) override {
     auto f = new ForRangeStmt();
     f->isParallel = ctx->parallel != nullptr;
     f->iteratorName = ctx->IDENTIFIER()->getText();
@@ -280,7 +280,7 @@ virtual std::any visitForRangeStatement(minikParser::ForRangeStatementContext *c
     return static_cast<Statement*>(f);
 }
 
-virtual std::any visitForCollectionStatement(minikParser::ForCollectionStatementContext *ctx) override {
+virtual std::any visitForCollectionStatement(marlinParser::ForCollectionStatementContext *ctx) override {
     auto f = new ForCollectionStmt();
     f->isParallel = ctx->parallel != nullptr;
     f->iteratorName = ctx->IDENTIFIER()->getText();
@@ -291,38 +291,38 @@ virtual std::any visitForCollectionStatement(minikParser::ForCollectionStatement
 
 // --- Expressions ---
 
-virtual std::any visitNumberExpr(minikParser::NumberExprContext *ctx) override {
+virtual std::any visitNumberExpr(marlinParser::NumberExprContext *ctx) override {
     std::string text = ctx->NUMBER()->getText();
     if (text.find('.') != std::string::npos) return static_cast<Expression*>(new FloatLiteral(std::stod(text)));
     return static_cast<Expression*>(new IntegerLiteral(std::stoll(text)));
 }
 
-virtual std::any visitStringExpr(minikParser::StringExprContext *ctx) override {
+virtual std::any visitStringExpr(marlinParser::StringExprContext *ctx) override {
     std::string text = ctx->STRING()->getText();
     text = unescape(text.substr(1, text.length() - 2)); // remove quotes
     return static_cast<Expression*>(new StringLiteral(text));
 }
 
-virtual std::any visitCharExpr(minikParser::CharExprContext *ctx) override {
+virtual std::any visitCharExpr(marlinParser::CharExprContext *ctx) override {
     std::string text = ctx->CHAR()->getText();
     text = unescape(text.substr(1, text.length() - 2));
     char val = text.empty() ? '\0' : text[0];
     return static_cast<Expression*>(new CharLiteral(val));
 }
 
-virtual std::any visitTrueExpr(minikParser::TrueExprContext *ctx) override {
+virtual std::any visitTrueExpr(marlinParser::TrueExprContext *ctx) override {
     return static_cast<Expression*>(new BooleanLiteral(true));
 }
 
-virtual std::any visitFalseExpr(minikParser::FalseExprContext *ctx) override {
+virtual std::any visitFalseExpr(marlinParser::FalseExprContext *ctx) override {
     return static_cast<Expression*>(new BooleanLiteral(false));
 }
 
-virtual std::any visitIdentifierExpr(minikParser::IdentifierExprContext *ctx) override {
+virtual std::any visitIdentifierExpr(marlinParser::IdentifierExprContext *ctx) override {
     return static_cast<Expression*>(new Identifier(ctx->qualifiedName()->getText()));
 }
 
-virtual std::any visitListLiteralExpr(minikParser::ListLiteralExprContext *ctx) override {
+virtual std::any visitListLiteralExpr(marlinParser::ListLiteralExprContext *ctx) override {
     auto list = new ListLiteral();
     if (ctx->exprList()) {
         for (auto* e : ctx->exprList()->expression()) {
@@ -332,7 +332,7 @@ virtual std::any visitListLiteralExpr(minikParser::ListLiteralExprContext *ctx) 
     return static_cast<Expression*>(list);
 }
 
-virtual std::any visitArrayAccessExpr(minikParser::ArrayAccessExprContext *ctx) override {
+virtual std::any visitArrayAccessExpr(marlinParser::ArrayAccessExprContext *ctx) override {
     auto target = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     auto access = new ArrayAccessExpr(std::move(target));
     for (auto* e : ctx->exprList()->expression())
@@ -340,7 +340,7 @@ virtual std::any visitArrayAccessExpr(minikParser::ArrayAccessExprContext *ctx) 
     return static_cast<Expression*>(access);
 }
 
-virtual std::any visitFunctionCallExpr(minikParser::FunctionCallExprContext *ctx) override {
+virtual std::any visitFunctionCallExpr(marlinParser::FunctionCallExprContext *ctx) override {
     auto target = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     auto call = new FunctionCallExpr(std::move(target));
     if (ctx->exprList()) {
@@ -351,21 +351,21 @@ virtual std::any visitFunctionCallExpr(minikParser::FunctionCallExprContext *ctx
     return static_cast<Expression*>(call);
 }
 
-virtual std::any visitParenExpr(minikParser::ParenExprContext *ctx) override {
+virtual std::any visitParenExpr(marlinParser::ParenExprContext *ctx) override {
     return visit(ctx->expression());
 }
 
-virtual std::any visitUnaryMinusExpr(minikParser::UnaryMinusExprContext *ctx) override {
+virtual std::any visitUnaryMinusExpr(marlinParser::UnaryMinusExprContext *ctx) override {
     auto op = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     return static_cast<Expression*>(new UnaryExpr(UnaryExpr::Negate, std::move(op)));
 }
 
-virtual std::any visitNotExpr(minikParser::NotExprContext *ctx) override {
+virtual std::any visitNotExpr(marlinParser::NotExprContext *ctx) override {
     auto op = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     return static_cast<Expression*>(new UnaryExpr(UnaryExpr::Not, std::move(op)));
 }
 
-virtual std::any visitMulDivExpr(minikParser::MulDivExprContext *ctx) override {
+virtual std::any visitMulDivExpr(marlinParser::MulDivExprContext *ctx) override {
     BinaryExpr::Op op;
     if (ctx->op->getText() == "*") op = BinaryExpr::Mul;
     else if (ctx->op->getText() == "/") op = BinaryExpr::Div;
@@ -373,12 +373,12 @@ virtual std::any visitMulDivExpr(minikParser::MulDivExprContext *ctx) override {
     return makeBinary(op, ctx->expression(0), ctx->expression(1), ctx->op);
 }
 
-virtual std::any visitAddSubExpr(minikParser::AddSubExprContext *ctx) override {
+virtual std::any visitAddSubExpr(marlinParser::AddSubExprContext *ctx) override {
     BinaryExpr::Op op = ctx->op->getText() == "+" ? BinaryExpr::Add : BinaryExpr::Sub;
     return makeBinary(op, ctx->expression(0), ctx->expression(1), ctx->op);
 }
 
-virtual std::any visitRelationalExpr(minikParser::RelationalExprContext *ctx) override {
+virtual std::any visitRelationalExpr(marlinParser::RelationalExprContext *ctx) override {
     std::string optxt = ctx->op->getText();
     BinaryExpr::Op op;
     if (optxt == "<") op = BinaryExpr::Lt;
@@ -390,15 +390,15 @@ virtual std::any visitRelationalExpr(minikParser::RelationalExprContext *ctx) ov
     return makeBinary(op, ctx->expression(0), ctx->expression(1), ctx->op);
 }
 
-virtual std::any visitLogicalAndExpr(minikParser::LogicalAndExprContext *ctx) override {
+virtual std::any visitLogicalAndExpr(marlinParser::LogicalAndExprContext *ctx) override {
     return makeBinary(BinaryExpr::And, ctx->expression(0), ctx->expression(1), ctx->op);
 }
 
-virtual std::any visitLogicalOrExpr(minikParser::LogicalOrExprContext *ctx) override {
+virtual std::any visitLogicalOrExpr(marlinParser::LogicalOrExprContext *ctx) override {
     return makeBinary(BinaryExpr::Or, ctx->expression(0), ctx->expression(1), ctx->op);
 }
 
-virtual std::any visitLambdaExpr(minikParser::LambdaExprContext *ctx) override {
+virtual std::any visitLambdaExpr(marlinParser::LambdaExprContext *ctx) override {
     auto lam = new LambdaExpr();
     if (ctx->paramList()) {
         for (auto* p : ctx->paramList()->param()) {
@@ -417,13 +417,13 @@ virtual std::any visitLambdaExpr(minikParser::LambdaExprContext *ctx) override {
     return static_cast<Expression*>(lam);
 }
 
-virtual std::any visitLambdaExpression(minikParser::LambdaExpressionContext *ctx) override {
+virtual std::any visitLambdaExpression(marlinParser::LambdaExpressionContext *ctx) override {
     return visit(ctx->lambdaExpr());
 }
 
 // --- Types ---
 
-virtual std::any visitArrayOrBaseType(minikParser::ArrayOrBaseTypeContext *ctx) override {
+virtual std::any visitArrayOrBaseType(marlinParser::ArrayOrBaseTypeContext *ctx) override {
     auto baseType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->baseType())));
     if (ctx->NUMBER()) {
         auto arrType = new Type(TypeKind::Array);
@@ -434,13 +434,13 @@ virtual std::any visitArrayOrBaseType(minikParser::ArrayOrBaseTypeContext *ctx) 
     return baseType.release();
 }
 
-virtual std::any visitListType(minikParser::ListTypeContext *ctx) override {
+virtual std::any visitListType(marlinParser::ListTypeContext *ctx) override {
     auto listType = new Type(TypeKind::List);
     listType->elementType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType())));
     return listType;
 }
 
-virtual std::any visitMatrixType(minikParser::MatrixTypeContext *ctx) override {
+virtual std::any visitMatrixType(marlinParser::MatrixTypeContext *ctx) override {
     auto matrixType = new Type(TypeKind::Matrix);
     matrixType->elementType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType())));
     matrixType->rank = 2;
@@ -452,7 +452,7 @@ virtual std::any visitMatrixType(minikParser::MatrixTypeContext *ctx) override {
     return matrixType;
 }
 
-virtual std::any visitLambdaType(minikParser::LambdaTypeContext *ctx) override {
+virtual std::any visitLambdaType(marlinParser::LambdaTypeContext *ctx) override {
     auto lamType = new Type(TypeKind::Lambda);
     if (ctx->typeList()) {
         for (auto* t : ctx->typeList()->variableType()) {
@@ -463,7 +463,7 @@ virtual std::any visitLambdaType(minikParser::LambdaTypeContext *ctx) override {
     return lamType;
 }
 
-virtual std::any visitBaseType(minikParser::BaseTypeContext *ctx) override {
+virtual std::any visitBaseType(marlinParser::BaseTypeContext *ctx) override {
     std::string t = ctx->getText();
     TypeKind kind;
     if (t == "int8") kind = TypeKind::Int8;
@@ -486,12 +486,12 @@ virtual std::any visitBaseType(minikParser::BaseTypeContext *ctx) override {
 
 
     // 1. Üst Kural: Statement'ın içinden Assignment geldiğinde doğrudan içeriye yönlendirir.
-    virtual std::any visitAssignmentStmt(minikParser::AssignmentStmtContext *ctx) override {
+    virtual std::any visitAssignmentStmt(marlinParser::AssignmentStmtContext *ctx) override {
         return visit(ctx->assignmentStatement());
     }
 
     // 2. Düz Atama: x = 5;
-    virtual std::any visitDirectAssignment(minikParser::DirectAssignmentContext *ctx) override {
+    virtual std::any visitDirectAssignment(marlinParser::DirectAssignmentContext *ctx) override {
         // Sol taraf (hedef) doğrudan bir Identifier
         auto target = std::unique_ptr<Expression>(new Identifier(ctx->qualifiedName()->getText()));
         setLoc(target.get(), ctx->getStart());
@@ -502,7 +502,7 @@ virtual std::any visitBaseType(minikParser::BaseTypeContext *ctx) override {
     }
 
     // 3. Dizi Elemanına Atama: dizi[0] = 5;
-    virtual std::any visitArrayElementAssignment(minikParser::ArrayElementAssignmentContext *ctx) override {
+    virtual std::any visitArrayElementAssignment(marlinParser::ArrayElementAssignmentContext *ctx) override {
         // Sol tarafı (hedef) bir ArrayAccessExpr olarak oluşturuyoruz
         auto arrayTarget = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
         auto access = new ArrayAccessExpr(std::move(arrayTarget));
@@ -518,7 +518,7 @@ virtual std::any visitBaseType(minikParser::BaseTypeContext *ctx) override {
     }
 
     // Liste elemanının alanına atama: l[i].x = 5;
-    virtual std::any visitMemberAssignment(minikParser::MemberAssignmentContext *ctx) override {
+    virtual std::any visitMemberAssignment(marlinParser::MemberAssignmentContext *ctx) override {
         auto base = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression(0))));
         auto target = std::unique_ptr<Expression>(
             new MemberExpr(std::move(base), ctx->IDENTIFIER()->getText()));
@@ -529,7 +529,7 @@ virtual std::any visitBaseType(minikParser::BaseTypeContext *ctx) override {
     }
 
     // 4. Boş Değişken Tanımı: int x;
-    virtual std::any visitVariableTypeDefinitionEmpty(minikParser::VariableTypeDefinitionEmptyContext *ctx) override {
+    virtual std::any visitVariableTypeDefinitionEmpty(marlinParser::VariableTypeDefinitionEmptyContext *ctx) override {
         std::string name = ctx->IDENTIFIER()->getText();
         auto type = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType())));
 

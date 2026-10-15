@@ -94,8 +94,8 @@ static const char* const kSampleSource = R"(
 )";
 
 static const char* const kUsage =
-    "Kullanim: minik_lang [kaynak.minik] [secenekler]\n"
-    "  kaynak.minik   derlenecek dosya (verilmezse gomulu ornek program)\n"
+    "Kullanim: marlin_lang [kaynak.marl] [secenekler]\n"
+    "  kaynak.marl   derlenecek dosya (verilmezse gomulu ornek program)\n"
     "  -o <dosya>     cikti dosyasi (varsayilan: exe icin a.out, obj icin a.o,\n"
     "                 metin ciktilari icin ekran)\n"
     "  -I <dizin>     import edilen modullerin aranacagi ek dizin (birden cok\n"
@@ -204,7 +204,7 @@ int main(int argc, char** argv) {
     registry.insert<mlir::async::AsyncDialect>();   // paralel döngülerin indirilmesi için
     registry.insert<mlir::affine::AffineDialect>();
     registry.insert<mlir::gpu::GPUDialect>();       // @GPU fonksiyonlar
-    minik::registerLoweringInterfaces(registry);
+    marlin::registerLoweringInterfaces(registry);
     mlir::registerAllToLLVMIRTranslations(registry);
 
     // Registry context'e verilir; LLVM IR'a çeviri arayüzleri ancak böyle bulunur.
@@ -241,7 +241,7 @@ int main(int argc, char** argv) {
         return writeText(outputPath, [&](llvm::raw_ostream& os) { moduleOp->print(os); }) ? 0 : 1;
 
     // --- MLIR → llvm dialect'i ---
-    if (!minik::lowerToLLVMDialect(moduleOp, generator.usesGpuCode(),
+    if (!marlin::lowerToLLVMDialect(moduleOp, generator.usesGpuCode(),
                                    /*stopAfterGpuSplit=*/emit == EmitKind::GpuMLIR)) {
         llvm::errs() << "MLIR, LLVM dialect'ine indirilemedi!\n";
         return 1;
@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
 
     // --- llvm dialect'i → LLVM IR ---
     llvm::LLVMContext llvmContext;
-    std::unique_ptr<llvm::Module> llvmModule = minik::translateToLLVMIR(moduleOp, llvmContext);
+    std::unique_ptr<llvm::Module> llvmModule = marlin::translateToLLVMIR(moduleOp, llvmContext);
     if (!llvmModule) {
         llvm::errs() << "LLVM IR'a ceviri basarisiz!\n";
         return 1;
@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
 
     // --- Optimizasyon ve makine kodu ---
     std::string error;
-    std::unique_ptr<minik::NativeCodegen> codegen = minik::NativeCodegen::create(optLevel, error);
+    std::unique_ptr<marlin::NativeCodegen> codegen = marlin::NativeCodegen::create(optLevel, error);
     if (!codegen) {
         llvm::errs() << "Kod uretici hazirlanamadi: " << error << "\n";
         return 1;
@@ -279,19 +279,19 @@ int main(int argc, char** argv) {
     }
 
     // --- Bağlama: geçici nesne dosyası + çalışma zamanı → çalıştırılabilir ---
-    std::string runtimeLib = minik::NativeCodegen::findRuntimeLibrary(argv[0]);
+    std::string runtimeLib = marlin::NativeCodegen::findRuntimeLibrary(argv[0]);
     if (runtimeLib.empty()) {
-        llvm::errs() << "Calisma zamani kutuphanesi (libminikrt.a) bulunamadi; "
-                        "MINIK_RUNTIME ortam degiskeniyle yolunu verin.\n";
+        llvm::errs() << "Calisma zamani kutuphanesi (libmarlinrt.a) bulunamadi; "
+                        "MARLIN_RUNTIME ortam degiskeniyle yolunu verin.\n";
         return 1;
     }
     llvm::SmallString<128> objectPath;
-    if (std::error_code ec = llvm::sys::fs::createTemporaryFile("minik", "o", objectPath)) {
+    if (std::error_code ec = llvm::sys::fs::createTemporaryFile("marlin", "o", objectPath)) {
         llvm::errs() << "Gecici dosya olusturulamadi: " << ec.message() << "\n";
         return 1;
     }
     bool ok = codegen->emitObject(*llvmModule, objectPath.str().str(), error) &&
-              minik::NativeCodegen::link(objectPath.str().str(), runtimeLib,
+              marlin::NativeCodegen::link(objectPath.str().str(), runtimeLib,
                                          outputPath.empty() ? "a.out" : outputPath,
                                          generator.usesParallelLoops(), generator.usesGpuCode(),
                                          error);

@@ -1,20 +1,20 @@
-// std.time — takvim zamanı ve bekleme (bkz. std/time.minik).
+// std.time — takvim zamanı ve bekleme (bkz. std/time.marl).
 
 #define _POSIX_C_SOURCE 200809L // clock_gettime, nanosleep
 
-#include "minik_rt.h"
+#include "marlin_rt.h"
 
 #include <time.h>
 
 // 1 Ocak 1970'ten beri geçen saniye (kesirli). Süre ölçmek için yerleşik
 // time() daha uygundur: o saat geri gitmez.
-double minik_time_now(void) {
+double marlin_time_now(void) {
     struct timespec now;
     clock_gettime(CLOCK_REALTIME, &now);
     return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
 }
 
-void minik_time_sleep(double seconds) {
+void marlin_time_sleep(double seconds) {
     if (seconds <= 0) return;
     struct timespec duration;
     duration.tv_sec = (time_t)seconds;

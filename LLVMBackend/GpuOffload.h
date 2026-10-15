@@ -1,5 +1,5 @@
-#ifndef MINIK_GPUOFFLOAD_H
-#define MINIK_GPUOFFLOAD_H
+#ifndef MARLIN_GPUOFFLOAD_H
+#define MARLIN_GPUOFFLOAD_H
 
 #include <memory>
 
@@ -7,17 +7,23 @@ namespace mlir {
 class Pass;
 }
 
-namespace minik {
+namespace marlin {
 
 // ---------------------------------------------------------------------------
 // GPU'ya aktarma
 //
 // Kod üretimi @GPU fonksiyonları da CPU fonksiyonlarıyla AYNI biçimde üretir:
 // `parallel for` bir scf.parallel, matris işlemleri linalg işlemleridir.
-// Fonksiyonun GPU için olduğu yalnızca `minik.gpu` işaretinden anlaşılır.
+// Fonksiyonun GPU için olduğu yalnızca `marlin.gpu` işaretinden anlaşılır.
 // Bu pass işaretli fonksiyonlarda şunları yapar:
 //
-//   1. linalg işlemlerini (eleman eleman işlem, matmul, fill ...) paralel
+//   1. Matris çarpımını (linalg.matmul) kendi döşemeli çekirdeğine çevirir:
+//      her blok sonucun 64x64'lük bir parçasını hesaplar; girdiler 16
+//      genişliğinde şeritler halinde paylaşımlı belleğe alınır, her iş
+//      parçacığı 4x4 sonucu yazmaçlarda biriktirir. (Düz çeviride her sonuç
+//      elemanı bir iş parçacığı olur ve toplam her adımda GPU belleğine
+//      yazılırdı; aynı veriyi her iş parçacığı yeniden okurdu.)
+//      Kalan linalg işlemlerini (eleman eleman işlem, fill ...) paralel
 //      döngülere açar. (İşaretsiz fonksiyonlarda bunlar sıralı döngü olur.)
 //   2. Her paralel döngüyü bir GPU çekirdeği başlatan gpu.launch'a çevirir:
 //
@@ -47,6 +53,18 @@ namespace minik {
 // ---------------------------------------------------------------------------
 std::unique_ptr<mlir::Pass> createGpuOffloadPass();
 
-} // namespace minik
+// ---------------------------------------------------------------------------
+// Çekirdekleri GPU derleyicisine hazırlama (gpu-kernel-outlining'den hemen önce)
+//
+//   * Çekirdeğin dışında üretilip içinde kullanılan sabitler çekirdeğe
+//     kopyalanır. Aradaki pass'ler sabitleri fonksiyonun başına toplar;
+//     dışarıda kalan sabit çekirdeğe parametre olarak geçer ve GPU derleyicisi
+//     değerini bilemez (ör. adımı 1 olan döngüyü açamaz).
+//   * Kayan noktalı çarpma ve toplamaların birleştirilmesine (a * b + c →
+//     tek FMA komutu) izin verilir; CUDA derleyicisinin varsayılanı da budur.
+// ---------------------------------------------------------------------------
+std::unique_ptr<mlir::Pass> createGpuKernelPreparePass();
 
-#endif // MINIK_GPUOFFLOAD_H
+} // namespace marlin
+
+#endif // MARLIN_GPUOFFLOAD_H

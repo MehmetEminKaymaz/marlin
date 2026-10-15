@@ -45,10 +45,6 @@ SemType Sema::resolveStruct(StructInfo& info) {
 
     for (auto& field : decl->fields) {
         SemType type = resolveValueType(field.type.get());
-        if (type.isFunction()) {
-            error(field.type.get(), "struct alani fonksiyon tipinde olamaz");
-            type = SemType::Error();
-        }
         if (!seen.insert(field.name).second) {
             error(field.type.get(), "'" + field.name + "' alani birden cok kez tanimlanmis");
             type = SemType::Error();

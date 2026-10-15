@@ -46,19 +46,19 @@ if(NOT EXISTS "${ANTLR_JAR}")
 endif()
 
 # 4. Gramer dosyamızın yolu ve üretilecek kodların kaydedileceği klasör
-set(ANTLR_GRAMMAR ${CMAKE_CURRENT_SOURCE_DIR}/minik.g4)
+set(ANTLR_GRAMMAR ${CMAKE_CURRENT_SOURCE_DIR}/marlin.g4)
 set(ANTLR_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/antlr4_cpp)
 
 # 5. ANTLR'ın üreteceği dosyaların listesi
 set(ANTLR_GENERATED_SRC
-        ${ANTLR_OUT_DIR}/minikLexer.cpp
-        ${ANTLR_OUT_DIR}/minikLexer.h
-        ${ANTLR_OUT_DIR}/minikParser.cpp
-        ${ANTLR_OUT_DIR}/minikParser.h
-        ${ANTLR_OUT_DIR}/minikVisitor.cpp
-        ${ANTLR_OUT_DIR}/minikVisitor.h
-        ${ANTLR_OUT_DIR}/minikBaseVisitor.cpp
-        ${ANTLR_OUT_DIR}/minikBaseVisitor.h
+        ${ANTLR_OUT_DIR}/marlinLexer.cpp
+        ${ANTLR_OUT_DIR}/marlinLexer.h
+        ${ANTLR_OUT_DIR}/marlinParser.cpp
+        ${ANTLR_OUT_DIR}/marlinParser.h
+        ${ANTLR_OUT_DIR}/marlinVisitor.cpp
+        ${ANTLR_OUT_DIR}/marlinVisitor.h
+        ${ANTLR_OUT_DIR}/marlinBaseVisitor.cpp
+        ${ANTLR_OUT_DIR}/marlinBaseVisitor.h
 
 )
 
@@ -126,7 +126,7 @@ add_custom_command(
         OUTPUT ${ANTLR_GENERATED_SRC}
         COMMAND java -jar ${ANTLR_JAR} -Dlanguage=Cpp -visitor -no-listener -o ${ANTLR_OUT_DIR} ${ANTLR_GRAMMAR}
         DEPENDS ${ANTLR_GRAMMAR}
-        COMMENT "ANTLR: minik.g4 dosyasindan C++ kodlari uretiliyor..."
+        COMMENT "ANTLR: marlin.g4 dosyasindan C++ kodlari uretiliyor..."
 )
 # ==============================================================================
 
@@ -139,7 +139,7 @@ add_definitions(${LLVM_DEFINITIONS})
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 7. Üretilen AST (cpp ve h) dosyalarını main.cpp ile birlikte derlemeye ekle
-add_executable(minik_lang
+add_executable(marlin_lang
         main.cpp
         ${ANTLR_GENERATED_SRC}
         ${PROJECT_SOURCES}
@@ -152,38 +152,41 @@ add_executable(minik_lang
 set_source_files_properties(LLVMBackend/GpuOffload.cpp LLVMBackend/ParallelMatmul.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
 
-# Çalışma zamanı kütüphanesi: derlenen her minik programına bağlanır (print vb.).
-# Derleyiciyle aynı dizine üretilir; minik_lang onu yanında arar, bulamazsa
+# Çalışma zamanı kütüphanesi: derlenen her marlin programına bağlanır (print vb.).
+# Derleyiciyle aynı dizine üretilir; marlin_lang onu yanında arar, bulamazsa
 # aşağıda gömülen yola bakar.
-# std_*.c: standart kütüphane modüllerinin (std/*.minik) C ile yazılmış kısmı.
-add_library(minikrt STATIC
-        runtime/minik_rt.c
-        runtime/minik_rt.h
+# std_*.c: standart kütüphane modüllerinin (std/*.marl) C ile yazılmış kısmı.
+add_library(marlinrt STATIC
+        runtime/marlin_rt.c
+        runtime/marlin_rt.h
         runtime/std_string.c
         runtime/std_file.c
         runtime/std_io.c
         runtime/std_os.c
         runtime/std_time.c
-        runtime/std_random.c)
-add_dependencies(minik_lang minikrt)
-target_compile_definitions(minik_lang PRIVATE MINIK_RUNTIME_LIB="$<TARGET_FILE:minikrt>")
+        runtime/std_random.c
+        runtime/std_http.c
+        runtime/http_parser.c
+        runtime/http_parser.h)
+add_dependencies(marlin_lang marlinrt)
+target_compile_definitions(marlin_lang PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE:marlinrt>")
 
-# Standart kütüphanenin minik dosyaları (import std.file → std/file.minik).
-# minik_lang önce yanındaki `std` dizinine, sonra buraya bakar.
-target_compile_definitions(minik_lang PRIVATE MINIK_STD_DIR="${CMAKE_CURRENT_SOURCE_DIR}/std")
+# Standart kütüphanenin marlin dosyaları (import std.file → std/file.marl).
+# marlin_lang önce yanındaki `std` dizinine, sonra buraya bakar.
+target_compile_definitions(marlin_lang PRIVATE MARLIN_STD_DIR="${CMAKE_CURRENT_SOURCE_DIR}/std")
 
 # Paralel döngü içeren programlar MLIR'in iş parçacığı havuzuna
-# (libmlir_async_runtime.so) bağlanır; minik_lang onu bu dizinde arar.
-target_compile_definitions(minik_lang PRIVATE MINIK_LLVM_LIB_DIR="${LLVM_LIBRARY_DIR}")
+# (libmlir_async_runtime.so) bağlanır; marlin_lang onu bu dizinde arar.
+target_compile_definitions(marlin_lang PRIVATE MARLIN_LLVM_LIB_DIR="${LLVM_LIBRARY_DIR}")
 
 # 8. ANTLR'ın ürettiği dosyaların ve bulduğumuz sistem başlıklarının yolunu projeye tanıt
-target_include_directories(minik_lang PRIVATE
+target_include_directories(marlin_lang PRIVATE
         ${ANTLR_OUT_DIR}
         ${ANTLR4_INCLUDE_DIR}
 )
 
 # 9. MLIR kütüphanelerini ve bulduğumuz ANTLR kütüphanesini (SO/A dosyası) bağla
-target_link_libraries(minik_lang PRIVATE
+target_link_libraries(marlin_lang PRIVATE
         MLIRIR
         MLIRParser
         MLIRSupport
@@ -231,6 +234,10 @@ target_link_libraries(minik_lang PRIVATE
         MLIRSCFToControlFlow
         MLIRControlFlowToLLVM
         MLIRReconcileUnrealizedCasts
+
+        # CPU'da matris çarpımı çekirdeği: vektör işlemleri → llvm
+        MLIRVectorDialect
+        MLIRVectorToLLVMPass
 
         # GPU: gpu dialect'i, çekirdeklerin ayrılması, NVIDIA (NVVM) hedefi.
         # NVPTX kod üreticisi MLIRNVVMTarget üzerinden gelir.

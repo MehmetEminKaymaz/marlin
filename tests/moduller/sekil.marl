@@ -1,4 +1,4 @@
-// Test modülü: struct tanımları (bkz. tests/modul_struct.minik).
+// Test modülü: struct tanımları (bkz. tests/modul_struct.marl).
 public struct Nokta {
     float64 x;
     float64 y;

@@ -1,4 +1,4 @@
-grammar minik;
+grammar marlin;
 
 program
     : importDecl* declaration* EOF
@@ -6,7 +6,7 @@ program
 
 // Başka bir dosyanın (modülün) fonksiyonlarını ve globallerini kullanıma açar.
 // Modül yolu dizin ayırıcısı yerine nokta ile yazılır: araclar.vektor,
-// araclar/vektor.minik dosyasıdır.
+// araclar/vektor.marl dosyasıdır.
 //
 //   import araclar.vektor;                    araclar.vektor.norm(a)
 //   import araclar.vektor as v;               v.norm(a)
@@ -97,7 +97,7 @@ functionDecl
 
 // Gövdesi C ile, çalışma zamanı kütüphanesinde (runtime/) yazılmış fonksiyon.
 // Yalnızca standart kütüphane dosyalarında (std/) yazılabilir; her zaman
-// private'tır ve dışarıya sıradan bir minik fonksiyonuyla sarılarak açılır:
+// private'tır ve dışarıya sıradan bir marlin fonksiyonuyla sarılarak açılır:
 //
 //   @pure extern func c_find(string s, string part, int64 start) -> int64;
 //   public func find(string s, string part) -> int64 { return c_find(s, part, 0); }

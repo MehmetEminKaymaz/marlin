@@ -46,7 +46,7 @@ void MLIRGenerator::visit(CharLiteral* node) {
 //   [ refs = -1 (8 bayt) | uzunluk (8 bayt) | baytlar ... | \0 ]
 //
 // refs = -1 "literal" demektir: çalışma zamanı böyle bir stringi asla
-// bırakmaz. Düzen runtime/minik_rt.c'deki MinikString ile aynı olmalıdır.
+// bırakmaz. Düzen runtime/marlin_rt.c'deki MarlinString ile aynı olmalıdır.
 // Başlık bayt dizisine küçük sonlu (little-endian) yazılır; desteklenen
 // hedef (x86-64) böyledir.
 void MLIRGenerator::visit(StringLiteral* node) {
@@ -102,9 +102,7 @@ void MLIRGenerator::visit(Identifier* node) {
     switch (node->ref) {
         case Identifier::Ref::Function:
             // Fonksiyonun değer olarak kullanımı (ör. değişkene atama, argüman)
-            lastValue = ctx.builder.create<mlir::func::ConstantOp>(
-                loc, typeManager.convertFunction(node->type),
-                mlir::FlatSymbolRefAttr::get(&ctx.context, node->name));
+            lastValue = functionAddress(node->name, node->type, loc);
             return;
 
         case Identifier::Ref::Global: {
@@ -178,7 +176,7 @@ void MLIRGenerator::visit(ArrayAccessExpr* node) {
         if (indexType.width != 64)
             index = arithManager.buildCast(index, indexType, SemType::Int(64, indexType.isSigned), loc);
         mlir::Value line = arithManager.buildIntConstant(node->line, ctx.builder.getI32Type(), loc);
-        mlir::Value byte = runtime.callValue("minik_str_at", {text, index, line},
+        mlir::Value byte = runtime.callValue("marlin_str_at", {text, index, line},
                                              ctx.builder.getI32Type(), loc);
         lastValue = ctx.builder.create<mlir::arith::TruncIOp>(loc, ctx.builder.getIntegerType(8), byte);
         return;
@@ -283,8 +281,13 @@ MLIRGenerator::Values MLIRGenerator::emitCall(FunctionCallExpr* node) {
             crossesToGpu ? hostEntryName(ident->name) : ident->name);
         callOp = ctx.builder.create<mlir::func::CallOp>(loc, callee, mlir::ValueRange(args));
     } else {
+        // Fonksiyon değeri bir adrestir (i64); çağrı için gerçek fonksiyon
+        // tipine köprülenir (bkz. functionAddress).
+        mlir::Value callee = ctx.builder.create<mlir::UnrealizedConversionCastOp>(
+            loc, mlir::TypeRange{typeManager.convertFunction(node->target->type)},
+            mlir::ValueRange{calleeValue}).getResult(0);
         callOp = ctx.builder.create<mlir::func::CallIndirectOp>(
-            loc, calleeValue, mlir::ValueRange(args));
+            loc, callee, mlir::ValueRange(args));
     }
 
     Values results;
@@ -400,7 +403,7 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
             return;
 
         case Builtin::Time:
-            lastValue = runtime.callValue("minik_time", {}, ctx.builder.getF64Type(), loc);
+            lastValue = runtime.callValue("marlin_time", {}, ctx.builder.getF64Type(), loc);
             return;
 
         // free(s): stringlerin belleği kendiliğinden bırakılır; çağrı bir şey
@@ -417,8 +420,8 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
         case Builtin::ToFloat: {
             mlir::Value line = arithManager.buildIntConstant(node->line, ctx.builder.getI32Type(), loc);
             lastValue = node->builtin == Builtin::ToInt
-                ? runtime.callValue("minik_str_to_i64", {args[0], line}, ctx.builder.getI64Type(), loc)
-                : runtime.callValue("minik_str_to_f64", {args[0], line}, ctx.builder.getF64Type(), loc);
+                ? runtime.callValue("marlin_str_to_i64", {args[0], line}, ctx.builder.getI64Type(), loc)
+                : runtime.callValue("marlin_str_to_f64", {args[0], line}, ctx.builder.getF64Type(), loc);
             return;
         }
 
@@ -429,7 +432,7 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
             if (types[0].isArray())
                 lastValue = arithManager.buildIntConstant(types[0].arraySize, i64, loc);
             else
-                lastValue = runtime.callValue("minik_str_len", {args[0]}, i64, loc);
+                lastValue = runtime.callValue("marlin_str_len", {args[0]}, i64, loc);
             return;
         }
 
@@ -525,6 +528,19 @@ void MLIRGenerator::visit(LambdaExpr* node) {
         ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange());
     });
 
-    lastValue = ctx.builder.create<mlir::func::ConstantOp>(
-        loc, funcType, mlir::FlatSymbolRefAttr::get(&ctx.context, lambdaName));
+    lastValue = functionAddress(lambdaName, node->type, loc);
+}
+
+// Fonksiyon değeri, fonksiyonun adresidir (i64; bkz. MLIRTypeManager). MLIR'de
+// bir fonksiyonun adresi doğrudan tamsayı olarak alınamaz: önce func.constant
+// ile fonksiyon tipinde bir değer üretilir, sonra bir tip köprüsüyle
+// (unrealized_conversion_cast) i64'e geçilir. Çağrıda tersi yapılır. LLVM'e
+// indirildikten sonra bu köprüler ptrtoint / inttoptr olur (bkz.
+// LLVMLowering.cpp, lowerFunctionAddressCasts).
+mlir::Value MLIRGenerator::functionAddress(const std::string& symbol, const SemType& type,
+                                           mlir::Location loc) {
+    mlir::Value function = ctx.builder.create<mlir::func::ConstantOp>(
+        loc, typeManager.convertFunction(type), mlir::FlatSymbolRefAttr::get(&ctx.context, symbol));
+    return ctx.builder.create<mlir::UnrealizedConversionCastOp>(
+        loc, mlir::TypeRange{ctx.builder.getI64Type()}, mlir::ValueRange{function}).getResult(0);
 }

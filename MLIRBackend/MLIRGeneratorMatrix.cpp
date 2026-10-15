@@ -347,8 +347,8 @@ void MLIRGenerator::emitMatrixPrint(Expression* matrix, mlir::Location loc) {
     mlir::Value space = b.create<mlir::arith::ConstantIntOp>(loc, ' ', 32);
     mlir::Value newline = b.create<mlir::arith::ConstantIntOp>(loc, '\n', 32);
 
-    // Matrisin bütün satırları tek parça çıksın (bkz. minik_print_begin).
-    runtime.call("minik_print_begin", {}, loc);
+    // Matrisin bütün satırları tek parça çıksın (bkz. marlin_print_begin).
+    runtime.call("marlin_print_begin", {}, loc);
 
     llvm::SmallVector<mlir::Value, 4> indices;
     std::function<void(int)> emitDimension = [&](int d) {
@@ -361,14 +361,14 @@ void MLIRGenerator::emitMatrixPrint(Expression* matrix, mlir::Location loc) {
 
                 if (d == rank - 1) {
                     // Eleman: öncekinden boşlukla ayrılır.
-                    runtime.callIf(notFirst, "minik_print_char", {space}, loc);
+                    runtime.callIf(notFirst, "marlin_print_char", {space}, loc);
                     mlir::Value element = b.create<mlir::memref::LoadOp>(
                         loc, buffer, mlir::ValueRange(indices));
                     builtinManager.printValue(element, elemType, loc);
                 } else {
                     // İki boyutlu dilimler arasına boş satır.
                     if (d < rank - 2)
-                        runtime.callIf(notFirst, "minik_print_char", {newline}, loc);
+                        runtime.callIf(notFirst, "marlin_print_char", {newline}, loc);
                     emitDimension(d + 1);
                 }
 
@@ -377,9 +377,9 @@ void MLIRGenerator::emitMatrixPrint(Expression* matrix, mlir::Location loc) {
             });
         // Bir satırın elemanları bitti.
         if (d == rank - 1)
-            runtime.call("minik_print_char", {newline}, loc);
+            runtime.call("marlin_print_char", {newline}, loc);
     };
     emitDimension(0);
 
-    runtime.call("minik_print_end", {}, loc);
+    runtime.call("marlin_print_end", {}, loc);
 }

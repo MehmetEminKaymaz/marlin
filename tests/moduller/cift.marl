@@ -1,4 +1,4 @@
-// Test modülü: tek.minik ile birbirini import eder (döngü).
+// Test modülü: tek.marl ile birbirini import eder (döngü).
 from tek import tekMi;
 
 public func ciftMi(int n) -> bool {

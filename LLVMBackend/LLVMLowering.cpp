@@ -15,6 +15,7 @@
 #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
+#include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
 #include "mlir/Conversion/GPUCommon/GPUCommonPass.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -29,6 +30,7 @@
 #include "mlir/Dialect/ControlFlow/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
@@ -41,7 +43,7 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/Passes.h"
 
-namespace minik {
+namespace marlin {
 
 // Bufferization, her operasyonun tensor'larını belleğe nasıl yerleştireceğini
 // dialect'lerin sağladığı "dış modeller"den öğrenir. Bunlar MLIRContext
@@ -68,13 +70,64 @@ void registerLoweringInterfaces(mlir::DialectRegistry& registry) {
     mlir::registerConvertNVVMToLLVMInterface(registry);
 }
 
+// FONKSİYON ADRESLERİ
+//
+// Fonksiyon değerleri kod üretiminde i64 adres olarak taşınır; fonksiyon
+// tipiyle aralarında unrealized_conversion_cast köprüleri vardır (bkz.
+// MLIRGenerator::functionAddress). func → llvm dönüşümü fonksiyon tipini
+// !llvm.ptr yapınca köprüler zincir olur:
+//
+//   değer olarak:  llvm.mlir.addressof → (ptr → fn) → (fn → i64)
+//   çağrıda:       i64 → (i64 → fn) → (fn → ptr) → llvm.call
+//
+// reconcile-unrealized-casts yalnızca başladığı tipe dönen zincirleri
+// silebilir; ptr ↔ i64 ise gerçek bir dönüşümdür. Zincirin iki ucu burada
+// ptrtoint / inttoptr ile bağlanır, aradaki köprüler kullanılmaz hale gelip
+// silinir.
+static void lowerFunctionAddressCasts(mlir::ModuleOp module) {
+    llvm::SmallVector<mlir::UnrealizedConversionCastOp, 16> casts;
+    module.walk([&](mlir::UnrealizedConversionCastOp cast) {
+        if (cast->getNumOperands() == 1 && cast->getNumResults() == 1) casts.push_back(cast);
+    });
+
+    for (mlir::UnrealizedConversionCastOp cast : casts) {
+        mlir::Value origin = cast.getOperand(0);
+        while (auto inner = origin.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+            if (inner->getNumOperands() != 1) break;
+            origin = inner.getOperand(0);
+        }
+        const mlir::Type from = origin.getType();
+        const mlir::Type to = cast.getResult(0).getType();
+        mlir::OpBuilder builder(cast);
+        mlir::Value replacement;
+        if (mlir::isa<mlir::LLVM::LLVMPointerType>(from) && to.isInteger(64))
+            replacement = builder.create<mlir::LLVM::PtrToIntOp>(cast.getLoc(), to, origin);
+        else if (from.isInteger(64) && mlir::isa<mlir::LLVM::LLVMPointerType>(to))
+            replacement = builder.create<mlir::LLVM::IntToPtrOp>(cast.getLoc(), to, origin);
+        if (replacement) cast.getResult(0).replaceAllUsesWith(replacement);
+    }
+
+    // Kullanılmaz kalan köprüler silinir; dıştaki silinince içteki de
+    // kullanılmaz hale gelir, bu yüzden değişiklik kalmayana kadar tekrarlanır.
+    for (bool erased = true; erased;) {
+        erased = false;
+        for (mlir::UnrealizedConversionCastOp& cast : casts) {
+            if (!cast || !cast.getResult(0).use_empty()) continue;
+            cast.erase();
+            cast = nullptr;
+            erased = true;
+        }
+    }
+}
+
 // GPU ADIMLARI (yalnızca program @GPU fonksiyon içeriyorsa)
 //
 // GPU'da çalışacak kod, CPU kodunun arasından adım adım ayrılır:
 //
-//   G1  minik-gpu-offload      işaretli fonksiyonlardaki paralel döngüler ve
+//   G1  marlin-gpu-offload      işaretli fonksiyonlardaki paralel döngüler ve
 //                              matris işlemleri → gpu.launch (GpuOffload.h)
-//   G2  gpu-kernel-outlining   her gpu.launch gövdesi → ayrı bir gpu.module
+//   G2  marlin-gpu-kernel-prepare  sabitleri çekirdeğe taşır, FMA'ya izin verir
+//       gpu-kernel-outlining   her gpu.launch gövdesi → ayrı bir gpu.module
 //                              içinde gpu.func (çekirdek); yerinde
 //                              gpu.launch_func çağrısı kalır. Çekirdeğin
 //                              çağırdığı fonksiyonlar da modüle kopyalanır.
@@ -103,14 +156,17 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
     if (usesGpu) pm.addPass(createGpuOffloadPass());
 
     // B) CPU'daki linalg işlemleri → döngüler.
-    //    Matris çarpımı paralel döngüye açılır ve aşağıda (C) çekirdeklere
-    //    dağıtılır (bkz. ParallelMatmul.h); kalanlar (eleman eleman işlemler,
+    //    Matris çarpımı döşemeli, vektörlü bir paralel döngüye açılır ve
+    //    aşağıda (C) çekirdeklere dağıtılır (bkz. ParallelMatmul.h); kalanlar (eleman eleman işlemler,
     //    fill ...) sıralı scf.for döngüleri olur.
     pm.addPass(createParallelMatmulPass());
     pm.addPass(mlir::createConvertLinalgToLoopsPass());
 
     // G2
-    if (usesGpu) pm.addPass(mlir::createGpuKernelOutliningPass());
+    if (usesGpu) {
+        pm.addPass(createGpuKernelPreparePass());
+        pm.addPass(mlir::createGpuKernelOutliningPass());
+    }
     // (--emit=gpu-mlir burada durur: CPU kodu ve GPU çekirdekleri ayrılmış,
     // ikisi de hâlâ okunabilir üst seviye MLIR.)
     if (stopAfterGpuSplit) return mlir::succeeded(pm.run(module));
@@ -175,6 +231,9 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
     pm.addPass(mlir::createConvertMathToLibmPass());
 
     // 3) Kalan dialect'ler → llvm dialect'i.
+    //    Vektör işlemleri (CPU'daki matris çarpımı çekirdeği) memref'lerden
+    //    önce çevrilmeli: vektör yükleme/yazma memref'in adres bilgisini okur.
+    pm.addPass(mlir::createConvertVectorToLLVMPass());
     pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass()); // memref → ptr + GEP
     pm.addPass(mlir::createConvertAsyncToLLVMPass());             // görevler → coroutine'ler
     pm.addPass(mlir::createArithToLLVMConversionPass());
@@ -185,12 +244,16 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
         pm.addPass(mlir::createGpuToLLVMConversionPass()); // G5
         pm.addPass(mlir::createGpuModuleToBinaryPass());   // G6
     }
+    if (mlir::failed(pm.run(module))) return false;
 
-    // 4) Dönüşümler arasında geçici olarak bırakılan tip köprülerini
+    // 4) Fonksiyon adreslerinin tip köprüleri → ptrtoint / inttoptr.
+    lowerFunctionAddressCasts(module);
+
+    // 5) Dönüşümler arasında geçici olarak bırakılan tip köprülerini
     //    (builtin.unrealized_conversion_cast) temizler.
-    pm.addPass(mlir::createReconcileUnrealizedCastsPass());
-
-    return mlir::succeeded(pm.run(module));
+    mlir::PassManager reconcile(module->getName());
+    reconcile.addPass(mlir::createReconcileUnrealizedCastsPass());
+    return mlir::succeeded(reconcile.run(module));
 }
 
 // Kullanıcının `main`i void dönüyorsa süreç çıkış kodu tanımsız kalırdı.
@@ -199,7 +262,7 @@ static void wrapVoidMain(llvm::Module& module) {
     llvm::Function* userMain = module.getFunction("main");
     if (!userMain || !userMain->getReturnType()->isVoidTy()) return;
 
-    userMain->setName("minik.main");
+    userMain->setName("marlin.main");
     userMain->setLinkage(llvm::GlobalValue::InternalLinkage);
 
     llvm::LLVMContext& context = module.getContext();
@@ -216,11 +279,11 @@ static void wrapVoidMain(llvm::Module& module) {
 std::unique_ptr<llvm::Module> translateToLLVMIR(mlir::ModuleOp module,
                                                 llvm::LLVMContext& llvmContext) {
     std::unique_ptr<llvm::Module> llvmModule =
-        mlir::translateModuleToLLVMIR(module, llvmContext, "minik");
+        mlir::translateModuleToLLVMIR(module, llvmContext, "marlin");
     if (!llvmModule) return nullptr;
 
     wrapVoidMain(*llvmModule);
     return llvmModule;
 }
 
-} // namespace minik
+} // namespace marlin

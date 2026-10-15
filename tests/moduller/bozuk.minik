@@ -1,4 +1,0 @@
-// Test modülü: sözdizimi hatası içerir (bkz. tests/hatalar_modul_sozdizimi.minik).
-func eksik( -> int {
-    return 1;
-}

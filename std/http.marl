@@ -1,0 +1,297 @@
+// std.http — HTTP/1.1 sunucusu.
+//
+//   import std.http as http;
+//
+//   func anasayfa(http.Request req) -> http.Response {
+//       return http.text(200, "merhaba\n");
+//   }
+//
+//   func selam(http.Request req) -> http.Response {
+//       return http.text(200, "merhaba " + http.query_param(req, "ad") + "\n");
+//   }
+//
+//   func main() -> void {
+//       list<http.Route> rotalar = [];
+//       push(rotalar, http.get("/", anasayfa));
+//       push(rotalar, http.get("/selam", selam));        // /selam?ad=Ayse
+//       http.serve(8080, rotalar);
+//   }
+//
+// YÖNLENDİRME
+//
+// Her rota bir yöntem, bir yol ve bir işleyiciden oluşur. İstek, yolu ve
+// yöntemi uyan ilk rotanın işleyicisine verilir:
+//
+//   * Yol birebir karşılaştırılır; "/dosyalar/*" ise "/dosyalar/" ile başlayan
+//     her yola uyar.
+//   * Yöntemi "" olan rota her yönteme uyar; GET rotası HEAD isteklerine de
+//     yanıt verir (gövde gönderilmez).
+//   * Yolu uyan ama yöntemi uymayan rota varsa 405, hiç yoksa 404 döner.
+//
+// ALT SEVİYE KULLANIM
+//
+// serve hiç dönmez. Döngüyü kendiniz kurmak için:
+//
+//   http.Server s = http.listen(8080);
+//   if s.ok {
+//       while true {
+//           http.handle(s, rotalar);        // ya da: next + kendi işiniz + respond
+//       }
+//   }
+//
+// Bellek: respond, isteğin ve yanıtın başlık listelerini bırakır. Yanıtı
+// gönderilmiş bir isteğin başlıkları bir daha kullanılmamalıdır.
+//
+// SINIRLAR (şimdilik)
+//
+//   * Her yanıttan sonra bağlantı kapanır (keep-alive yok); istekler sırayla
+//     işlenir.
+//   * Başlık en fazla 64 KB, gövde en fazla 8 MB; parçalı (chunked) istek
+//     gövdesi desteklenmez (501).
+//   * Yavaş istemci en fazla 10 saniye beklenir.
+//   * HTTPS yok: gerekirse sunucunun önüne nginx / caddy gibi bir ters vekil
+//     konur.
+
+import std.string as strs;
+
+// C tarafı: runtime/std_http.c (soketler), runtime/http_parser.c (ayrıştırıcı)
+extern func c_listen(int port, bool or_die) -> int64;
+extern func c_error() -> string;
+extern func c_accept(int64 server) -> int64;
+extern func c_close(int64 server) -> void;
+extern func c_method(int64 request) -> string;
+extern func c_path(int64 request) -> string;
+extern func c_query(int64 request) -> string;
+extern func c_body(int64 request) -> string;
+extern func c_header_count(int64 request) -> int64;
+extern func c_header_name(int64 request, int64 index) -> string;
+extern func c_header_value(int64 request, int64 index) -> string;
+extern func c_respond_header(int64 request, string name, string value) -> void;
+extern func c_respond(int64 request, int status, string body) -> void;
+@pure extern func c_decode(string text, bool form) -> string;
+
+public struct Header {
+    string name;
+    string value;
+}
+
+// Gelen istek. `path` ve `query` çözülmemiş (yüzde kodlu) haldedir; tek tek
+// değerler için query_param, gerekirse url_decode.
+public struct Request {
+    string method;          // "GET", "POST" ...
+    string path;            // "/ara"
+    string query;           // "q=marlin&s=2" ('?' sonrası; yoksa "")
+    list<Header> headers;
+    string body;
+    int64 handle;           // C tarafındaki istek; yanıt buna gönderilir
+}
+
+public struct Response {
+    int status;
+    list<Header> headers;
+    string body;
+}
+
+public struct Route {
+    string method;          // "GET", "POST" ...; "" her yöntem
+    string path;            // "/selam"; "/dosyalar/*" önek
+    (Request) -> Response handler;
+}
+
+// Dinleyen sunucu. `ok` yanlışsa port dinlenemedi; sebebi `error`.
+public struct Server {
+    int64 handle;
+    bool ok;
+    string error;
+}
+
+// ---------------------------------------------------------------------------
+// Sunucu
+// ---------------------------------------------------------------------------
+
+// Bütün ağ arayüzlerinde `port`u dinler.
+public func listen(int port) -> Server {
+    int64 handle = c_listen(port, false);
+    if handle == 0 {
+        return Server(0, false, c_error());
+    }
+    return Server(handle, true, "");
+}
+
+// Sıradaki geçerli isteği bekler. (Geçersiz isteklere sunucu kendisi hata
+// koduyla yanıt verir; onlar buraya gelmez.)
+public func next(Server s) -> Request {
+    int64 handle = c_accept(s.handle);
+    list<Header> headers = [];
+    for i in 0 .. c_header_count(handle) {
+        push(headers, Header(c_header_name(handle, i), c_header_value(handle, i)));
+    }
+    return Request(c_method(handle), c_path(handle), c_query(handle), headers, c_body(handle), handle);
+}
+
+// Yanıtı gönderir ve bağlantıyı kapatır. İsteğin ve yanıtın başlık
+// listelerini bırakır.
+public func respond(Request req, Response res) -> void {
+    for i in 0 .. len(res.headers) {
+        c_respond_header(req.handle, res.headers[i].name, res.headers[i].value);
+    }
+    c_respond(req.handle, res.status, res.body);
+    free(req.headers);
+    free(res.headers);
+}
+
+public func close(Server s) -> void {
+    c_close(s.handle);
+}
+
+// Bir isteği bekler, uyan rotanın işleyicisine verir ve yanıtını gönderir.
+public func handle(Server s, list<Route> routes) -> void {
+    Request req = next(s);
+    respond(req, dispatch(routes, req));
+}
+
+// `port`u dinler ve istekleri sonsuza dek rotalara dağıtır. Port
+// dinlenemezse program mesajla durur.
+public func serve(int port, list<Route> routes) -> void {
+    Server s = Server(c_listen(port, true), true, "");
+    while true {
+        handle(s, routes);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Yönlendirme
+// ---------------------------------------------------------------------------
+
+public func route(string method, string path, (Request) -> Response handler) -> Route {
+    return Route(method, path, handler);
+}
+
+public func get(string path, (Request) -> Response handler) -> Route {
+    return Route("GET", path, handler);
+}
+
+public func post(string path, (Request) -> Response handler) -> Route {
+    return Route("POST", path, handler);
+}
+
+public func put(string path, (Request) -> Response handler) -> Route {
+    return Route("PUT", path, handler);
+}
+
+public func delete(string path, (Request) -> Response handler) -> Route {
+    return Route("DELETE", path, handler);
+}
+
+func path_matches(string pattern, string path) -> bool {
+    if strs.ends_with(pattern, "/*") {
+        return strs.starts_with(path, strs.substr(pattern, 0, len(pattern) - 1));
+    }
+    return pattern == path;
+}
+
+func method_matches(string pattern, string method) -> bool {
+    return pattern == "" || pattern == method || (pattern == "GET" && method == "HEAD");
+}
+
+// İsteği uyan ilk rotanın işleyicisine verir; yoksa 404 ya da 405.
+public func dispatch(list<Route> routes, Request req) -> Response {
+    bool pathFound = false;
+    for i in 0 .. len(routes) {
+        if path_matches(routes[i].path, req.path) {
+            if method_matches(routes[i].method, req.method) {
+                return routes[i].handler(req);
+            }
+            pathFound = true;
+        }
+    }
+    if pathFound {
+        return text(405, "Method Not Allowed\n");
+    }
+    return text(404, "Not Found\n");
+}
+
+// ---------------------------------------------------------------------------
+// Yanıtlar
+// ---------------------------------------------------------------------------
+
+public func response(int status, string contentType, string body) -> Response {
+    list<Header> headers = [];
+    push(headers, Header("Content-Type", contentType));
+    return Response(status, headers, body);
+}
+
+public func text(int status, string body) -> Response {
+    return response(status, "text/plain; charset=utf-8", body);
+}
+
+public func html(int status, string body) -> Response {
+    return response(status, "text/html; charset=utf-8", body);
+}
+
+public func json(int status, string body) -> Response {
+    return response(status, "application/json", body);
+}
+
+// Başka bir adrese yönlendirir (302).
+public func redirect(string location) -> Response {
+    Response res = text(302, "");
+    add_header(res, "Location", location);
+    return res;
+}
+
+// Yanıta başlık ekler. (Content-Length ve Connection otomatik eklenir.)
+public func add_header(Response res, string name, string value) -> void {
+    push(res.headers, Header(name, value));
+}
+
+// ---------------------------------------------------------------------------
+// İstekten okuma
+// ---------------------------------------------------------------------------
+
+// Başlığın değeri; büyük/küçük harf ayrımı yapılmaz. Yoksa "".
+public func header(Request req, string name) -> string {
+    string wanted = strs.lower(name);
+    for i in 0 .. len(req.headers) {
+        if strs.lower(req.headers[i].name) == wanted {
+            return req.headers[i].value;
+        }
+    }
+    return "";
+}
+
+// Sorgudaki değer: /ara?q=marlin+dili → query_param(req, "q") = "marlin dili".
+// Yoksa "".
+public func query_param(Request req, string name) -> string {
+    return form_value(req.query, name);
+}
+
+// "a=1&b=2" biçimindeki (sorgu ya da application/x-www-form-urlencoded
+// gövde) metinden bir değer, çözülmüş olarak. Yoksa "".
+public func form_value(string encoded, string name) -> string {
+    list<string> pairs = strs.split(encoded, "&");
+    string result = "";
+    bool found = false;
+    for i in 0 .. len(pairs) {
+        if !found {
+            int64 eq = strs.find(pairs[i], "=");
+            string key = pairs[i];
+            string value = "";
+            if eq >= 0 {
+                key = strs.substr(pairs[i], 0, eq);
+                value = strs.substr(pairs[i], eq + 1, len(pairs[i]) - eq - 1);
+            }
+            if c_decode(key, true) == name {
+                result = c_decode(value, true);
+                found = true;
+            }
+        }
+    }
+    free(pairs);
+    return result;
+}
+
+// %XX dizilerini çözer: "/a%20b" → "/a b". ('+' olduğu gibi kalır.)
+public func url_decode(string s) -> string {
+    return c_decode(s, false);
+}

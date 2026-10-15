@@ -74,7 +74,7 @@ func main() -> void {
     }
     print(uzunluk[0], uzunluk[1], uzunluk[2], uzunluk[3]);
 
-    // Stringlerin belleği kendiliğinden bırakılır (bkz. string_bellek.minik);
+    // Stringlerin belleği kendiliğinden bırakılır (bkz. string_bellek.marl);
     // free(string) yazılabilir ama bir şey yapmaz.
     free(s);
     free(birlesik);

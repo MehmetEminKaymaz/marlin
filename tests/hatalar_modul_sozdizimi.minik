@@ -1,5 +1,0 @@
-// error: moduller/bozuk.minik:2:13: hata: sozdizimi hatasi
-import moduller.bozuk;
-
-func main() -> void {
-}

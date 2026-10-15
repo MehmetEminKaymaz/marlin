@@ -10,7 +10,7 @@
 // fonksiyon olamazlar çünkü birden çok tiple çalışırlar (print(5), print("a");
 // sqrt(float), sqrt(float64)) ve dilde aşırı yükleme yoktur.
 //
-//   * print, time: çalışma zamanı kütüphanesindeki (runtime/minik_rt.c) C
+//   * print, time: çalışma zamanı kütüphanesindeki (runtime/marlin_rt.c) C
 //     fonksiyonlarına çağrı olarak üretilir.
 //   * Matematik: MLIR'in math/arith operasyonlarına çevrilir; C çağrısı
 //     yazılmaz. Böylece aynı işlem CPU'da ve GPU'da hedefin kendi

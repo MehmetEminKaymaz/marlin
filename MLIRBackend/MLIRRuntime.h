@@ -9,11 +9,11 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
-// Çalışma zamanı kütüphanesine (runtime/minik_rt.c) çağrı üretir.
+// Çalışma zamanı kütüphanesine (runtime/marlin_rt.c) çağrı üretir.
 //
 // Fonksiyon modülde ilk kullanıldığında gövdesiz olarak bildirilir; tanımını
-// bağlayıcı libminikrt.a'dan çözer. Derleyicinin C tarafına açılan tek kapısı
-// burasıdır: imzalar minik_rt.c'dekilerle aynı olmalıdır.
+// bağlayıcı libmarlinrt.a'dan çözer. Derleyicinin C tarafına açılan tek kapısı
+// burasıdır: imzalar marlin_rt.c'dekilerle aynı olmalıdır.
 class MLIRRuntime {
     CodegenContext& ctx;
 

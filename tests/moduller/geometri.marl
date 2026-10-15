@@ -1,5 +1,5 @@
-// Test modülü (bkz. tests/modul_import.minik).
-// Import yolu, import eden dosyanın dizinine göredir: tests/moduller/ic/yardimci.minik
+// Test modülü (bkz. tests/modul_import.marl).
+// Import yolu, import eden dosyanın dizinine göredir: tests/moduller/ic/yardimci.marl
 import ic.yardimci as y;
 
 float64 PI = 3.14159;       // private: yalnızca bu dosyada

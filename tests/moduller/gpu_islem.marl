@@ -1,4 +1,4 @@
-// Test modülü: @GPU fonksiyonlar (bkz. tests/modul_gpu.minik).
+// Test modülü: @GPU fonksiyonlar (bkz. tests/modul_gpu.marl).
 @GPU
 public func olcekle(matrix<float64> a, float64 k) -> matrix<float64> {
     return a * k;

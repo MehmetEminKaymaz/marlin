@@ -1,23 +1,23 @@
-// std.io — klavyeden okuma ve satır sonu eklemeden yazma (bkz. std/io.minik).
+// std.io — klavyeden okuma ve satır sonu eklemeden yazma (bkz. std/io.marl).
 
 #define _GNU_SOURCE // flockfile
 
-#include "minik_rt.h"
+#include "marlin_rt.h"
 
 // Okumadan önce bekleyen çıktı yazılır: kullanıcı, cevap vereceği soruyu görmeli.
-int64_t minik_io_read_line(void) {
+int64_t marlin_io_read_line(void) {
     fflush(stdout);
-    return minik_rt_read_line(stdin);
+    return marlin_rt_read_line(stdin);
 }
 
-int32_t minik_io_eof(void) {
+int32_t marlin_io_eof(void) {
     fflush(stdout);
-    return minik_rt_at_eof(stdin);
+    return marlin_rt_at_eof(stdin);
 }
 
 // print'ten farkı: satır sonu eklemez.
-void minik_io_write(int64_t text) {
+void marlin_io_write(int64_t text) {
     flockfile(stdout);
-    fwrite(minik_rt_str_data(text), 1, (size_t)minik_str_len(text), stdout);
+    fwrite(marlin_rt_str_data(text), 1, (size_t)marlin_str_len(text), stdout);
     funlockfile(stdout);
 }

@@ -70,12 +70,6 @@ void MLIRGenerator::visit(VariableDecl* node) {
 
 void MLIRGenerator::declareLocal(const std::string& name, const SemType& type, mlir::Value value,
                                  int line, mlir::Location loc) {
-    // Fonksiyon değerleri yuvaya konmaz; isim doğrudan SSA değerine bağlanır.
-    if (type.isFunction()) {
-        scopeManager.declareVariable(name, value);
-        return;
-    }
-
     mlir::Value storage = createStorage(type, loc);
 
     // Matris: yuva belleği tutar. Başlangıç değeri yeni hesaplandıysa belleği

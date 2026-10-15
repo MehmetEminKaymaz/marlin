@@ -76,7 +76,7 @@
 //
 //   * Matris belleği GPU'dan ayrılır (gpu.alloc / gpu.dealloc). Matrislerin
 //     tipi değişmez (memref); yalnızca gösterdikleri bellek GPU'dadır.
-//   * Fonksiyon `minik.gpu` ile işaretlenir. İndirme hattı işaretli
+//   * Fonksiyon `marlin.gpu` ile işaretlenir. İndirme hattı işaretli
 //     fonksiyonlardaki paralel döngüleri (`parallel for` ve matris işlemleri)
 //     GPU çekirdeklerine çevirir (bkz. LLVMBackend/GpuOffload). Kod üretimi
 //     CPU ile aynı IR'yi üretir; hedefi indirme hattı belirler.
@@ -320,6 +320,8 @@ private:
     /// Kullanıcı fonksiyonuna çağrıyı üretir. Sonuçlar: dönüş tipinin yaprakları
     /// sırasıyla (struct değilse tek değer, void ise boş).
     Values emitCall(FunctionCallExpr* node);
+    /// `symbol` adlı fonksiyonun değer olarak kullanımı: adresi (i64).
+    mlir::Value functionAddress(const std::string& symbol, const SemType& type, mlir::Location loc);
     /// extern fonksiyona (çalışma zamanı kütüphanesindeki C fonksiyonuna) çağrı.
     Values emitExternCall(FunctionDecl* decl, FunctionCallExpr* node);
     mlir::Type externType(const SemType& type);

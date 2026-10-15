@@ -15,7 +15,7 @@
 
 // GPU için üretilen fonksiyonların (func.func) işareti; kod üretimi koyar,
 // indirme hattı okur.
-inline constexpr const char* kGpuFunctionAttr = "minik.gpu";
+inline constexpr const char* kGpuFunctionAttr = "marlin.gpu";
 
 struct CodegenContext {
     mlir::OpBuilder& builder;

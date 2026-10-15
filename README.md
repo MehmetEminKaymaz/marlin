@@ -1,4 +1,4 @@
-# minik
+# marlin
 
 MLIR ve LLVM üzerine kurulu küçük bir programlama dili ve derleyicisi. Uzun vadeli hedef, aynı kaynak koddan hem CPU'da hem GPU'da çalışan program üretmek. Şu an CPU için çalıştırılabilir dosya üretiyor.
 
@@ -36,7 +36,7 @@ Gerçek bir Windows `.exe` üretmek mümkün, ama bunun için LLVM'in Windows he
 
 ## 2. Derleyiciyi derlemek
 
-"Derleyici" dediğimiz şey `minik_lang` adlı programdır. Kaynak kodda (C++ dosyalarında ya da `minik.g4`'te) bir değişiklik yaptığında onu yeniden derlemen gerekir.
+"Derleyici" dediğimiz şey `marlin_lang` adlı programdır. Kaynak kodda (C++ dosyalarında ya da `marlin.g4`'te) bir değişiklik yaptığında onu yeniden derlemen gerekir.
 
 **CLion ile:** Her zamanki gibi Build (çekiç simgesi). CLion bunu WSL üzerinden yapar.
 
@@ -48,8 +48,8 @@ cmake --build cmake-build-debug -j 6
 
 İlk derleme birkaç dakika sürebilir, sonrakiler yalnızca değişen dosyaları derler. Sonunda iki dosya oluşur:
 
-- `cmake-build-debug/minik_lang` — derleyici
-- `cmake-build-debug/libminikrt.a` — derlenen programlara eklenen yardımcı kütüphane (`print` bunun içinde)
+- `cmake-build-debug/marlin_lang` — derleyici
+- `cmake-build-debug/libmarlinrt.a` — derlenen programlara eklenen yardımcı kütüphane (`print` bunun içinde)
 
 > Ekrana LLVM başlıklarından gelen çok uzun `TypeRange ... operator==` uyarıları basılır. Bunlar zararsızdır; bizim kodumuzla ilgili değildir. Asıl bakman gereken satır içinde `error` geçenlerdir.
 
@@ -63,7 +63,7 @@ cmake -S . -B cmake-build-debug -DCMAKE_BUILD_TYPE=Debug
 
 ## 3. İlk programını çalıştırmak
 
-Bir dosya oluştur, örneğin `deneme.minik`:
+Bir dosya oluştur, örneğin `deneme.marl`:
 
 ```
 func main() -> void {
@@ -79,7 +79,7 @@ func main() -> void {
 Derle ve çalıştır:
 
 ```bash
-cmake-build-debug/minik_lang deneme.minik -o deneme
+cmake-build-debug/marlin_lang deneme.marl -o deneme
 ./deneme
 ```
 
@@ -92,24 +92,24 @@ karekok: 3.1622776601683795
 
 `-o deneme` çıktı dosyasının adını belirler. Vermezsen dosya `a.out` adıyla oluşur.
 
-Hiç dosya vermeden `cmake-build-debug/minik_lang` çalıştırırsan `main.cpp` içine gömülü örnek program derlenir.
+Hiç dosya vermeden `cmake-build-debug/marlin_lang` çalıştırırsan `main.cpp` içine gömülü örnek program derlenir.
 
 ### Derleme hatası alırsan
 
 Hatalar dosya, satır ve sütun numarasıyla gösterilir:
 
 ```
-deneme.minik:3:13: hata: tip uyusmazligi: beklenen int, bulunan bool
+deneme.marl:3:13: hata: tip uyusmazligi: beklenen int, bulunan bool
 ```
 
-Bu "deneme.minik dosyasının 3. satırının 13. sütununda" demektir.
+Bu "deneme.marl dosyasının 3. satırının 13. sütununda" demektir.
 
 ---
 
 ## 4. Derleyicinin seçenekleri
 
 ```
-minik_lang [kaynak.minik] [secenekler]
+marlin_lang [kaynak.marl] [secenekler]
 ```
 
 | Seçenek | Ne yapar |
@@ -127,7 +127,7 @@ minik_lang [kaynak.minik] [secenekler]
 Derleyici programı adım adım dönüştürür. `--emit` ile istediğin adımda durup o andaki hali görebilirsin. Bir şey yanlış çalışıyorsa sorunun hangi adımda başladığını bulmak için çok işe yarar.
 
 ```
-.minik → AST → MLIR → LLVM'e indirilmiş MLIR → LLVM IR → nesne dosyası → çalıştırılabilir
+.marl → AST → MLIR → LLVM'e indirilmiş MLIR → LLVM IR → nesne dosyası → çalıştırılabilir
 ```
 
 | Komut | Gösterdiği |
@@ -143,13 +143,13 @@ Metin çıktıları `-o` verilmezse ekrana yazılır. Örnekler:
 
 ```bash
 # Üretilen MLIR'e bak
-cmake-build-debug/minik_lang deneme.minik --emit=mlir
+cmake-build-debug/marlin_lang deneme.marl --emit=mlir
 
 # Optimizasyondan sonra LLVM IR'ı dosyaya yaz
-cmake-build-debug/minik_lang deneme.minik --emit=llvm-ir -O2 -o deneme.ll
+cmake-build-debug/marlin_lang deneme.marl --emit=llvm-ir -O2 -o deneme.ll
 
 # AST'yi gör
-cmake-build-debug/minik_lang deneme.minik --print-ast --emit=mlir
+cmake-build-debug/marlin_lang deneme.marl --print-ast --emit=mlir
 ```
 
 ---
@@ -165,9 +165,9 @@ bash tests/run.sh
 Örnek çıktı:
 
 ```
-  GECTI  break_continue.minik -O0
-  GECTI  break_continue.minik -O2
-  GECTI  hatalar.minik
+  GECTI  break_continue.marl -O0
+  GECTI  break_continue.marl -O2
+  GECTI  hatalar.marl
   ...
 16 gecti, 0 kaldi
 ```
@@ -186,51 +186,54 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 
 | Dosya | Neyi dener |
 |---|---|
-| `yapisal_donguler.minik` | Dışarı atlamayan `for` ve `while` döngüleri |
-| `break_continue.minik` | `break` ve `continue`, iç içe döngüler |
-| `erken_return.minik` | Döngü ve `if` içinden `return` |
-| `tipler.minik` | Tip dönüşümleri, işaretsiz sayılar, `&&` ve `\|\|` |
-| `fonksiyonlar.minik` | Global değişkenler, özyineleme, lambdalar |
-| `print.minik` | `print` ile her tipin yazdırılması |
-| `matematik.minik` | `sqrt`, `pow`, `min`, `max` ve diğerleri |
-| `hatalar.minik` | Derleyicinin yakalaması gereken hatalar |
-| `hatalar_yerlesik.minik` | `print` ve matematik fonksiyonlarının hatalı kullanımı |
-| `listeler.minik` | `list<T>`: `push`, `pop`, `len`, başvuru davranışı, büyüme |
-| `liste_sinir_disi.minik` | Sınır dışı liste indeksinde programın mesajla durması |
-| `liste_bos_pop.minik` | Boş listeden `pop` yapılınca programın mesajla durması |
-| `hatalar_liste.minik` | Listelerin hatalı kullanımı |
-| `matrisler.minik` | `matrix<T>`: oluşturma, eleman eleman işlemler, `matmul`, değer davranışı |
-| `matris_boyut_uyusmazligi.minik` | Farklı boyutta matrisler toplanınca programın mesajla durması |
-| `matris_sinir_disi.minik` | Sınır dışı matris indeksinde programın mesajla durması |
-| `matris_matmul_boyut.minik` | Boyutları uygun olmayan `matmul` |
-| `hatalar_matris.minik` | Matrislerin hatalı kullanımı |
-| `cok_boyutlu.minik` | `matrix<T, N>`: vektör, üç ve dört boyut, `shape`, çok seviyeli literal |
-| `cok_boyutlu_calisma_hatalari.minik` | Üç boyutta sınır dışı indeks |
-| `cok_boyutlu_sekil_uyusmazligi.minik` | Üç boyutta uzunlukları farklı matrislerle işlem |
-| `hatalar_cok_boyutlu.minik` | Boyut sayısıyla ilgili derleme hataları |
-| `paralel.minik` | `parallel for`: liste, dizi ve matrise paralel yazma, iç içe paralel döngü |
-| `hatalar_paralel.minik` | Paralel döngüde yarışa yol açabilecek kullanımların reddedilmesi |
-| `zaman.minik` | `time()` ile süre ölçme; çekirdeklere dağıtılan `matmul` |
-| `gpu.minik` | `@GPU` fonksiyonlar: GPU'da `parallel for`, matris işlemleri, `matmul`, `sum`, CPU ↔ GPU kopyalama |
-| `hatalar_gpu.minik` | `@GPU` fonksiyonlarda izin verilmeyen kullanımlar |
-| `stringler.minik` | Stringler: birleştirme, karşılaştırma, indeksleme, `str` / `to_int` / `to_float`, string listesi ve dizisi |
-| `string_bellek.minik` | Stringlerin belleğinin kendiliğinden bırakılması: ara değerler, yeniden atama, liste / dizi / struct alanı, fonksiyonlar, döngüler; program bitince bırakılmamış string kalmamalı |
-| `string_sinir_disi.minik`, `string_sayi_degil.minik` | Sınır dışı string indeksi ve sayı olmayan metnin çevrilmesi: programın mesajla durması |
-| `hatalar_string.minik` | Stringlerin hatalı kullanımı |
-| `std_string.minik`, `std_file.minik`, `std_diger.minik` | Standart kütüphane: string fonksiyonları, dosya işlemleri, `os` / `time` / `random` / `math` / `io` |
-| `std_dosya_yok.minik` | Olmayan dosyayı okumak: programın mesajla durması |
-| `hatalar_std.minik` | Kullanıcı kodunda `extern`, std'nin iç fonksiyonlarına erişim, paralel döngüden yan etkili fonksiyon |
-| `struct.minik` | Struct'lar: oluşturma, kopyalama, her tipten alan, iç içe struct, fonksiyona verme ve döndürme, lambdalar, paralel döngü |
-| `modul_struct.minik` | Başka modülde tanımlı struct'ların kullanılması |
-| `hatalar_struct.minik` | Struct'ların hatalı kullanımı |
-| `struct_liste.minik` | `list<struct>`: ekleme, çıkarma, alan okuma ve yazma, iç içe struct, struct içinde struct listesi, paralel döngü |
-| `struct_liste_alanlar.minik` | Elemanı matris, dizi ve liste alanı taşıyan struct listeleri |
-| `hatalar_struct_liste.minik` | Struct listelerinin hatalı kullanımı |
-| `modul_import.minik` | `import`, `as`, `from`: başka dosyalardaki fonksiyon ve globaller, alt dizin, birbirini import eden modüller |
-| `modul_gpu.minik` | Başka modüldeki `@GPU` fonksiyonların CPU'dan, GPU'dan ve çekirdek içinden çağrılması |
-| `hatalar_modul*.minik` | Bulunamayan modül, modülde olmayan isim, isim çakışması, private tanımın import edilmesi, modüldeki sözdizimi hatası, paralel döngüden güvensiz modül fonksiyonu |
+| `yapisal_donguler.marl` | Dışarı atlamayan `for` ve `while` döngüleri |
+| `break_continue.marl` | `break` ve `continue`, iç içe döngüler |
+| `erken_return.marl` | Döngü ve `if` içinden `return` |
+| `tipler.marl` | Tip dönüşümleri, işaretsiz sayılar, `&&` ve `\|\|` |
+| `fonksiyonlar.marl` | Global değişkenler, özyineleme, lambdalar |
+| `fonksiyon_degerleri.marl` | Fonksiyon değerlerinin struct alanında, listede ve struct listesinde (yönlendirme tablosu) durması, yeniden atama, fonksiyon döndüren fonksiyon |
+| `print.marl` | `print` ile her tipin yazdırılması |
+| `matematik.marl` | `sqrt`, `pow`, `min`, `max` ve diğerleri |
+| `hatalar.marl` | Derleyicinin yakalaması gereken hatalar |
+| `hatalar_yerlesik.marl` | `print` ve matematik fonksiyonlarının hatalı kullanımı |
+| `listeler.marl` | `list<T>`: `push`, `pop`, `len`, başvuru davranışı, büyüme |
+| `liste_sinir_disi.marl` | Sınır dışı liste indeksinde programın mesajla durması |
+| `liste_bos_pop.marl` | Boş listeden `pop` yapılınca programın mesajla durması |
+| `hatalar_liste.marl` | Listelerin hatalı kullanımı |
+| `matrisler.marl` | `matrix<T>`: oluşturma, eleman eleman işlemler, `matmul`, değer davranışı |
+| `matris_boyut_uyusmazligi.marl` | Farklı boyutta matrisler toplanınca programın mesajla durması |
+| `matris_sinir_disi.marl` | Sınır dışı matris indeksinde programın mesajla durması |
+| `matris_matmul_boyut.marl` | Boyutları uygun olmayan `matmul` |
+| `hatalar_matris.marl` | Matrislerin hatalı kullanımı |
+| `cok_boyutlu.marl` | `matrix<T, N>`: vektör, üç ve dört boyut, `shape`, çok seviyeli literal |
+| `cok_boyutlu_calisma_hatalari.marl` | Üç boyutta sınır dışı indeks |
+| `cok_boyutlu_sekil_uyusmazligi.marl` | Üç boyutta uzunlukları farklı matrislerle işlem |
+| `hatalar_cok_boyutlu.marl` | Boyut sayısıyla ilgili derleme hataları |
+| `paralel.marl` | `parallel for`: liste, dizi ve matrise paralel yazma, iç içe paralel döngü |
+| `hatalar_paralel.marl` | Paralel döngüde yarışa yol açabilecek kullanımların reddedilmesi |
+| `zaman.marl` | `time()` ile süre ölçme; çekirdeklere dağıtılan `matmul` |
+| `gpu.marl` | `@GPU` fonksiyonlar: GPU'da `parallel for`, matris işlemleri, `matmul`, `sum`, CPU ↔ GPU kopyalama |
+| `gpu_matmul.marl` | GPU'daki döşemeli `matmul`: döşeme boyutunun katı olmayan boyutlar, tamsayı / `float` / `float64` |
+| `hatalar_gpu.marl` | `@GPU` fonksiyonlarda izin verilmeyen kullanımlar |
+| `stringler.marl` | Stringler: birleştirme, karşılaştırma, indeksleme, `str` / `to_int` / `to_float`, string listesi ve dizisi |
+| `string_bellek.marl` | Stringlerin belleğinin kendiliğinden bırakılması: ara değerler, yeniden atama, liste / dizi / struct alanı, fonksiyonlar, döngüler; program bitince bırakılmamış string kalmamalı |
+| `string_sinir_disi.marl`, `string_sayi_degil.marl` | Sınır dışı string indeksi ve sayı olmayan metnin çevrilmesi: programın mesajla durması |
+| `hatalar_string.marl` | Stringlerin hatalı kullanımı |
+| `std_string.marl`, `std_file.marl`, `std_diger.marl` | Standart kütüphane: string fonksiyonları, dosya işlemleri, `os` / `time` / `random` / `math` / `io` |
+| `std_dosya_yok.marl` | Olmayan dosyayı okumak: programın mesajla durması |
+| `http_sunucu.marl` | `std.http`: yönlendirme, sorgu, gövde, başlıklar, HEAD / 204 / 404 / 405; ayrıştırıcının reddettiği geçersiz istekler |
+| `hatalar_std.marl` | Kullanıcı kodunda `extern`, std'nin iç fonksiyonlarına erişim, paralel döngüden yan etkili fonksiyon |
+| `struct.marl` | Struct'lar: oluşturma, kopyalama, her tipten alan, iç içe struct, fonksiyona verme ve döndürme, lambdalar, paralel döngü |
+| `modul_struct.marl` | Başka modülde tanımlı struct'ların kullanılması |
+| `hatalar_struct.marl` | Struct'ların hatalı kullanımı |
+| `struct_liste.marl` | `list<struct>`: ekleme, çıkarma, alan okuma ve yazma, iç içe struct, struct içinde struct listesi, paralel döngü |
+| `struct_liste_alanlar.marl` | Elemanı matris, dizi ve liste alanı taşıyan struct listeleri |
+| `hatalar_struct_liste.marl` | Struct listelerinin hatalı kullanımı |
+| `modul_import.marl` | `import`, `as`, `from`: başka dosyalardaki fonksiyon ve globaller, alt dizin, birbirini import eden modüller |
+| `modul_gpu.marl` | Başka modüldeki `@GPU` fonksiyonların CPU'dan, GPU'dan ve çekirdek içinden çağrılması |
+| `hatalar_modul*.marl` | Bulunamayan modül, modülde olmayan isim, isim çakışması, private tanımın import edilmesi, modüldeki sözdizimi hatası, paralel döngüden güvensiz modül fonksiyonu |
 
-`tests/moduller/` dizinindeki dosyalar test değil, bu testlerin import ettiği modüllerdir (`run.sh` yalnızca `tests/` içindeki `.minik` dosyalarını çalıştırır).
+`tests/moduller/` dizinindeki dosyalar test değil, bu testlerin import ettiği modüllerdir (`run.sh` yalnızca `tests/` içindeki `.marl` dosyalarını çalıştırır).
 
 `@GPU` içeren testler iki kez çalıştırılır: ekran kartında ve `--gpu=off` ile tümüyle CPU'da. İkisi de aynı çıktıyı vermelidir. Makinede NVIDIA ekran kartı yoksa yalnızca `--gpu=off` ile çalışırlar.
 
@@ -238,7 +241,7 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 
 ## 6. Kendi testini yazmak
 
-Yeni bir test eklemek için `tests/` dizinine `.minik` uzantılı bir dosya koyman yeterli; `run.sh` onu kendiliğinden bulur. Testin ne beklediğini dosyanın başındaki özel yorum satırlarıyla söylersin.
+Yeni bir test eklemek için `tests/` dizinine `.marl` uzantılı bir dosya koyman yeterli; `run.sh` onu kendiliğinden bulur. Testin ne beklediğini dosyanın başındaki özel yorum satırlarıyla söylersin.
 
 ### Çıktıyı denetleyen test
 
@@ -315,14 +318,45 @@ func main() -> void {
 }
 ```
 
-Kendi programında aynı denetimi `MINIK_STRING_CHECK=1 ./program` ile yapabilirsin: sızıntı varsa program biterken sayısını hata çıktısına yazar.
+Kendi programında aynı denetimi `MARLIN_STRING_CHECK=1 ./program` ile yapabilirsin: sızıntı varsa program biterken sayısını hata çıktısına yazar.
+
+### HTTP sunucusu testi
+
+Program bir sunucuysa `// http: PORT` yaz. `run.sh` programı arka planda başlatır, `// send:` satırlarındaki istekleri sırayla o porta gönderir ve gelen yanıtları `// reply:` satırlarıyla karşılaştırır. İstekler ham olarak gönderilir (`\r\n` yazılabilir), böylece bozuk istekler de denenebilir. Yanıtlardaki satır sonları `\n`'e çevrilir. Program, beklediği istekleri işledikten sonra kendisi bitmelidir (`http.handle` ile sayılı döngü):
+
+```
+// http: 18500
+// output: bitti
+// send: GET / HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 3
+// reply: Connection: close
+// reply:
+// reply: ok
+import std.http as http;
+
+func kok(http.Request req) -> http.Response { return http.text(200, "ok\n"); }
+
+func main() -> void {
+    list<http.Route> rotalar = [];
+    push(rotalar, http.get("/", kok));
+    http.Server s = http.listen(18500);
+    http.handle(s, rotalar);
+    http.close(s);
+    free(rotalar);
+    print("bitti");
+}
+```
+
+İstemci `tests/http_gonder.py`'dir (`python3` gerekir). Her test farklı bir port kullanmalıdır.
 
 ### Bir test kaldığında
 
 `run.sh` neyin farklı olduğunu gösterir:
 
 ```
-  KALDI  deneme.minik -O0: cikti farkli:
+  KALDI  deneme.marl -O0: cikti farkli:
            -10
            +11
 ```
@@ -332,7 +366,7 @@ Kendi programında aynı denetimi `MINIK_STRING_CHECK=1 ./program` ile yapabilir
 Sorunu aramak için o tek dosyayı elle derleyip çalıştır:
 
 ```bash
-cmake-build-debug/minik_lang tests/deneme.minik -o /tmp/deneme && /tmp/deneme
+cmake-build-debug/marlin_lang tests/deneme.marl -o /tmp/deneme && /tmp/deneme
 echo "cikis kodu: $?"
 ```
 
@@ -345,7 +379,7 @@ Sonuç yalnızca `-O2` ile yanlışsa (ya da yalnızca `-O0` ile), `--emit=mlir`
 **Üretilen MLIR'i incelemek.** Bir döngünün yapısal (`scf.for`, `scf.while`) mı yoksa bloklu (`cf.br`) mı üretildiğini görmek için:
 
 ```bash
-cmake-build-debug/minik_lang tests/break_continue.minik --emit=mlir | grep -E 'scf\.|cf\.'
+cmake-build-debug/marlin_lang tests/break_continue.marl --emit=mlir | grep -E 'scf\.|cf\.'
 ```
 
 Kural: gövdesinde `break` ya da `return` olmayan döngüler `scf` olarak üretilir. Bu, ileride GPU'ya göndereceğimiz döngülerin tanınabilmesi için önemlidir.
@@ -353,7 +387,7 @@ Kural: gövdesinde `break` ya da `return` olmayan döngüler `scf` olarak üreti
 **MLIR araçlarıyla oynamak.** LLVM derlemenle birlikte gelen araçlar `/home/emin/llvm-project/build/bin` dizinindedir. Örneğin ürettiğimiz MLIR'i `mlir-opt` ile kendin dönüştürebilirsin:
 
 ```bash
-cmake-build-debug/minik_lang deneme.minik --emit=mlir -o deneme.mlir
+cmake-build-debug/marlin_lang deneme.marl --emit=mlir -o deneme.mlir
 /home/emin/llvm-project/build/bin/mlir-opt deneme.mlir --convert-scf-to-cf
 ```
 
@@ -362,8 +396,8 @@ Yeni bir MLIR pass'ini derleyiciye eklemeden önce etkisini görmek için kullan
 **Optimizasyonun etkisini görmek.** Aynı programın `-O0` ve `-O2` LLVM IR'ını karşılaştır:
 
 ```bash
-cmake-build-debug/minik_lang deneme.minik --emit=llvm-ir -O0 -o o0.ll
-cmake-build-debug/minik_lang deneme.minik --emit=llvm-ir -O2 -o o2.ll
+cmake-build-debug/marlin_lang deneme.marl --emit=llvm-ir -O0 -o o0.ll
+cmake-build-debug/marlin_lang deneme.marl --emit=llvm-ir -O2 -o o2.ll
 ```
 
 **Çalışma süresini ölçmek.**
@@ -555,20 +589,33 @@ func main() -> void {
 }
 ```
 
-- **Alan tipleri:** sayılar, `bool`, `char`, `string`, dizi (`int[3]`), liste, matris ve başka bir struct. Fonksiyon tipli alan olamaz; bir struct kendisini içeremez.
+- **Alan tipleri:** sayılar, `bool`, `char`, `string`, dizi (`int[3]`), liste, matris, fonksiyon (`(int) -> int f;`) ve başka bir struct. Bir struct kendisini içeremez.
 - **Oluşturma:** `Nokta(1, 2)`. Argümanlar alanların tanım sırasıyladır ve hepsi verilmelidir.
 - **Struct üzerindeki her işlem, alanlarına tek tek uygulanan işlemdir.** Bu yüzden her alan kendi tipinin kuralına uyar:
 
   | Alan tipi | `b = a` ile | Fonksiyona verilince |
   |---|---|---|
-  | Sayı, `bool`, `char`, `string` | Kopyalanır | Kopyalanır |
+  | Sayı, `bool`, `char`, `string`, fonksiyon | Kopyalanır | Kopyalanır |
   | Dizi | Kopyalanır | Aynı dizi verilir: fonksiyon elemanlarını değiştirirse çağıran da görür |
   | Matris | Kopyalanır | Kopyalanmaz ama fonksiyon değiştiremez |
   | Liste | Paylaşılır: ikisi aynı listeyi gösterir | Aynı liste verilir |
 
 - Fonksiyonlar struct alabilir ve döndürebilir; lambdalar da. Dönen struct'ın alanına doğrudan erişilebilir: `otele(a, 1).x`.
 - `public struct` başka modüllerden kullanılabilir (`s.Nokta p = s.Nokta(1, 2);` ya da `from sekil import Nokta;`). Yazılmazsa struct private'tır.
-- Matris alanı olan struct başlangıç değeri olmadan tanımlanamaz.
+- Matris ya da fonksiyon alanı olan struct başlangıç değeri olmadan tanımlanamaz.
+- **Fonksiyon alanı** çağrılarak kullanılır; struct listesiyle bir yönlendirme tablosu kurulabilir:
+
+  ```
+  struct Komut {
+      string ad;
+      (int) -> int isle;
+  }
+
+  list<Komut> komutlar = [Komut("kare", (int x) -> int | x * x), Komut("ikikat", (int x) -> int | x * 2)];
+  for i in 0 .. len(komutlar) {
+      if komutlar[i].ad == "kare" { print(komutlar[i].isle(5)); }   // 25
+  }
+  ```
 - Struct'lar `+`, `==` gibi işleçlerle kullanılamaz ve `print` ile bütün olarak yazdırılamaz; alanları tek tek kullanılır.
 - **Henüz olmayanlar:** struct dizisi (`Nokta[3]`), global struct değişkeni, `@GPU` fonksiyonlarda struct.
 
@@ -603,10 +650,10 @@ for q in l {                 // q her yinelemede elemanın kopyasıdır
 
 **Modüller (`import`)**
 
-Her `.minik` dosyası bir modüldür. Bir dosya, başka bir dosyanın fonksiyonlarını ve global değişkenlerini `import` ile kullanır. `import` satırları dosyanın en başında durur.
+Her `.marl` dosyası bir modüldür. Bir dosya, başka bir dosyanın fonksiyonlarını ve global değişkenlerini `import` ile kullanır. `import` satırları dosyanın en başında durur.
 
 ```
-import araclar.vektor;                         // araclar/vektor.minik
+import araclar.vektor;                         // araclar/vektor.marl
 import araclar.vektor as v;                    // kısa ad vererek
 from araclar.vektor import norm, ic as nokta;  // isimleri doğrudan alarak
 
@@ -618,7 +665,7 @@ func main() -> void {
 }
 ```
 
-- **Modül yolu dizin ayırıcısı yerine nokta ile yazılır:** `araclar.vektor`, `araclar/vektor.minik` dosyasıdır. Dosya önce import eden dosyanın dizininde, sonra `-I` ile verilen dizinlerde aranır.
+- **Modül yolu dizin ayırıcısı yerine nokta ile yazılır:** `araclar.vektor`, `araclar/vektor.marl` dosyasıdır. Dosya önce import eden dosyanın dizininde, sonra `-I` ile verilen dizinlerde aranır.
 - **Bir modül yalnızca kendi tanımlarını ve import ettiklerini görür.** `a`, `b`'yi; `b` de `c`'yi import ediyorsa `a`, `c`'nin isimlerini göremez (kendisi import etmelidir).
 - **Farklı modüllerdeki aynı adlı fonksiyonlar çakışmaz.** `from` ile alınan isim dosyadaki bir tanımla çakışıyorsa `as` ile başka ad verilir.
 - **Modüller birbirini import edebilir** (`a` → `b` → `a`).
@@ -669,6 +716,7 @@ func main() -> void {
 | `std.time` | `now()` — 1970'ten beri geçen saniye; `sleep(seconds)` |
 | `std.random` | `seed(n)` `random()` — [0, 1); `rand_int(low, high)` — [low, high); `rand_matrix(rows, cols)` |
 | `std.math` | `PI` `E` sabitleri |
+| `std.http` | HTTP/1.1 sunucusu: `serve(port, rotalar)`; rotalar `get` `post` `put` `delete` `route(method, path, f)`; yanıtlar `text` `html` `json` `response` `redirect` `add_header`; istekten `header` `query_param` `form_value` `url_decode`; alt seviye `listen` `next` `respond` `handle` `dispatch` `close` (aşağıda) |
 
 Bilinmesi gerekenler:
 
@@ -690,9 +738,58 @@ Bilinmesi gerekenler:
 - **`parallel for` içinde** yalnızca `std.string` fonksiyonlarının çoğu çağrılabilir (`split` ve `join` hariç: liste değiştirirler). Dosya, girdi, zaman ve rastgele sayı fonksiyonları yan etkilidir; derleyici paralel döngüde reddeder.
 - **`@GPU` fonksiyonlarda kullanılamaz** (sabitler dahil): hepsi CPU'da çalışır.
 - Süre ölçmek için `std.time.now()` değil, dile gömülü `time()` kullan (saati geri gitmez).
-- HTTP henüz yok.
 
-Kütüphanenin kaynağı `std/` dizinindedir ve okunabilir. Her modül, C ile yazılmış küçük bir çekirdeğin (`runtime/std_*.c`) üzerine minik ile yazılmıştır; C fonksiyonları `extern func` ile bildirilir. `extern` yalnızca bu dizindeki dosyalarda yazılabilir.
+**HTTP sunucusu (`std.http`)**
+
+```
+import std.http as http;
+
+func anasayfa(http.Request req) -> http.Response {
+    return http.html(200, "<h1>merhaba</h1>\n");
+}
+
+func selam(http.Request req) -> http.Response {
+    return http.text(200, "merhaba " + http.query_param(req, "ad") + "\n");   // /selam?ad=Ayse
+}
+
+func kaydet(http.Request req) -> http.Response {
+    http.Response res = http.json(201, "{\"uzunluk\": " + str(len(req.body)) + "}");
+    http.add_header(res, "X-Sunucu", "marlin");
+    return res;
+}
+
+func main() -> void {
+    list<http.Route> rotalar = [];
+    push(rotalar, http.get("/", anasayfa));
+    push(rotalar, http.get("/selam", selam));
+    push(rotalar, http.post("/kayit", kaydet));
+    push(rotalar, http.get("/dosyalar/*", (http.Request req) -> http.Response | http.text(200, req.path)));
+    http.serve(8080, rotalar);       // hiç dönmez; Ctrl+C ile durur
+}
+```
+
+Tarayıcıdan `http://localhost:8080/` ya da `curl -i localhost:8080/selam?ad=Ayse` ile denenebilir.
+
+- **İstek** (`http.Request`): `method`, `path`, `query` (`?` sonrası), `headers` (`list<http.Header>`, her biri `name` / `value`), `body`. `path` ve `query` yüzde kodlu ham haldedir; değerleri `query_param` çözer, yol için `url_decode` var. `header(req, ad)` büyük/küçük harf ayrımı yapmaz.
+- **Yanıt** (`http.Response`): `status`, `headers`, `body`. `text` / `html` / `json` uygun `Content-Type` ile yanıt kurar. `Content-Length` ve `Connection` otomatik eklenir; elle verilemez. Başlık değerinde satır sonu varsa program durur (yanıta başka başlık sokulmasın diye).
+- **Yönlendirme:** istek, yolu ve yöntemi uyan ilk rotaya gider. Yol birebir karşılaştırılır; `/dosyalar/*` önektir. Yöntemi `""` olan rota (`http.route("", yol, f)`) her yönteme uyar; GET rotası HEAD'e de yanıt verir. Yol uyup yöntem uymazsa 405, hiçbiri uymazsa 404.
+- **Geçersiz istekler işleyiciye ulaşmaz:** sunucu kendisi 400 (bozuk istek, HTTP/1.1'de `Host` yok), 408 (istemci 10 saniyede isteği bitirmedi), 413 (gövde 8 MB'tan büyük), 431 (başlık 64 KB'tan büyük ya da 100'den fazla satır), 501 (`Transfer-Encoding` / chunked gövde), 505 (HTTP/1.x değil) döner.
+- **Kendi döngün:** `serve` port dinlenemezse programı durdurur. Durumu kendin denetlemek ya da belli sayıda istekten sonra durmak için:
+
+  ```
+  http.Server s = http.listen(8080);
+  if !s.ok { print(s.error); return; }
+  for i in 0 .. 100 {
+      http.handle(s, rotalar);                 // bir istek: next + dispatch + respond
+  }
+  http.close(s);
+  ```
+
+  `next(s)` sıradaki isteği bekler, `respond(req, res)` yanıtı gönderir. `respond` isteğin ve yanıtın başlık listelerini bırakır; yanıtı gönderilmiş isteğin başlıkları bir daha kullanılmamalı.
+- **Şimdilik:** her yanıttan sonra bağlantı kapanır (keep-alive yok) ve istekler sırayla işlenir. Ağır bir işi hızlandırmak için işleyicinin içinde `parallel for` ya da `@GPU` fonksiyon kullanılabilir. HTTPS yok; gerekirse sunucunun önüne nginx / caddy konur. HTTP istemcisi ve JSON ayrıştırma da henüz yok.
+- Ayrıştırıcının kaynağı `runtime/http_parser.c`'dir: soket kullanmaz, her kuralın yanında ilgili RFC maddesi yazar.
+
+Kütüphanenin kaynağı `std/` dizinindedir ve okunabilir. Her modül, C ile yazılmış küçük bir çekirdeğin (`runtime/std_*.c`) üzerine marlin ile yazılmıştır; C fonksiyonları `extern func` ile bildirilir. `extern` yalnızca bu dizindeki dosyalarda yazılabilir.
 
 **Paralel döngü**
 
@@ -742,6 +839,7 @@ func main() -> void {
 
 - **Matrisler ekran kartının belleğinde yaşar.** Fonksiyon `@CPU` tarafından çağrıldığında matris parametreleri GPU'ya kopyalanır, dönen matris CPU'ya geri kopyalanır. Çağıran, sonuç hazır olana kadar bekler. Bir `@GPU` fonksiyon başka bir `@GPU` fonksiyonu çağırdığında kopyalama olmaz.
 - **`parallel for` ve matris işlemleri GPU'da çalışır** (`a + b`, `matmul`, `transpose`, `zeros`, `sum` ...). `parallel for`un her yinelemesi ayrı bir GPU iş parçacığıdır.
+- **`matmul` GPU'da kendi döşemeli çekirdeğiyle çalışır:** matrisler parça parça GPU'nun hızlı paylaşımlı belleğine alınır, her iş parçacığı sonucun 4x4'lük bir parçasını hesaplar. Aynı çarpımı `parallel for` ile elle yazmaktan çok daha hızlıdır (RTX 4060'ta 4096x4096 `float` çarpımı: `matmul` 35 ms, elle yazılmış düz döngü 270 ms).
 - **Geri kalan sıralı kod CPU'da çalışır** ve yalnızca GPU'ya sırayla iş verir. Yukarıdaki `for k` döngüsü böyledir: veri 100 tur boyunca GPU'da kalır.
 
 Kurallar (derleyici denetler):
@@ -755,7 +853,7 @@ Kurallar (derleyici denetler):
 Bilinmesi gerekenler:
 
 - **GPU'da çalışan `parallel for` içinde indeks sınırı denetlenmez.** CPU'da sınır dışı indeks programı mesajla durdurur; GPU'da durdurmaz, sonuç tanımsızdır. Emin olmak için programı önce `--gpu=off` ile dene: orada denetim vardır.
-- **Kayan noktalı toplamlar son basamaklarda farklı çıkabilir.** `sum` GPU'da elemanları CPU'dakinden farklı sırayla toplar. Özellikle `float` (32 bit) ile milyonlarca eleman toplanınca fark belirginleşir.
+- **Kayan noktalı toplamlar son basamaklarda farklı çıkabilir.** `sum` GPU'da elemanları CPU'dakinden farklı sırayla toplar. Özellikle `float` (32 bit) ile milyonlarca eleman toplanınca fark belirginleşir. GPU'da `a * b + c` ayrıca tek komutla (FMA, ara yuvarlama yapmadan) hesaplanabilir; CUDA derleyicisinin de varsayılanı budur.
 - **GPU her işte hızlı değildir.** Program GPU'yu ilk kullandığında yarım saniye kadar bir başlatma süresi vardır ve her kopyalamanın bir maliyeti olur. Küçük işlerde CPU daha hızlıdır; kazanç büyük matrislerde ve veri GPU'da kalırken yapılan çok sayıda işlemde gelir.
 - Aynı program `--gpu=off` ile derlenirse tümüyle CPU'da çalışır ve aynı sonucu verir (yukarıdaki toplama farkı dışında).
 - `--emit=gpu-mlir` ile hangi kısımların GPU çekirdeği olduğunu görebilirsin.
@@ -794,7 +892,7 @@ print("sure:", time() - once, "saniye");
 - `for` döngüsünün değişkeni döngü içinde değiştirilemez; `step` pozitif olmalı.
 - Lambdalar dışarıdaki yerel değişkenleri kullanamaz; gerekeni parametre olarak ver.
 
-**Henüz olmayanlar:** farklı boyut sayıları arasında işlem (matrise vektör eklemek gibi), dilimleme (`m[0]` ile satır almak), eksen boyunca toplam, matris karşılaştırma, global matris, iç içe listeler, global liste, global string, dizi döndüren fonksiyonlar, dizi ve listelerin doğrudan `print` ile yazdırılması, azalan `for` aralıkları, HTTP, ikili dosyalar.
+**Henüz olmayanlar:** farklı boyut sayıları arasında işlem (matrise vektör eklemek gibi), dilimleme (`m[0]` ile satır almak), eksen boyunca toplam, matris karşılaştırma, global matris, iç içe listeler, global liste, global string, dizi döndüren fonksiyonlar, dizi ve listelerin doğrudan `print` ile yazdırılması, azalan `for` aralıkları, ikili dosyalar.
 
 ---
 
@@ -802,18 +900,18 @@ print("sure:", time() - once, "saniye");
 
 | Belirti | Sebep ve çözüm |
 |---|---|
-| `minik_lang: No such file or directory` | Derleyici henüz derlenmemiş ya da yanlış dizindesin. Proje dizinine geç ve 2. bölümdeki derleme komutunu çalıştır. |
+| `marlin_lang: No such file or directory` | Derleyici henüz derlenmemiş ya da yanlış dizindesin. Proje dizinine geç ve 2. bölümdeki derleme komutunu çalıştır. |
 | `bash: ./deneme: cannot execute` ya da Windows'ta açılmıyor | Dosya bir Linux programı. WSL terminalinde `./deneme` ile çalıştır. |
 | `run.sh: $'\r': command not found` | Dosya Windows satır sonlarıyla kaydedilmiş. Düzelt: `sed -i 's/\r$//' tests/run.sh` |
-| `Calisma zamani kutuphanesi (libminikrt.a) bulunamadi` | Derleyiciyi `cmake-build-debug` dışına kopyaladıysan kütüphaneyi bulamaz. Yolunu ver: `export MINIK_RUNTIME=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/cmake-build-debug/libminikrt.a` |
+| `Calisma zamani kutuphanesi (libmarlinrt.a) bulunamadi` | Derleyiciyi `cmake-build-debug` dışına kopyaladıysan kütüphaneyi bulamaz. Yolunu ver: `export MARLIN_RUNTIME=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/cmake-build-debug/libmarlinrt.a` |
 | `error while loading shared libraries: libmlir_async_runtime.so` | `parallel for` içeren programlar LLVM derlemendeki bir kütüphaneyi kullanır ve yolunu içlerinde taşır. LLVM dizinini taşıdıysan ya da programı başka bir makineye kopyaladıysan bulunamaz; derleyiciyi yeniden derleyip programı yeniden üret. |
 | `error while loading shared libraries: libmlir_cuda_runtime.so` | `@GPU` içeren programlar için aynı durum: kütüphane LLVM derlemendedir (`build-gpu/lib`). |
 | Program çalışırken `... failed with 'CUDA_ERROR_...'` yazıyor | GPU'ya ulaşılamıyor ya da GPU'da hata oldu. `nvidia-smi` ekran kartını gösteriyor mu bak. GPU belleği yetmiyor olabilir; ya da `parallel for` içinde sınır dışı indeks vardır. `--gpu=off` ile derleyip dene. |
 | `@GPU` programı derlenirken `ptxas` bulunamadı hatası | CUDA araç takımı bulunamıyor. `export PATH=/usr/local/cuda-12.9/bin:$PATH` |
-| `... hata: sozdizimi hatasi: ...` | Yazım hatası. Mesajın başında dosya, satır ve sütun yazar (`deneme.minik:3:6`); açıklaması ANTLR'dan geldiği için İngilizcedir. |
-| `'std.x' adinda bir standart modul yok` | Modül adı yanlış ya da derleyici `std/` dizinini bulamıyor. Derleyiciyi başka yere kopyaladıysan yolunu ver: `export MINIK_STD=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/std` |
-| `modul bulunamadi: 'a.b'` | `a/b.minik` dosyası import eden dosyanın dizininde yok. Yolu denetle ya da dizini `-I` ile ver. |
-| Gramerde (`minik.g4`) yaptığın değişiklik etkisiz | Derleyiciyi yeniden derle; ayrıştırıcı dosyaları gramerden otomatik üretilir. |
+| `... hata: sozdizimi hatasi: ...` | Yazım hatası. Mesajın başında dosya, satır ve sütun yazar (`deneme.marl:3:6`); açıklaması ANTLR'dan geldiği için İngilizcedir. |
+| `'std.x' adinda bir standart modul yok` | Modül adı yanlış ya da derleyici `std/` dizinini bulamıyor. Derleyiciyi başka yere kopyaladıysan yolunu ver: `export MARLIN_STD=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/std` |
+| `modul bulunamadi: 'a.b'` | `a/b.marl` dosyası import eden dosyanın dizininde yok. Yolu denetle ya da dizini `-I` ile ver. |
+| Gramerde (`marlin.g4`) yaptığın değişiklik etkisiz | Derleyiciyi yeniden derle; ayrıştırıcı dosyaları gramerden otomatik üretilir. |
 | `git` komutu PowerShell'de bulunamıyor | git yalnızca WSL içinde kurulu. WSL terminalinde kullan. |
 
 ---
@@ -821,7 +919,7 @@ print("sure:", time() - once, "saniye");
 ## 10. Proje yapısı
 
 ```
-minik.g4            Dilin grameri (ANTLR)
+marlin.g4            Dilin grameri (ANTLR)
 main.cpp            Derleyicinin giriş noktası: aşamaları sırayla çağırır
 
 AST/                Ağaç yapısı ve semantik analiz
@@ -853,10 +951,11 @@ LLVMBackend/        MLIR → çalıştırılabilir dosya
   ParallelMatmul.*    CPU'da matris çarpımını çekirdeklere dağıtır
   NativeCodegen.*     Optimizasyon, nesne dosyası, bağlama
 
-runtime/            Derlenen programlara eklenen C kütüphanesi (libminikrt.a)
-  minik_rt.c          print, stringler, hata mesajları
+runtime/            Derlenen programlara eklenen C kütüphanesi (libmarlinrt.a)
+  marlin_rt.c          print, stringler, hata mesajları
   std_*.c             standart kütüphane modüllerinin C ile yazılmış kısmı
-std/                Standart kütüphane modülleri (import std.file → std/file.minik)
+  http_parser.*       HTTP/1.1 istek ayrıştırıcısı (soket kullanmaz; std_http.c kullanır)
+std/                Standart kütüphane modülleri (import std.file → std/file.marl)
 tests/              Test programları ve run.sh
 ```
 
@@ -874,9 +973,9 @@ Başlat menüsünden "Ubuntu"yu aç (ya da PowerShell'de wsl yaz), sonra:
 
 cd /mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace
 
-2. Bir .minik dosyası oluştur
+2. Bir .marl dosyası oluştur
 
-Proje dizininde deneme.minik adında bir dosya oluştur (CLion'da ya da Not Defteri'nde, fark etmez) ve içine şunu yaz:
+Proje dizininde deneme.marl adında bir dosya oluştur (CLion'da ya da Not Defteri'nde, fark etmez) ve içine şunu yaz:
 
 func main() -> void {
     int toplam = 0;
@@ -888,7 +987,7 @@ func main() -> void {
 
 3. Derle (ELF dosyasına çevir)
 
-cmake-build-debug/minik_lang deneme.minik -o deneme
+cmake-build-debug/marlin_lang deneme.marl -o deneme
 
 Hata yoksa ekrana hiçbir şey yazmaz ve dizinde deneme adında bir dosya oluşur. Bu senin çalıştırılabilir ELF dosyan.
 
@@ -902,6 +1001,6 @@ toplam = 10
 
 Programı değiştirdiğinde 3. ve 4. adımı tekrarlarsın. İkisini tek satırda yapmak istersen:
 
-cmake-build-debug/minik_lang deneme.minik -o deneme && ./deneme
+cmake-build-debug/marlin_lang deneme.marl -o deneme && ./deneme
 
 3. adımda No such file or directory hatası alırsan derleyicinin kendisi henüz derlenmemiş demektir; önce CLion'da Build'e bas ya da şunu çalıştır:

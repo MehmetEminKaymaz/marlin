@@ -69,7 +69,7 @@ Value MLIRBuiltinManager::buildMath(Builtin builtin, llvm::ArrayRef<Value> args,
 void MLIRBuiltinManager::printChar(char c, Location loc) {
     Value code = arith.buildIntConstant(static_cast<unsigned char>(c),
                                         ctx.builder.getI32Type(), loc);
-    runtime.call("minik_print_char", {code}, loc);
+    runtime.call("marlin_print_char", {code}, loc);
 }
 
 // Küçük tamsayılar (bool, char, int8 ...) C tarafına geçmeden önce
@@ -82,31 +82,31 @@ void MLIRBuiltinManager::printValue(Value value, const SemType& type, Location l
         case SemType::Kind::Int:
             if (type.isSigned) {
                 if (type.width < 64) value = b.create<arith::ExtSIOp>(loc, b.getI64Type(), value);
-                runtime.call("minik_print_i64", {value}, loc);
+                runtime.call("marlin_print_i64", {value}, loc);
             } else {
                 if (type.width < 64) value = b.create<arith::ExtUIOp>(loc, b.getI64Type(), value);
-                runtime.call("minik_print_u64", {value}, loc);
+                runtime.call("marlin_print_u64", {value}, loc);
             }
             return;
 
         case SemType::Kind::Float:
             // float ve float64 ayrı yazdırılır: her biri kendi duyarlığında
             // en kısa gösterimle çıkar (3.14, 3.140000104904175 değil).
-            runtime.call(type.width == 32 ? "minik_print_f32" : "minik_print_f64", {value}, loc);
+            runtime.call(type.width == 32 ? "marlin_print_f32" : "marlin_print_f64", {value}, loc);
             return;
 
         case SemType::Kind::Bool:
             value = b.create<arith::ExtUIOp>(loc, b.getI32Type(), value);
-            runtime.call("minik_print_bool", {value}, loc);
+            runtime.call("marlin_print_bool", {value}, loc);
             return;
 
         case SemType::Kind::Char:
             value = b.create<arith::ExtUIOp>(loc, b.getI32Type(), value);
-            runtime.call("minik_print_char", {value}, loc);
+            runtime.call("marlin_print_char", {value}, loc);
             return;
 
         case SemType::Kind::String:
-            runtime.call("minik_print_str", {value}, loc);
+            runtime.call("marlin_print_str", {value}, loc);
             return;
 
         default:
@@ -124,22 +124,22 @@ Value MLIRBuiltinManager::buildToString(Value value, const SemType& type, Locati
         case SemType::Kind::Int:
             if (type.isSigned) {
                 if (type.width < 64) value = b.create<arith::ExtSIOp>(loc, i64, value);
-                return runtime.callValue("minik_str_from_i64", {value}, i64, loc);
+                return runtime.callValue("marlin_str_from_i64", {value}, i64, loc);
             }
             if (type.width < 64) value = b.create<arith::ExtUIOp>(loc, i64, value);
-            return runtime.callValue("minik_str_from_u64", {value}, i64, loc);
+            return runtime.callValue("marlin_str_from_u64", {value}, i64, loc);
 
         case SemType::Kind::Float:
-            return runtime.callValue(type.width == 32 ? "minik_str_from_f32" : "minik_str_from_f64",
+            return runtime.callValue(type.width == 32 ? "marlin_str_from_f32" : "marlin_str_from_f64",
                                      {value}, i64, loc);
 
         case SemType::Kind::Bool:
             value = b.create<arith::ExtUIOp>(loc, b.getI32Type(), value);
-            return runtime.callValue("minik_str_from_bool", {value}, i64, loc);
+            return runtime.callValue("marlin_str_from_bool", {value}, i64, loc);
 
         case SemType::Kind::Char:
             value = b.create<arith::ExtUIOp>(loc, b.getI32Type(), value);
-            return runtime.callValue("minik_str_from_char", {value}, i64, loc);
+            return runtime.callValue("marlin_str_from_char", {value}, i64, loc);
 
         default:
             return value; // string: kendisi (stringler değişmez, kopya gerekmez)
@@ -151,10 +151,10 @@ Value MLIRBuiltinManager::buildStringBinary(BinaryExpr::Op op, Value left, Value
                                             Location loc) {
     OpBuilder& b = ctx.builder;
     if (op == BinaryExpr::Add)
-        return runtime.callValue("minik_str_concat", {left, right}, b.getI64Type(), loc);
+        return runtime.callValue("marlin_str_concat", {left, right}, b.getI64Type(), loc);
 
     // Sözlük sırası: sonuç negatif / sıfır / pozitif; işleç onu sıfırla karşılaştırır.
-    Value order = runtime.callValue("minik_str_compare", {left, right}, b.getI32Type(), loc);
+    Value order = runtime.callValue("marlin_str_compare", {left, right}, b.getI32Type(), loc);
     Value zero = arith.buildIntConstant(0, b.getI32Type(), loc);
     arith::CmpIPredicate predicate;
     switch (op) {
@@ -172,11 +172,11 @@ void MLIRBuiltinManager::buildPrint(llvm::ArrayRef<Value> args, llvm::ArrayRef<S
                                     Location loc) {
     // Satır bölünmeden yazılsın: paralel döngüde başka bir iş parçacığının
     // çıktısı araya girmesin.
-    runtime.call("minik_print_begin", {}, loc);
+    runtime.call("marlin_print_begin", {}, loc);
     for (size_t i = 0; i < args.size(); ++i) {
         if (i > 0) printChar(' ', loc);
         printValue(args[i], types[i], loc);
     }
     printChar('\n', loc);
-    runtime.call("minik_print_end", {}, loc);
+    runtime.call("marlin_print_end", {}, loc);
 }

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Testleri çalıştırır (WSL / Linux).
 #
-# Her .minik dosyası, başındaki yorum satırlarıyla ne beklediğini söyler:
+# Her .marl dosyası, başındaki yorum satırlarıyla ne beklediğini söyler:
 #
 #   // output: metin  -> programın yazdığı satırlar, sırasıyla. Çıktının tamamı
 #                        bu satırlarla birebir aynı olmalı.
@@ -16,16 +16,27 @@
 #                        (Stringlerin belleği kendiliğinden bırakılır; listeler
 #                        elle bırakıldığı için test listelerini free etmelidir.)
 #
+# HTTP sunucusu testleri (std.http):
+#
+#   // http: PORT     -> program bir sunucudur: arka planda başlatılır ve
+#                        PORT'a aşağıdaki istekler sırayla gönderilir.
+#                        Program, beklediği istekleri işleyince kendisi bitmeli.
+#   // send: istek    -> ham istek; \r\n gibi kaçış dizileri yazılabilir
+#                        (bkz. http_gonder.py).
+#   // reply: metin   -> sunucunun yanıtları, sırasıyla ve birleştirilmiş
+#                        olarak (satır sonları \n'e çevrilir). Tamamı birebir
+#                        aynı olmalı.
+#
 # Çalıştırılan her test hem -O0 hem -O2 ile derlenir.
 #
 # @GPU fonksiyon içeren testler iki kez çalıştırılır: GPU'da ve --gpu=off ile
 # tümüyle CPU'da; ikisi de aynı çıktıyı vermelidir. Makinede kullanılabilir bir
 # NVIDIA GPU yoksa yalnızca --gpu=off ile çalıştırılırlar.
 #
-# Kullanım: tests/run.sh [minik_lang yolu]
+# Kullanım: tests/run.sh [marlin_lang yolu]
 
 cd "$(dirname "$0")"
-COMPILER="${1:-../cmake-build-debug/minik_lang}"
+COMPILER="${1:-../cmake-build-debug/marlin_lang}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -36,7 +47,7 @@ pass=0; fail=0
 ok()  { echo "  GECTI  $1"; pass=$((pass + 1)); }
 bad() { echo "  KALDI  $1: $2"; fail=$((fail + 1)); }
 
-for src in *.minik; do
+for src in *.marl; do
     if grep -q '^// error:' "$src"; then
         if "$COMPILER" "$src" --emit=mlir > /dev/null 2> "$TMP/err"; then
             bad "$src" "derleme basarili oldu, hata bekleniyordu"; continue
@@ -53,6 +64,8 @@ for src in *.minik; do
     expected_code="${expected_code:-0}"
     # "// output:" (boş satır) ve "// output: metin" biçimlerinin ikisi de geçerli
     sed -n -e 's|^// output: \(.*\)$|\1|p' -e 's|^// output:$||p' "$src" > "$TMP/expected"
+    port=$(sed -n 's|^// http: *||p' "$src" | head -1)
+    sed -n -e 's|^// reply: \(.*\)$|\1|p' -e 's|^// reply:$||p' "$src" > "$TMP/expected_replies"
 
     configs=("-O0" "-O2")
     if grep -q '^@GPU' "$src"; then
@@ -65,8 +78,19 @@ for src in *.minik; do
         if ! "$COMPILER" "$src" $opt -o "$TMP/prog" 2> "$TMP/err"; then
             bad "$src $opt" "derlenemedi: $(head -3 "$TMP/err")"; continue
         fi
-        MINIK_STRING_CHECK=1 "$TMP/prog" > "$TMP/actual" 2> "$TMP/stderr"
-        code=$?
+        : > "$TMP/replies"
+        if [ -n "$port" ]; then
+            MARLIN_STRING_CHECK=1 timeout 60 "$TMP/prog" > "$TMP/actual" 2> "$TMP/stderr" &
+            server=$!
+            while IFS= read -r request; do
+                python3 http_gonder.py "$port" "$request" >> "$TMP/replies" 2>&1
+            done < <(sed -n 's|^// send: *||p' "$src")
+            wait "$server"
+            code=$?
+        else
+            MARLIN_STRING_CHECK=1 "$TMP/prog" > "$TMP/actual" 2> "$TMP/stderr"
+            code=$?
+        fi
         missing=""
         while IFS= read -r msg; do
             grep -qF -- "$msg" "$TMP/stderr" || missing="$missing [$msg]"
@@ -83,6 +107,8 @@ for src in *.minik; do
             bad "$src $opt" "GPU hatasi: $(head -2 "$TMP/stderr")"
         elif ! diff -u "$TMP/expected" "$TMP/actual" > "$TMP/diff"; then
             bad "$src $opt" "cikti farkli:"; sed 's/^/           /' "$TMP/diff"
+        elif [ -n "$port" ] && ! diff -u "$TMP/expected_replies" "$TMP/replies" > "$TMP/diff"; then
+            bad "$src $opt" "http yanitlari farkli:"; sed 's/^/           /' "$TMP/diff"
         else
             ok "$src $opt"
         fi

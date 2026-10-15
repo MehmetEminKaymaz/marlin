@@ -19,7 +19,7 @@ func main() -> int {
     // os
     list<string> a = os.args();
     print(len(a) == 1, len(os.env("PATH")) > 0);
-    print(os.env("MINIK_BOYLE_BIR_DEGISKEN_YOK") == "");
+    print(os.env("MARLIN_BOYLE_BIR_DEGISKEN_YOK") == "");
 
     // time
     float64 once = std.time.now();

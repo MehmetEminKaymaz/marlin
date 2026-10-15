@@ -15,12 +15,12 @@
 // bildirimlerin sırası önemsizdir ve modüllerin çalıştırılan bir başlangıç
 // kodu yoktur.
 //
-// Modül yolu noktalıdır: `araclar.vektor`, `araclar/vektor.minik` dosyasıdır.
+// Modül yolu noktalıdır: `araclar.vektor`, `araclar/vektor.marl` dosyasıdır.
 // Dosya sırasıyla şuralarda aranır:
 //   1. import eden dosyanın dizini
 //   2. `-I` ile verilen dizinler
 // `std` ile başlayan yollar standart kütüphaneye ayrılmıştır: yalnızca
-// derleyiciyle gelen std dizininde aranır (`std.file` → <std>/file.minik).
+// derleyiciyle gelen std dizininde aranır (`std.file` → <std>/file.marl).
 //
 // Sonuçta bütün bildirimler tek bir Program'dadır. Kök dışındaki modüllerin
 // fonksiyon ve global adlarına modülün öneki eklenir (bkz. Module::prefix);
@@ -32,7 +32,7 @@ public:
     explicit ModuleLoader(std::vector<std::string> searchDirs = {}, std::string stdDir = "")
         : searchDirs(std::move(searchDirs)), stdDir(std::move(stdDir)) {}
 
-    // Derleyiciyle gelen std dizinini bulur: MINIK_STD ortam değişkeni,
+    // Derleyiciyle gelen std dizinini bulur: MARLIN_STD ortam değişkeni,
     // derleyicinin yanındaki `std`, sonra derleme sırasında gömülen yol.
     static std::string findStdDir(const std::string& compilerPath);
 

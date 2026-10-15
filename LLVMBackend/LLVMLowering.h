@@ -21,7 +21,7 @@
 //
 // Sonrası (optimizasyon, nesne dosyası, bağlama) NativeCodegen'dedir.
 // ---------------------------------------------------------------------------
-namespace minik {
+namespace marlin {
 
 /// İndirme hattının ihtiyaç duyduğu arayüzleri registry'ye ekler. MLIRContext
 /// oluşturulmadan önce çağrılmalıdır.
@@ -40,6 +40,6 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
 std::unique_ptr<llvm::Module> translateToLLVMIR(mlir::ModuleOp module,
                                                 llvm::LLVMContext& llvmContext);
 
-} // namespace minik
+} // namespace marlin
 
 #endif //LLVMLOWERING_H

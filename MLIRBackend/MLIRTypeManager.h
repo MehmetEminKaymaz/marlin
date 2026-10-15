@@ -25,8 +25,8 @@
 //   list<T>                    → memref<memref<? x T>>   (bkz. MLIRListManager)
 //   matrix<T, N>               → memref<? x ... x T> (N boyut); ifade içinde tensor
 //                                (bkz. MLIRMatrixManager)
-//   (A, B) -> R                → (A, B) -> R
-//   struct                     → karşılığı yok; yapraklarına ayrılır (bkz. convertFunction)
+//   (A, B) -> R                → i64   (fonksiyonun adresi; bkz. aşağıda)
+//   struct                    → karşılığı yok; yapraklarına ayrılır (bkz. convertFunction)
 //   void                       → boş Type (çağıran taraf ele alır)
 class MLIRTypeManager {
     CodegenContext& ctx;
@@ -43,7 +43,7 @@ public:
             case SemType::Kind::Bool:  return builder.getI1Type();
             case SemType::Kind::Char:  return builder.getIntegerType(8);
             // String, çalışma zamanındaki string bloğunun adresidir (bkz.
-            // runtime/minik_rt.c). Adres tamsayı olarak taşınır: böylece
+            // runtime/marlin_rt.c). Adres tamsayı olarak taşınır: böylece
             // sıradan bir skaler gibi yuvada, dizide ve listede saklanabilir
             // (LLVM işaretçisi memref elemanı olamaz).
             case SemType::Kind::String:
@@ -54,8 +54,13 @@ public:
                 return listCellType(convert(type.elementType()));
             case SemType::Kind::Matrix:
                 return matrixBufferType(convert(type.elementType()), type.rank);
+            // Fonksiyon değeri de string gibi bir adrestir: böylece yuvada,
+            // listede ve struct alanında sıradan bir skaler gibi durur (MLIR'in
+            // fonksiyon tipi memref elemanı olamaz). Değer yalnızca oluşturulurken
+            // (func.constant) ve çağrılırken (call_indirect) gerçek fonksiyon
+            // tipine köprülenir; bkz. MLIRGenerator::functionAddress.
             case SemType::Kind::Function:
-                return convertFunction(type);
+                return builder.getI64Type();
             case SemType::Kind::Struct: // tek bir değer değildir; yaprakları çevrilir
             case SemType::Kind::Void:
             case SemType::Kind::Error:

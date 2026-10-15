@@ -1,0 +1,72 @@
+// Fonksiyon değerlerinin bellekte durması: struct alanı, liste elemanı,
+// struct listesi (yönlendirme tablosu), yeniden atama, dönüş değeri.
+// output: 10 13 7
+// output: 6
+// output: kok
+// output: merhaba Ayse
+// output: bulunamadi: /yok
+// output: 2 3 4
+// output: 8
+// output: 25
+
+struct Islem {
+    string ad;
+    (int, int) -> int f;
+}
+
+struct Rota {
+    string yol;
+    (string) -> string isle;
+}
+
+func topla(int a, int b) -> int { return a + b; }
+func carp(int a, int b) -> int { return a * b; }
+
+func kok(string istek) -> string { return "kok"; }
+func selam(string istek) -> string { return "merhaba " + istek; }
+
+// Yolu tabloda arar; bulursa o rotanın işleyicisini çağırır.
+func yonlendir(list<Rota> rotalar, string yol, string istek) -> string {
+    for i in 0 .. len(rotalar) {
+        if rotalar[i].yol == yol {
+            return rotalar[i].isle(istek);
+        }
+    }
+    return "bulunamadi: " + yol;
+}
+
+func sec(bool carpma) -> (int, int) -> int {
+    if carpma { return carp; }
+    return topla;
+}
+
+func main() -> void {
+    // struct alanı
+    Islem t = Islem("topla", topla);
+    Islem c = Islem("carp", (int a, int b) -> int | a * b + 3);
+    Islem e = t;
+    e.f = (int a, int b) -> int | a - b;        // alanına yeniden atama
+    print(c.f(2, 4) - 1, t.f(6, 7), e.f(9, 2));
+
+    // değişkene yeniden atama
+    (int, int) -> int g = topla;
+    g = carp;
+    print(g(2, 3));
+
+    // struct listesi: yönlendirme tablosu
+    list<Rota> rotalar = [];
+    push(rotalar, Rota("/", kok));
+    push(rotalar, Rota("/selam", selam));
+    print(yonlendir(rotalar, "/", ""));
+    print(yonlendir(rotalar, "/selam", "Ayse"));
+    print(yonlendir(rotalar, "/yok", ""));
+
+    // fonksiyon listesi
+    list<(int) -> int> adimlar = [(int x) -> int | x + 1, (int x) -> int | x + 2];
+    push(adimlar, (int x) -> int | x + 3);
+    print(adimlar[0](1), adimlar[1](1), adimlar[2](1));
+
+    // fonksiyondan dönen fonksiyon
+    print(sec(false)(3, 5));
+    print(sec(true)(5, 5));
+}

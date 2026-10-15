@@ -11,7 +11,7 @@
 import std.file as file;
 
 func main() -> void {
-    string yol = "/tmp/minik_std_file_test.txt";
+    string yol = "/tmp/marlin_std_file_test.txt";
     file.remove(yol);
     print(file.exists(yol));
 
@@ -31,7 +31,7 @@ func main() -> void {
     file.close(f);
 
     // Açılamayan dosya programı durdurmaz; ok alanı söyler.
-    file.File yok = file.open("/tmp/minik_boyle_bir_dizin_yok/a.txt", "r");
+    file.File yok = file.open("/tmp/marlin_boyle_bir_dizin_yok/a.txt", "r");
     print(yok.ok);
 
     // Yazma

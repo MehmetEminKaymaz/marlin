@@ -12,7 +12,7 @@
 //
 //   llvm::Module ──configure──▶ ──optimize──▶ ──emitObject──▶ .o ──link──▶ çalıştırılabilir
 // ---------------------------------------------------------------------------
-namespace minik {
+namespace marlin {
 
 class NativeCodegen {
     std::unique_ptr<llvm::TargetMachine> targetMachine;
@@ -37,7 +37,7 @@ public:
 
     /// Nesne dosyasını sistemin C derleyicisi (cc) ile bağlayıp çalıştırılabilir
     /// dosya üretir; C çalışma zamanı ve libm böylece otomatik eklenir.
-    /// `runtimeLib`: minik çalışma zamanı kütüphanesi (libminikrt.a).
+    /// `runtimeLib`: marlin çalışma zamanı kütüphanesi (libmarlinrt.a).
     /// `needsThreads`: program paralel döngü içeriyor; iş parçacığı çalışma
     /// zamanı da bağlanır.
     /// `needsGpu`: program GPU'da çalışan kod içeriyor; GPU çalışma zamanı da
@@ -46,12 +46,12 @@ public:
                      const std::string& exePath, bool needsThreads, bool needsGpu,
                      std::string& error);
 
-    /// libminikrt.a'nın yolunu bulur: önce MINIK_RUNTIME ortam değişkeni, sonra
+    /// libmarlinrt.a'nın yolunu bulur: önce MARLIN_RUNTIME ortam değişkeni, sonra
     /// derleyicinin yanındaki dosya, en son derleme sırasında gömülen yol.
     /// Bulunamazsa boş döner.
     static std::string findRuntimeLibrary(const char* argv0);
 };
 
-} // namespace minik
+} // namespace marlin
 
 #endif //NATIVECODEGEN_H

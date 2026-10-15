@@ -2,7 +2,7 @@
 // error: struct 'Dugum' kendisini iceriyor
 // error: 'x' alani birden cok kez tanimlanmis
 // error: struct en az bir alan icermeli
-// error: struct alani fonksiyon tipinde olamaz
+// error: fonksiyon alani olan struct baslangic degeri olmadan tanimlanamaz
 // error: 'Ayni' bu kapsamda zaten tanimli (ayni adda bir struct var)
 // error: global degisken olarak yalnizca
 // error: 'Nokta' 2 alan bekler, verilen 1
@@ -93,6 +93,7 @@ func main() -> void {
     let u = Nokta;
     r = kutuYap();
     Kutu k;
+    Islem islem;            // çağrılacak fonksiyonu olmazdı
     print(bir().x);
     print(kutuYap().yok);
     s.Gizli g = s.Gizli(1);

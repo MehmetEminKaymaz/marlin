@@ -1,0 +1,195 @@
+// std.http: yönlendirme, istekten okuma, yanıt biçimleri ve ayrıştırıcının
+// reddettiği geçersiz istekler. Program 11 geçerli isteği işleyip biter;
+// geçersiz isteklere sunucu kendisi yanıt verir (sayılmaz).
+// leaks: 0
+// output: hazir
+// output: bitti
+// http: 18471
+//
+// send: GET / HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 4
+// reply: Connection: close
+// reply:
+// reply: kok
+//
+// Sorgu: yüzde kodu ve '+' çözülür
+// send: GET /selam?x=1&ad=Ay%C5%9Fe+Nur HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 19
+// reply: Connection: close
+// reply:
+// reply: merhaba Ayşe Nur!
+//
+// Gövde ve kendi başlığı
+// send: POST /yanki HTTP/1.1\r\nHost: a\r\nContent-Length: 5\r\n\r\nabcde
+// reply: HTTP/1.1 201 Created
+// reply: Content-Type: application/json
+// reply: X-Yontem: POST
+// reply: Content-Length: 32
+// reply: Connection: close
+// reply:
+// reply: {"uzunluk": 5, "govde": "abcde"}
+//
+// HEAD: GET rotası yanıt verir, gövde gönderilmez
+// send: HEAD / HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 4
+// reply: Connection: close
+// reply:
+//
+// send: DELETE / HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 405 Method Not Allowed
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 19
+// reply: Connection: close
+// reply:
+// reply: Method Not Allowed
+//
+// send: GET /yok HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 404 Not Found
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 10
+// reply: Connection: close
+// reply:
+// reply: Not Found
+//
+// Önek rotası ve url_decode
+// send: GET /dosyalar/a%20b.txt HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 25
+// reply: Connection: close
+// reply:
+// reply: dosya: /dosyalar/a b.txt
+//
+// 204: gövde de Content-Length da yok
+// send: GET /bos HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 204 No Content
+// reply: Connection: close
+// reply:
+//
+// Başlık adı büyük/küçük harf duyarsız; değerin çevresindeki boşluk atılır
+// send: GET /baslik HTTP/1.1\r\nHost: a\r\nX-OZEL:   deger  \r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 6
+// reply: Connection: close
+// reply:
+// reply: deger
+//
+// Geçersiz istekler — işleyiciye ulaşmaz
+// send: GET / HTTP/1.1\r\n\r\n
+// reply: HTTP/1.1 400 Bad Request
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 12
+// reply: Connection: close
+// reply:
+// reply: Bad Request
+// send: GET / HTTP/2.0\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 505 HTTP Version Not Supported
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 27
+// reply: Connection: close
+// reply:
+// reply: HTTP Version Not Supported
+// send: BOZUK SATIR\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 400 Bad Request
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 12
+// reply: Connection: close
+// reply:
+// reply: Bad Request
+// send: POST /yanki HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n
+// reply: HTTP/1.1 501 Not Implemented
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 16
+// reply: Connection: close
+// reply:
+// reply: Not Implemented
+// send: GET / HTTP/1.1\r\nHost : a\r\n\r\n
+// reply: HTTP/1.1 400 Bad Request
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 12
+// reply: Connection: close
+// reply:
+// reply: Bad Request
+// send: POST /yanki HTTP/1.1\r\nHost: a\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\nabcdef
+// reply: HTTP/1.1 400 Bad Request
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 12
+// reply: Connection: close
+// reply:
+// reply: Bad Request
+//
+// Yalnız LF satır sonu; HTTP/1.0'da Host gerekmez
+// send: GET / HTTP/1.1\nHost: a\n\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 4
+// reply: Connection: close
+// reply:
+// reply: kok
+// send: GET /selam HTTP/1.0\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 10
+// reply: Connection: close
+// reply:
+// reply: merhaba !
+
+import std.http as http;
+
+func kok(http.Request req) -> http.Response {
+    return http.text(200, "kok\n");
+}
+
+func selam(http.Request req) -> http.Response {
+    return http.text(200, "merhaba " + http.query_param(req, "ad") + "!\n");
+}
+
+func yanki(http.Request req) -> http.Response {
+    http.Response res = http.json(201, "{\"uzunluk\": " + str(len(req.body)) +
+                                       ", \"govde\": \"" + req.body + "\"}");
+    http.add_header(res, "X-Yontem", req.method);
+    return res;
+}
+
+func dosya(http.Request req) -> http.Response {
+    return http.text(200, "dosya: " + http.url_decode(req.path) + "\n");
+}
+
+func bos(http.Request req) -> http.Response {
+    list<http.Header> headers = [];
+    return http.Response(204, headers, "");
+}
+
+func baslik(http.Request req) -> http.Response {
+    return http.text(200, http.header(req, "x-ozel") + "\n");
+}
+
+func main() -> void {
+    list<http.Route> rotalar = [];
+    push(rotalar, http.get("/", kok));
+    push(rotalar, http.get("/selam", selam));
+    push(rotalar, http.post("/yanki", yanki));
+    push(rotalar, http.get("/dosyalar/*", dosya));
+    push(rotalar, http.get("/bos", bos));
+    push(rotalar, http.route("", "/baslik", baslik));
+
+    http.Server s = http.listen(18471);
+    if !s.ok {
+        print(s.error);
+        return;
+    }
+    print("hazir");
+    for i in 0 .. 11 {
+        http.handle(s, rotalar);
+    }
+    http.close(s);
+    free(rotalar);
+    print("bitti");
+}

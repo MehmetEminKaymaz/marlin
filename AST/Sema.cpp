@@ -237,8 +237,8 @@ SemType Sema::resolveType(Type* t) {
         case TypeKind::List: {
             SemType elem = resolveType(t->elementType.get());
             if (elem.isError()) return elem;
-            if (!elem.isScalar() && !elem.isString() && !elem.isStruct()) {
-                error(t, "liste elemani sayisal, bool, char, string ya da struct olmali (bulunan: " + elem.str() + ")");
+            if (!elem.isScalar() && !elem.isString() && !elem.isStruct() && !elem.isFunction()) {
+                error(t, "liste elemani sayisal, bool, char, string, fonksiyon ya da struct olmali (bulunan: " + elem.str() + ")");
                 return SemType::Error();
             }
             return SemType::List(elem);
@@ -542,10 +542,10 @@ void Sema::declareFunction(FunctionDecl* fn) {
 //
 //   * Yalnızca standart kütüphane modüllerinde yazılabilir; kullanıcı kodu
 //     C'ye doğrudan açılmaz. Her zaman private'tır (gramer `public` kabul
-//     etmez): dışarıya bir minik fonksiyonuyla sarılarak açılır.
+//     etmez): dışarıya bir marlin fonksiyonuyla sarılarak açılır.
 //   * İmzasında yalnızca C'de doğrudan karşılığı olan tipler bulunabilir.
 //     Liste, matris ve struct döndürmesi gereken işlevler, extern'lerin
-//     üzerine minik ile yazılır.
+//     üzerine marlin ile yazılır.
 //   * Derleyici gövdeyi göremediği için fonksiyonu yan etkili sayar (paralel
 //     döngüden çağrılamaz); yan etkisi olmayanlar @pure ile işaretlenir.
 //   * Her zaman @CPU'dur.
@@ -717,7 +717,7 @@ void Sema::visit(Identifier* node) {
                     "(tanimina 'public' yazin)");
         return;
     }
-    // extern fonksiyonun minik tarafında bir gövdesi yoktur; değer olarak dolaşamaz.
+    // extern fonksiyonun marlin tarafında bir gövdesi yoktur; değer olarak dolaşamaz.
     if (sym->isExtern && !isCallee) {
         error(node, "extern fonksiyon '" + node->name + "' deger olarak kullanilamaz; "
                     "yalnizca cagrilabilir");
@@ -819,14 +819,16 @@ void Sema::visit(ListLiteral* node) {
         return;
     }
 
-    // [Nokta(1, 2), Nokta(3, 4)] — struct listesi. Struct dizisi olmadığı
-    // için literal yalnızca liste beklenen yerde yazılabilir.
-    const bool wantsStructs = expected.isList() && expected.elementType().isStruct();
+    // [Nokta(1, 2), Nokta(3, 4)] — struct listesi; [f, g] — fonksiyon listesi.
+    // Struct ve fonksiyon dizisi olmadığı için bu literaller yalnızca liste
+    // beklenen yerde yazılabilir.
+    const bool wantsStructs = expected.isList() &&
+        (expected.elementType().isStruct() || expected.elementType().isFunction());
     bool ok = true, allNumeric = true, anyStruct = false;
     for (auto& elem : node->elements) {
         SemType t = wantsStructs ? checkExpecting(elem, expected.elementType()) : check(elem);
         if (t.isError()) { ok = false; continue; }
-        if (t.isStruct()) {
+        if (t.isStruct() || t.isFunction()) {
             anyStruct = true;
             continue;
         }
@@ -847,7 +849,8 @@ void Sema::visit(ListLiteral* node) {
             return;
         }
         if (!expected.isList()) {
-            error(node, "struct listesi literalinin tipi belirtilmeli (or. list<" + elemType.str() +
+            error(node, std::string(elemType.isStruct() ? "struct" : "fonksiyon") +
+                        " listesi literalinin tipi belirtilmeli (or. list<" + elemType.str() +
                         "> l = [...];)");
             return;
         }
@@ -1392,6 +1395,10 @@ void Sema::visit(VariableDecl* node) {
         error(node, "matris alani olan struct baslangic degeri olmadan tanimlanamaz (or. " +
                     type.str() + "(...))");
         type = SemType::Error();
+    } else if (type.containsFunction()) {
+        error(node, "fonksiyon alani olan struct baslangic degeri olmadan tanimlanamaz (or. " +
+                    type.str() + "(...))");
+        type = SemType::Error();
     }
 
     if (gpuFunction) {
@@ -1436,8 +1443,6 @@ void Sema::visit(AssignmentStmt* node) {
                 return error(ident, "'" + ident->name + "' bir fonksiyon; atama yapilamaz");
             if (sym->kind == Symbol::Iterator)
                 return error(ident, "dongu degiskeni '" + ident->name + "' degistirilemez");
-            if (target.isFunction())
-                return error(ident, "fonksiyon tipli degiskene yeniden atama henuz desteklenmiyor");
         }
     }
 

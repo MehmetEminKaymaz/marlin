@@ -14,7 +14,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Host.h"
 
-namespace minik {
+namespace marlin {
 
 std::unique_ptr<NativeCodegen> NativeCodegen::create(unsigned optLevel, std::string& error) {
     llvm::InitializeNativeTarget();
@@ -93,18 +93,18 @@ bool NativeCodegen::emitObject(llvm::Module& module, const std::string& path,
 }
 
 std::string NativeCodegen::findRuntimeLibrary(const char* argv0) {
-    if (const char* fromEnv = std::getenv("MINIK_RUNTIME"))
+    if (const char* fromEnv = std::getenv("MARLIN_RUNTIME"))
         return llvm::sys::fs::exists(fromEnv) ? fromEnv : "";
 
     // Adresi alınan sembol yalnızca çalışan dosyanın yerini bulmak içindir.
     static int anchor;
     llvm::SmallString<256> beside(llvm::sys::fs::getMainExecutable(argv0, &anchor));
     llvm::sys::path::remove_filename(beside);
-    llvm::sys::path::append(beside, "libminikrt.a");
+    llvm::sys::path::append(beside, "libmarlinrt.a");
     if (llvm::sys::fs::exists(beside)) return std::string(beside);
 
-#ifdef MINIK_RUNTIME_LIB
-    if (llvm::sys::fs::exists(MINIK_RUNTIME_LIB)) return MINIK_RUNTIME_LIB;
+#ifdef MARLIN_RUNTIME_LIB
+    if (llvm::sys::fs::exists(MARLIN_RUNTIME_LIB)) return MARLIN_RUNTIME_LIB;
 #endif
     return "";
 }
@@ -129,8 +129,8 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
     // Paralel döngüler MLIR'in iş parçacığı havuzunu (libmlir_async_runtime.so)
     // kullanır. Paylaşımlı bir kütüphanedir; program çalışırken de bulunabilmesi
     // için yolu çalıştırılabilir dosyaya yazılır (rpath).
-#ifdef MINIK_LLVM_LIB_DIR
-    const std::string libDir = MINIK_LLVM_LIB_DIR;
+#ifdef MARLIN_LLVM_LIB_DIR
+    const std::string libDir = MARLIN_LLVM_LIB_DIR;
     const std::string searchPath = "-L" + libDir;
     const std::string runPath = "-Wl,-rpath," + libDir;
     if (needsThreads || needsGpu) {
@@ -154,4 +154,4 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
     return true;
 }
 
-} // namespace minik
+} // namespace marlin

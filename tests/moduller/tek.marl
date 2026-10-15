@@ -1,4 +1,4 @@
-// Test modülü: cift.minik ile birbirini import eder (döngü).
+// Test modülü: cift.marl ile birbirini import eder (döngü).
 import cift;
 
 public func tekMi(int n) -> bool {

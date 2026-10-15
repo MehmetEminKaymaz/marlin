@@ -7,8 +7,8 @@
 #include <sstream>
 
 #include "antlr4-runtime.h"
-#include "minikLexer.h"
-#include "minikParser.h"
+#include "marlinLexer.h"
+#include "marlinParser.h"
 #include "ASTBuilder.h"
 
 namespace fs = std::filesystem;
@@ -50,29 +50,29 @@ bool isStandardModule(const std::string& name) {
 }
 
 // extern fonksiyonun C'deki adı: modül ve fonksiyon adından türetilir.
-//   std.file   / c_exists  →  minik_file_exists
-//   std.net.ip / c_parse   →  minik_net_ip_parse
+//   std.file   / c_exists  →  marlin_file_exists
+//   std.net.ip / c_parse   →  marlin_net_ip_parse
 // (`c_` öneki, extern'i aynı dosyadaki sarmalayıcısından ayırmak içindir.)
 std::string externSymbol(const std::string& moduleName, const std::string& function) {
     std::string module = isStandardModule(moduleName) && moduleName.size() > 4
                              ? moduleName.substr(4) : moduleName;
     std::replace(module.begin(), module.end(), '.', '_');
     const std::string base = function.rfind("c_", 0) == 0 ? function.substr(2) : function;
-    return "minik_" + module + "_" + base;
+    return "marlin_" + module + "_" + base;
 }
 
 } // namespace
 
 std::string ModuleLoader::findStdDir(const std::string& compilerPath) {
     std::error_code ec;
-    if (const char* fromEnv = std::getenv("MINIK_STD"))
+    if (const char* fromEnv = std::getenv("MARLIN_STD"))
         return fs::is_directory(fromEnv, ec) ? fromEnv : "";
 
     const fs::path beside = fs::path(compilerPath).parent_path() / "std";
     if (fs::is_directory(beside, ec)) return beside.string();
 
-#ifdef MINIK_STD_DIR
-    if (fs::is_directory(MINIK_STD_DIR, ec)) return MINIK_STD_DIR;
+#ifdef MARLIN_STD_DIR
+    if (fs::is_directory(MARLIN_STD_DIR, ec)) return MARLIN_STD_DIR;
 #endif
     return "";
 }
@@ -140,9 +140,9 @@ int ModuleLoader::addModule(const std::string& name, const std::string& path,
     canonicalPaths.push_back(fs::weakly_canonical(path, ec).string());
 
     antlr4::ANTLRInputStream input(source);
-    minikLexer lexer(&input);
+    marlinLexer lexer(&input);
     antlr4::CommonTokenStream tokens(&lexer);
-    minikParser parser(&tokens);
+    marlinParser parser(&tokens);
 
     SyntaxErrorCollector collector(path, errors);
     lexer.removeErrorListeners();
@@ -150,7 +150,7 @@ int ModuleLoader::addModule(const std::string& name, const std::string& path,
     lexer.addErrorListener(&collector);
     parser.addErrorListener(&collector);
 
-    minikParser::ProgramContext* tree = parser.program();
+    marlinParser::ProgramContext* tree = parser.program();
     if (collector.count > 0) return index;
 
     ASTBuilder builder(index);
@@ -174,12 +174,12 @@ int ModuleLoader::addModule(const std::string& name, const std::string& path,
 void ModuleLoader::resolveImport(int importer, ImportDecl* decl) {
     const std::string& name = decl->modulePath;
 
-    // Standart modül yalnızca std dizininde aranır: std.file → <std>/file.minik.
+    // Standart modül yalnızca std dizininde aranır: std.file → <std>/file.marl.
     // Kullanıcının dizinlerine bakılmaz; böylece `std` adı taklit edilemez.
     const bool standard = isStandardModule(name);
     std::string relative = standard ? (name.size() > 4 ? name.substr(4) : "") : name;
     std::replace(relative.begin(), relative.end(), '.', '/');
-    relative += ".minik";
+    relative += ".marl";
 
     std::vector<fs::path> dirs;
     if (standard) {

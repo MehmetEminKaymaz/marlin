@@ -142,7 +142,7 @@ void MLIRMatrixManager::report(int slot, llvm::ArrayRef<Value> indexValues, Loca
     Value slotValue = b.create<arith::ConstantIntOp>(loc, slot, 64);
     for (Value value : indexValues) {
         Value asI64 = b.create<arith::IndexCastOp>(loc, b.getI64Type(), value);
-        runtime.call("minik_report_push", {slotValue, asI64}, loc);
+        runtime.call("marlin_report_push", {slotValue, asI64}, loc);
     }
 }
 
@@ -165,7 +165,7 @@ void MLIRMatrixManager::checkSameShape(llvm::ArrayRef<Value> inputs, int line, L
         runtime.ifThen(mismatch, loc, [&] {
             report(0, shape, loc);
             report(1, otherShape, loc);
-            runtime.call("minik_panic_shape", {b.create<arith::ConstantIntOp>(loc, line, 32)}, loc);
+            runtime.call("marlin_panic_shape", {b.create<arith::ConstantIntOp>(loc, line, 32)}, loc);
         });
     }
 }
@@ -338,7 +338,7 @@ MLIRMatrixManager::Result MLIRMatrixManager::matmul(Value lhs, Value rhs, int li
     runtime.ifThen(mismatch, loc, [&] {
         report(0, lhsShape, loc);
         report(1, rhsShape, loc);
-        runtime.call("minik_panic_matmul", {b.create<arith::ConstantIntOp>(loc, line, 32)}, loc);
+        runtime.call("marlin_panic_matmul", {b.create<arith::ConstantIntOp>(loc, line, 32)}, loc);
     });
 
     mlir::Type elementType = elementTypeOf(lhs);
@@ -395,7 +395,7 @@ void MLIRMatrixManager::checkIndex(Value buffer, llvm::ArrayRef<Value> indices, 
     runtime.ifThen(outOfBounds, loc, [&] {
         report(0, indices, loc);
         report(1, sizes, loc);
-        runtime.call("minik_panic_matrix_index",
+        runtime.call("marlin_panic_matrix_index",
                      {b.create<arith::ConstantIntOp>(loc, line, 32)}, loc);
     });
 }

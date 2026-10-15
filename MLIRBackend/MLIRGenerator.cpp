@@ -181,7 +181,7 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
     auto savedReturnSlots = std::move(returnArraySlots);
     returnArraySlots.clear();
 
-    // Diziler, fonksiyon değerleri ve matrisler doğrudan bağlanır (matris
+    // Diziler ve matrisler doğrudan bağlanır (matris
     // parametresi salt okunurdur: çağıranın belleğidir). Diğer parametreler
     // atanabilir olmaları için bir yuvaya kopyalanır. Struct parametre yaprak
     // yaprak gelir; her yaprak "p.alan" adıyla ayrı bir değişken olur.
@@ -190,7 +190,7 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
     for (size_t i = 0; i < params.size(); ++i) {
         for (const SemLeaf& leaf : leavesOf(fnType.paramType(i), params[i]->name)) {
             mlir::Value arg = entryBlock->getArgument(argIndex++);
-            if (leaf.type.isArray() || leaf.type.isFunction() || leaf.type.isMatrix()) {
+            if (leaf.type.isArray() || leaf.type.isMatrix()) {
                 scopeManager.declareVariable(leaf.path, arg);
                 continue;
             }
@@ -329,8 +329,8 @@ void MLIRGenerator::storeTo(mlir::Value value, mlir::Value storage, const SemTyp
 }
 
 mlir::Value MLIRGenerator::loadFrom(mlir::Value storage, const SemType& type, mlir::Location loc) {
-    // Diziler ve fonksiyon değerleri zaten kendileridir.
-    if (type.isArray() || type.isFunction())
+    // Diziler zaten kendileridir.
+    if (type.isArray())
         return storage;
     // Matris parametresi doğrudan belleğe bağlıdır; yerel matris değişkeni
     // ise belleği tutan bir yuvadır (aşağıda okunur).

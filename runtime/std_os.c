@@ -1,6 +1,6 @@
-// std.os — komut satırı argümanları, ortam değişkenleri, çıkış (bkz. std/os.minik).
+// std.os — komut satırı argümanları, ortam değişkenleri, çıkış (bkz. std/os.marl).
 
-#include "minik_rt.h"
+#include "marlin_rt.h"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -17,24 +17,24 @@ static void save_arguments(int argc, char** argv) {
     saved_argv = argv;
 }
 
-int64_t minik_os_arg_count(void) { return saved_argc; }
+int64_t marlin_os_arg_count(void) { return saved_argc; }
 
 // 0: programın adı, 1..: argümanlar.
-int64_t minik_os_arg(int64_t index) {
+int64_t marlin_os_arg(int64_t index) {
     if (index < 0 || index >= saved_argc)
-        minik_rt_panic("arg: indeks sinir disinda (indeks %lld, arguman sayisi %d)",
+        marlin_rt_panic("arg: indeks sinir disinda (indeks %lld, arguman sayisi %d)",
                        (long long)index, saved_argc);
-    return minik_rt_str_from_text(saved_argv[index]);
+    return marlin_rt_str_from_text(saved_argv[index]);
 }
 
 // Ortam değişkeninin değeri; tanımlı değilse boş string.
-int64_t minik_os_env(int64_t name) {
-    const char* value = getenv(minik_rt_str_data(name));
-    return minik_rt_str_from_text(value ? value : "");
+int64_t marlin_os_env(int64_t name) {
+    const char* value = getenv(marlin_rt_str_data(name));
+    return marlin_rt_str_from_text(value ? value : "");
 }
 
-// Programı hemen bitirir. (_exit: bkz. minik_rt.c, fail.)
-void minik_os_exit(int32_t code) {
+// Programı hemen bitirir. (_exit: bkz. marlin_rt.c, fail.)
+void marlin_os_exit(int32_t code) {
     fflush(stdout);
     fflush(stderr);
     _exit(code);

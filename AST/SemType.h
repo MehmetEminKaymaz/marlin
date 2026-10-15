@@ -121,6 +121,16 @@ struct SemType {
             if (field.containsMatrix()) return true;
         return false;
     }
+    // Tipin kendisi ya da (struct ise, iç içe) alanlarından biri fonksiyon mu?
+    // (Böyle bir değer başlangıç değeri olmadan tanımlanamaz: çağrılacak bir
+    // fonksiyonu olmazdı.)
+    bool containsFunction() const {
+        if (isFunction()) return true;
+        if (!isStruct()) return false;
+        for (const SemType& field : sub)
+            if (field.containsFunction()) return true;
+        return false;
+    }
 
     bool operator==(const SemType& o) const {
         return kind == o.kind && width == o.width && arraySize == o.arraySize && rank == o.rank &&
