@@ -29,6 +29,13 @@
 //
 // Literaller ve boş string sayılmaz (çalışma zamanı onları tanır).
 //
+// GÖREVLER
+//
+// task<T> değeri de başvuru sayılan bir handle'dır (runtime/marlin_task.c);
+// yukarıdaki kurallar aynen geçerlidir. `marl f()` yeni bir handle üretir
+// (geçici), değişkene ya da listeye yazılınca sahiplenilir, kimse tutmayınca
+// bırakılır. Görevin kendisi handle'dan bağımsız olarak çalışmayı sürdürür.
+//
 // STRING DİZİLERİ
 //
 // string[N] bir değerdir (atama kopyalar); her elemanı bir başvuru tutar.
@@ -51,22 +58,41 @@ void MLIRGenerator::releaseString(mlir::Value value, mlir::Location loc) {
     runtime.call("marlin_str_release", {value}, loc);
 }
 
+// Görev handle'ının sayacı runtime/marlin_task.c'de.
+void MLIRGenerator::retainHandle(mlir::Value value, const SemType& type, mlir::Location loc) {
+    if (type.isTask()) runtime.call("marlin_task_retain", {value}, loc);
+    else retainString(value, loc);
+}
+
+void MLIRGenerator::releaseHandle(mlir::Value value, const SemType& type, mlir::Location loc) {
+    if (type.isTask()) runtime.call("marlin_task_release", {value}, loc);
+    else releaseString(value, loc);
+}
+
 mlir::Value MLIRGenerator::stringResult(mlir::Value value) {
-    temporaries.push_back({value, SemType::String()});
+    return handleResult(value, SemType::String());
+}
+
+mlir::Value MLIRGenerator::handleResult(mlir::Value value, const SemType& type) {
+    temporaries.push_back({value, type});
     return value;
 }
 
 mlir::Value MLIRGenerator::ownString(mlir::Value value, mlir::Location loc) {
+    return ownHandle(value, SemType::String(), loc);
+}
+
+mlir::Value MLIRGenerator::ownHandle(mlir::Value value, const SemType& type, mlir::Location loc) {
     auto temporary = std::find_if(temporaries.begin(), temporaries.end(), [&](const Owned& owned) {
-        return owned.value == value && owned.type.isString();
+        return owned.value == value && isHandle(owned.type);
     });
     if (temporary != temporaries.end()) {
         temporaries.erase(temporary);
         return value;
     }
     // Literal (adresi alınmış global sabit): sayılmaz.
-    if (value.getDefiningOp<mlir::LLVM::PtrToIntOp>()) return value;
-    retainString(value, loc);
+    if (type.isString() && value.getDefiningOp<mlir::LLVM::PtrToIntOp>()) return value;
+    retainHandle(value, type, loc);
     return value;
 }
 
@@ -113,6 +139,11 @@ void MLIRGenerator::releaseStringArray(mlir::Value array, const SemType& type, m
 // `isSlot`: değer bir değişkenin yuvasında (kapsam sonu); değilse değerin
 // kendisi (deyimin geçicisi).
 void MLIRGenerator::releaseOwned(const Owned& owned, bool isSlot, mlir::Location loc) {
+    // Geçici liste: fonksiyona doğrudan verilen literal (bkz. ownTemporaryList).
+    if (owned.type.isList()) {
+        freeListValue(owned.value, owned.type, loc);
+        return;
+    }
     if (owned.type.isArray()) {
         releaseStringArray(owned.value, owned.type, loc);
         return;
@@ -121,5 +152,5 @@ void MLIRGenerator::releaseOwned(const Owned& owned, bool isSlot, mlir::Location
         ? ctx.builder.create<mlir::memref::LoadOp>(loc, owned.value).getResult()
         : owned.value;
     if (owned.type.isMatrix()) matrixManager.freeBuffer(value, loc);
-    else releaseString(value, loc);
+    else releaseHandle(value, owned.type, loc);
 }

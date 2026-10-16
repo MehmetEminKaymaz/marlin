@@ -1,0 +1,157 @@
+// std.sqlite — SQLite veritabanı (tek dosya; sunucu gerekmez).
+//
+//   import std.sqlite as sql;
+//
+//   sql.Conn db = sql.open("veri.db");               // ":memory:" bellekte, geçici
+//   if !db.ok { print(db.error); return; }
+//   sql.clear(sql.exec(db, "CREATE TABLE IF NOT EXISTS not (id INTEGER PRIMARY KEY, metin TEXT)"));
+//   sql.Result r = sql.query(db, "INSERT INTO not (metin) VALUES ($1)", [sql.arg_text("merhaba")]);
+//   sql.clear(r);
+//   r = sql.query(db, "SELECT id, metin FROM not", []);
+//   list<Not> notlar = scan(r.rows);                // bkz. std/db.marl
+//   sql.clear(r);
+//   sql.close(db);
+//
+// API std.postgres ile aynıdır (Conn, Result, Value, query, exec, get_*,
+// scan); parametreler de aynı biçimde $1, $2 ... ile yazılır (? de olur).
+// Hata durumları da aynıdır: open ve sorgu hataları programı durdurmaz
+// (ok / error / code alanları), kullanım hataları durdurur.
+//
+// Bir bağlantı aynı anda tek sorgu çalıştırır; görevler (marl) aynı bağlantıyı
+// kullanırsa sorguları sıraya girer.
+
+import std.db as db;
+
+// C tarafı: runtime/std_sqlite.c
+extern func c_open(string path) -> int64;
+extern func c_close(int64 conn) -> void;
+extern func c_error() -> string;
+extern func c_params_new() -> int64;
+extern func c_params_add(int64 params, string text, bool is_null) -> void;
+extern func c_query(int64 conn, string sql, int64 params) -> int64;
+extern func c_result_ok(int64 result) -> bool;
+extern func c_result_error(int64 result) -> string;
+extern func c_result_code(int64 result) -> string;
+extern func c_rows(int64 result) -> int64;
+extern func c_cols(int64 result) -> int64;
+extern func c_affected(int64 result) -> int64;
+extern func c_column(int64 result, string name) -> int64;
+extern func c_column_name(int64 result, int64 col) -> string;
+extern func c_is_null(int64 result, int64 row, int64 col) -> bool;
+extern func c_text(int64 result, int64 row, int64 col) -> string;
+extern func c_null_value(int64 result, int64 row, int64 col) -> void;
+extern func c_clear(int64 result) -> void;
+
+public struct Conn {
+    int64 handle;
+    bool ok;
+    string error;
+}
+
+public struct Value {
+    string text;
+    bool is_null;
+}
+
+public struct Result {
+    bool ok;
+    string error;
+    string code;
+    int64 handle;
+    db.Rows rows;
+}
+
+public func open(string path) -> Conn {
+    int64 handle = c_open(path);
+    if handle == 0 {
+        return Conn(0, false, c_error());
+    }
+    return Conn(handle, true, "");
+}
+
+public func close(Conn c) -> void {
+    c_close(c.handle);
+}
+
+func rows_count(int64 r) -> int64 { return c_rows(r); }
+func rows_column(int64 r, string name) -> int64 { return c_column(r, name); }
+func rows_text(int64 r, int64 row, int64 col) -> string { return c_text(r, row, col); }
+func rows_null(int64 r, int64 row, int64 col) -> bool { return c_is_null(r, row, col); }
+
+public func query(Conn c, string sql, list<Value> params) -> Result {
+    int64 p = c_params_new();
+    for v in params {
+        c_params_add(p, v.text, v.is_null);
+    }
+    int64 handle = c_query(c.handle, sql, p);
+    bool ok = c_result_ok(handle);
+    return Result(ok, c_result_error(handle), c_result_code(handle), handle,
+                  db.Rows(handle, rows_count, rows_column, rows_text, rows_null));
+}
+
+public func exec(Conn c, string sql) -> Result {
+    list<Value> none = [];
+    Result r = query(c, sql, none);
+    free(none);
+    return r;
+}
+
+func command(Conn c, string sql) -> bool {
+    Result r = exec(c, sql);
+    bool ok = r.ok;
+    clear(r);
+    return ok;
+}
+
+public func begin(Conn c) -> bool { return command(c, "BEGIN"); }
+public func commit(Conn c) -> bool { return command(c, "COMMIT"); }
+public func rollback(Conn c) -> bool { return command(c, "ROLLBACK"); }
+
+public func clear(Result r) -> void {
+    c_clear(r.handle);
+}
+
+public func arg_text(string s) -> Value { return Value(s, false); }
+public func arg_int(int64 n) -> Value { return Value(str(n), false); }
+public func arg_float(float64 x) -> Value { return Value(str(x), false); }
+public func arg_null() -> Value { return Value("", true); }
+
+public func arg_bool(bool b) -> Value {
+    if b {
+        return Value("1", false);
+    }
+    return Value("0", false);
+}
+
+public func row_count(Result r) -> int64 { return c_rows(r.handle); }
+public func column_count(Result r) -> int64 { return c_cols(r.handle); }
+public func affected(Result r) -> int64 { return c_affected(r.handle); }
+public func column(Result r, string name) -> int64 { return c_column(r.handle, name); }
+public func column_name(Result r, int64 col) -> string { return c_column_name(r.handle, col); }
+
+public func is_null(Result r, int64 row, int64 col) -> bool {
+    return c_is_null(r.handle, row, col);
+}
+
+public func get_text(Result r, int64 row, int64 col) -> string {
+    return c_text(r.handle, row, col);
+}
+
+public func get_int(Result r, int64 row, int64 col) -> int64 {
+    return to_int(not_null(r, row, col));
+}
+
+public func get_float(Result r, int64 row, int64 col) -> float64 {
+    return to_float(not_null(r, row, col));
+}
+
+public func get_bool(Result r, int64 row, int64 col) -> bool {
+    return not_null(r, row, col) == "1";
+}
+
+func not_null(Result r, int64 row, int64 col) -> string {
+    if c_is_null(r.handle, row, col) {
+        c_null_value(r.handle, row, col);
+    }
+    return c_text(r.handle, row, col);
+}

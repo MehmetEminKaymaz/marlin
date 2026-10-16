@@ -111,7 +111,7 @@ std::string NativeCodegen::findRuntimeLibrary(const char* argv0) {
 
 bool NativeCodegen::link(const std::string& objectPath, const std::string& runtimeLib,
                          const std::string& exePath, bool needsThreads, bool needsGpu,
-                         std::string& error) {
+                         const std::vector<std::string>& extraLibs, std::string& error) {
     llvm::ErrorOr<std::string> linker = std::make_error_code(std::errc::no_such_file_or_directory);
     for (const char* name : {"cc", "clang", "gcc"}) {
         linker = llvm::sys::findProgramByName(name);
@@ -124,7 +124,20 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
 
     // Sıra önemli: kütüphaneler, onları kullanan nesne dosyasından sonra gelir.
     // -lm: sin, pow, kayan noktalı % (fmod) gibi işlemler libm'e iner.
-    std::vector<llvm::StringRef> args = {*linker, objectPath, runtimeLib, "-o", exePath, "-lm"};
+    std::vector<llvm::StringRef> args = {*linker, objectPath, runtimeLib, "-o", exePath};
+
+    // Standart kütüphanenin dış C kütüphaneleri (veritabanı sürücüleri), tam
+    // yollarıyla. Paylaşımlı kütüphanenin dizini çalışırken de aranır (rpath):
+    // sisteme kurulmadan açılmış bir kütüphane de bulunabilsin.
+    std::vector<std::string> runPaths;
+    for (const std::string& lib : extraLibs) {
+        args.push_back(lib);
+        if (lib.find(".so") != std::string::npos)
+            runPaths.push_back("-Wl,-rpath," + llvm::sys::path::parent_path(lib).str());
+    }
+    for (const std::string& path : runPaths) args.push_back(path);
+    // (libm en sonda: statik bağlanan dış kütüphaneler de kullanabilir.)
+    args.push_back("-lm");
 
     // Paralel döngüler MLIR'in iş parçacığı havuzunu (libmlir_async_runtime.so)
     // kullanır. Paylaşımlı bir kütüphanedir; program çalışırken de bulunabilmesi

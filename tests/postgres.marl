@@ -1,0 +1,129 @@
+// std.postgres: gerçek bir sunucuyla tablo, parametreli sorgu, NULL, hata
+// kodları (SQLSTATE), scan ile struct'a doldurma, işlem, etkilenen satır,
+// global havuzu kullanan görevler.
+// requires: postgres
+// leaks: 0
+// output: baglandi
+// output: eklendi: 1
+// output: eklendi: 2
+// output: eklendi: 3
+// output: tekrar: 23505
+// output: sozdizimi: 42601
+// output: 1 Kalem 12.5 true 100
+// output: 2 Defter 0.0 false 0
+// output: 3 Silgi 3.25 true 40
+// output: en pahali: Kalem 12.5
+// output: fiyati bos: true
+// output: get: 3.25 true 40
+// output: guncellenen: 2
+// output: eklendi: 5
+// output: geri alindi: 3
+// output: gorevler: 3 2 1 0
+// output: kotu baglanti: false true
+
+import std.postgres as pg;
+import std.os as os;
+
+struct Urun {
+    int64 id;
+    string ad;
+    float64 fiyat;
+    bool stokta;
+    int adet;
+}
+
+struct Ozet {
+    string ad;
+    float64 fiyat;
+}
+
+// Global havuz: main kurar, görevler okur.
+pg.Pool havuz;
+
+func stokta_en_az(int64 adet) -> int64 {
+    pg.Result r = pg.pool_query(havuz, "SELECT count(*) AS n FROM urun WHERE adet >= $1",
+                                [pg.arg_int(adet)]);
+    int64 n = pg.get_int(r, 0, 0);
+    pg.clear(r);
+    return n;
+}
+
+func ekle(pg.Conn db, string ad, pg.Value fiyat, bool stokta, int adet) -> void {
+    pg.Result r = pg.query(db, "INSERT INTO urun (ad, fiyat, stokta, adet) VALUES ($1, $2, $3, $4) RETURNING id",
+                           [pg.arg_text(ad), fiyat, pg.arg_bool(stokta), pg.arg_int(adet)]);
+    if r.ok {
+        print("eklendi:", pg.get_int(r, 0, 0));
+    } else {
+        print("tekrar:", r.code);
+    }
+    pg.clear(r);
+}
+
+func main() -> void {
+    string bilgi = os.env("MARLIN_PG_TEST");
+    pg.Conn db = pg.connect(bilgi);
+    if !db.ok {
+        print(db.error);
+        return;
+    }
+    print("baglandi");
+
+    pg.clear(pg.exec(db, "DROP TABLE IF EXISTS urun"));
+    pg.clear(pg.exec(db, "CREATE TABLE urun (id serial PRIMARY KEY, ad text UNIQUE NOT NULL, fiyat double precision, stokta boolean, adet int)"));
+    ekle(db, "Kalem", pg.arg_float(12.5), true, 100);
+    ekle(db, "Defter", pg.arg_null(), false, 0);
+    ekle(db, "Silgi", pg.arg_float(3.25), true, 40);
+    ekle(db, "Kalem", pg.arg_float(1.0), true, 1);             // tekrarlanan ad
+
+    pg.Result r = pg.exec(db, "SELEC 1");
+    print("sozdizimi:", r.code);
+    pg.clear(r);
+
+    r = pg.exec(db, "SELECT * FROM urun ORDER BY id");
+    list<Urun> urunler = scan(r.rows);
+    for u in urunler {
+        print(u.id, u.ad, u.fiyat, u.stokta, u.adet);
+    }
+    free(urunler);
+    pg.clear(r);
+
+    r = pg.exec(db, "SELECT ad, fiyat FROM urun ORDER BY fiyat DESC NULLS LAST LIMIT 1");
+    Ozet en_pahali = scan(r.rows);
+    print("en pahali:", en_pahali.ad, en_pahali.fiyat);
+    pg.clear(r);
+
+    r = pg.query(db, "SELECT fiyat FROM urun WHERE ad = $1", [pg.arg_text("Defter")]);
+    print("fiyati bos:", pg.is_null(r, 0, 0));
+    pg.clear(r);
+
+    r = pg.exec(db, "SELECT fiyat, stokta, adet FROM urun WHERE id = 3");
+    print("get:", pg.get_float(r, 0, 0), pg.get_bool(r, 0, 1), pg.get_int(r, 0, pg.column(r, "adet")));
+    pg.clear(r);
+
+    r = pg.exec(db, "UPDATE urun SET adet = adet + 1 WHERE stokta");
+    print("guncellenen:", pg.affected(r));
+    pg.clear(r);
+
+    pg.begin(db);
+    ekle(db, "Gecici", pg.arg_float(9.0), true, 5);            // id 5: başarısız ekleme 4'ü harcadı
+    pg.rollback(db);
+    r = pg.exec(db, "SELECT count(*) FROM urun");
+    print("geri alindi:", pg.get_int(r, 0, 0));
+    pg.clear(r);
+
+    // Havuz + görevler: dört sorgu aynı anda, dört ayrı bağlantıda.
+    havuz = pg.pool(bilgi, 4);
+    list<task<int64>> isler = [];
+    push(isler, marl stokta_en_az(0));
+    push(isler, marl stokta_en_az(10));
+    push(isler, marl stokta_en_az(50));
+    push(isler, marl stokta_en_az(200));
+    print("gorevler:", await(isler[0]), await(isler[1]), await(isler[2]), await(isler[3]));
+    free(isler);
+    pg.close_pool(havuz);
+
+    pg.Conn kotu = pg.connect("host=localhost port=1 connect_timeout=2");
+    print("kotu baglanti:", kotu.ok, len(kotu.error) > 0);
+
+    pg.close(db);
+}

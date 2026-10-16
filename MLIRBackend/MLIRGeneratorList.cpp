@@ -41,7 +41,7 @@
 mlir::Value MLIRGenerator::adoptElement(mlir::Value value, const SemType& type, int line,
                                         mlir::Location loc) {
     if (type.isMatrix()) return takeMatrixOwnership(value, line, loc);
-    if (type.isString()) return ownString(value, loc);
+    if (isHandle(type)) return ownHandle(value, type, loc);
     if (type.isArray()) {
         auto memRefType = mlir::cast<mlir::MemRefType>(typeManager.convert(type));
         mlir::Value copy = ctx.builder.create<mlir::memref::AllocOp>(loc, memRefType);
@@ -55,10 +55,10 @@ mlir::Value MLIRGenerator::borrowElement(mlir::Value stored, const SemType& type
                                          mlir::Location loc) {
     // Matris, ifade içinde tensor olarak görülür (salt okunur: bellek listenindir).
     if (type.isMatrix()) return matrixManager.toTensor(stored, /*writable=*/false, loc);
-    // String: okunan değer bu deyimin başvurusu olur (bkz. MLIRGeneratorString.cpp).
-    if (type.isString()) {
-        retainString(stored, loc);
-        stringResult(stored);
+    // String / task: okunan değer bu deyimin başvurusu olur (bkz. MLIRGeneratorString.cpp).
+    if (isHandle(type)) {
+        retainHandle(stored, type, loc);
+        handleResult(stored, type);
     }
     return stored;
 }
@@ -66,8 +66,8 @@ mlir::Value MLIRGenerator::borrowElement(mlir::Value stored, const SemType& type
 void MLIRGenerator::releaseElement(mlir::Value stored, const SemType& type, mlir::Location loc) {
     if (type.isMatrix()) {
         matrixManager.freeBuffer(stored, loc);
-    } else if (type.isString()) {
-        releaseString(stored, loc);
+    } else if (isHandle(type)) {
+        releaseHandle(stored, type, loc);
     } else if (type.isArray()) {
         if (holdsStrings(type)) releaseStringArray(stored, type, loc);
         ctx.builder.create<mlir::memref::DeallocOp>(loc, stored);
@@ -155,7 +155,7 @@ MLIRGenerator::Values MLIRGenerator::emitListPop(FunctionCallExpr* node) {
             if (holdsStrings(type)) temporaries.push_back({copy, type});
             values.push_back(copy);
         } else {
-            if (type.isString()) stringResult(stored); // listenin başvurusu deyime geçer
+            if (isHandle(type)) handleResult(stored, type); // listenin başvurusu deyime geçer
             values.push_back(stored);
         }
     }
@@ -168,26 +168,31 @@ void MLIRGenerator::emitListFree(FunctionCallExpr* node) {
     const std::vector<SemLeaf> columns = leavesOf(list->type);
 
     Values cells = emitLeaves(list);
-    for (size_t i = 0; i < columns.size(); ++i) {
-        const SemType& type = columns[i].type.elementType();
-        // Elemanların kendi bellekleri (matris, dizi) ve tuttukları stringler
-        // önce bırakılır.
-        if (type.isMatrix() || type.isArray() || type.isString()) {
-            mlir::Value zero = ctx.builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
-            mlir::Value one = ctx.builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
-            mlir::Value length = listManager.length(cells[i], loc);
-            mlir::Value cell = cells[i];
-            ctx.builder.create<mlir::scf::ForOp>(
-                loc, zero, length, one, mlir::ValueRange(),
-                [&](mlir::OpBuilder& b, mlir::Location l, mlir::Value index, mlir::ValueRange) {
-                    mlir::Value stored = listManager.loadElement(cell, index, node->line, l,
-                                                                 /*checked=*/false);
-                    releaseElement(stored, type, l);
-                    b.create<mlir::scf::YieldOp>(l);
-                });
-        }
-        listManager.free(cells[i], loc);
+    for (size_t i = 0; i < columns.size(); ++i) freeListValue(cells[i], columns[i].type, loc);
+}
+
+void MLIRGenerator::ownTemporaryList(Expression* arg, const Values& cells) {
+    const std::vector<SemLeaf> columns = leavesOf(arg->type);
+    for (size_t i = 0; i < columns.size(); ++i) temporaries.push_back({cells[i], columns[i].type});
+}
+
+// Tek bir listeyi (struct listesinde bir sütunu) bırakır. Elemanların kendi
+// bellekleri (matris, dizi) ve tuttukları stringler / görevler önce bırakılır.
+void MLIRGenerator::freeListValue(mlir::Value cell, const SemType& listType, mlir::Location loc) {
+    const SemType& type = listType.elementType();
+    if (type.isMatrix() || type.isArray() || isHandle(type)) {
+        mlir::Value zero = ctx.builder.create<mlir::arith::ConstantIndexOp>(loc, 0);
+        mlir::Value one = ctx.builder.create<mlir::arith::ConstantIndexOp>(loc, 1);
+        mlir::Value length = listManager.length(cell, loc);
+        ctx.builder.create<mlir::scf::ForOp>(
+            loc, zero, length, one, mlir::ValueRange(),
+            [&](mlir::OpBuilder& b, mlir::Location l, mlir::Value index, mlir::ValueRange) {
+                mlir::Value stored = listManager.loadElement(cell, index, 0, l, /*checked=*/false);
+                releaseElement(stored, type, l);
+                b.create<mlir::scf::YieldOp>(l);
+            });
     }
+    listManager.free(cell, loc);
 }
 
 // ===========================================================================
@@ -218,7 +223,7 @@ void MLIRGenerator::assignElement(AssignmentStmt* node) {
     // eskiler ancak ondan sonra bırakılır.
     for (size_t i = 0; i < count; ++i) {
         const SemType& type = columns[begin + i].type.elementType();
-        if (type.isMatrix() || type.isString())
+        if (type.isMatrix() || isHandle(type))
             values[i] = adoptElement(values[i], type, node->line, loc);
     }
 
@@ -229,7 +234,7 @@ void MLIRGenerator::assignElement(AssignmentStmt* node) {
             // Elemanın dizisi yerinde kalır; içeriği değişir.
             mlir::Value stored = listManager.loadElement(cells[i], index, node->line, loc, checked);
             copyArray(values[i], stored, type, /*releaseOld=*/true, loc);
-        } else if (type.isMatrix() || type.isString()) {
+        } else if (type.isMatrix() || isHandle(type)) {
             mlir::Value old = listManager.loadElement(cells[i], index, node->line, loc, checked);
             listManager.storeElement(cells[i], index, values[i], node->line, loc, /*checked=*/false);
             releaseElement(old, type, loc);
@@ -274,13 +279,13 @@ void MLIRGenerator::emitStructListLoop(ForCollectionStmt* node) {
                                                              /*checked=*/i == 0);
                 // Liste yaprağı bir yuvada tutulur (değişkenlerdeki gibi);
                 // diğerleri doğrudan bağlanır.
-                if (type.isList() || type.isString()) {
+                if (type.isList() || isHandle(type)) {
                     mlir::Value storage = createStorage(type, loc);
                     storeTo(stored, storage, type, loc);
-                    // String yineleme boyunca kendi başvurusunu tutar (gövde
-                    // elemanı listeden çıkarsa da değer geçerli kalır).
-                    if (type.isString()) {
-                        retainString(stored, loc);
+                    // String / task yineleme boyunca kendi başvurusunu tutar
+                    // (gövde elemanı listeden çıkarsa da değer geçerli kalır).
+                    if (isHandle(type)) {
+                        retainHandle(stored, type, loc);
                         iterators.push_back({storage, type});
                     }
                     stored = storage;

@@ -120,6 +120,38 @@ static void lowerFunctionAddressCasts(mlir::ModuleOp module) {
     }
 }
 
+// GÖREV KÖPRÜLERİ
+//
+// Görevin değeri (!async.value<T>) runtime'a doğrudan argüman olarak verilir;
+// T her sonuç tipi için farklı olduğundan kod üretimi her tip için ayrı adla
+// bildirir: marlin_task_wrap.0, marlin_task_wrap.1 ... (bkz.
+// MLIRGeneratorTask.cpp). LLVM'e indikten sonra hepsi aynı imzaya sahiptir
+// (!llvm.ptr); çağrılar tek C fonksiyonuna (marlin_task_wrap) bağlanır,
+// fazla bildirimler silinir.
+static void bindTaskBridges(mlir::ModuleOp module) {
+    auto baseName = [](llvm::StringRef name) -> std::string {
+        if (!name.starts_with("marlin_task_")) return "";
+        const size_t dot = name.find('.');
+        return dot == llvm::StringRef::npos ? "" : name.take_front(dot).str();
+    };
+    module.walk([&](mlir::LLVM::CallOp call) {
+        std::optional<llvm::StringRef> callee = call.getCallee();
+        if (!callee) return;
+        const std::string base = baseName(*callee);
+        if (!base.empty())
+            call.setCalleeAttr(mlir::FlatSymbolRefAttr::get(module.getContext(), base));
+    });
+
+    llvm::SmallVector<mlir::LLVM::LLVMFuncOp, 8> bridges;
+    for (auto function : module.getOps<mlir::LLVM::LLVMFuncOp>())
+        if (!baseName(function.getName()).empty()) bridges.push_back(function);
+    for (mlir::LLVM::LLVMFuncOp function : bridges) {
+        const std::string base = baseName(function.getName());
+        if (module.lookupSymbol(base)) function.erase();
+        else function.setSymName(base);
+    }
+}
+
 // GPU ADIMLARI (yalnızca program @GPU fonksiyon içeriyorsa)
 //
 // GPU'da çalışacak kod, CPU kodunun arasından adım adım ayrılır:
@@ -142,6 +174,16 @@ static void lowerFunctionAddressCasts(mlir::ModuleOp module) {
 //                              üretici + ptxas); programın içine gömülür.
 bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSplit) {
     mlir::PassManager pm(module->getName());
+    // Derleyicinin kendisinde hata ayıklamak için: MARLIN_DEBUG_IR tanımlıysa
+    // başarısız olan pass'ten sonraki IR stderr'e yazılır.
+    if (std::getenv("MARLIN_DEBUG_IR")) {
+        module->getContext()->disableMultithreading();
+        pm.enableIRPrinting(
+            /*shouldPrintBeforePass=*/[](mlir::Pass*, mlir::Operation*) { return false; },
+            /*shouldPrintAfterPass=*/[](mlir::Pass*, mlir::Operation*) { return true; },
+            /*printModuleScope=*/true, /*printAfterOnlyOnChange=*/false,
+            /*printAfterOnlyOnFailure=*/true);
+    }
 
     // A) Matris ifadeleri: tensor → bellek.
     //    Matris işlemleri tensor üzerinde üretilir (bkz. MLIRMatrixManager).
@@ -188,10 +230,7 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
     pm.addPass(mlir::createAsyncParallelForPass(/*asyncDispatch=*/true,
                                                 /*numWorkerThreads=*/-1,
                                                 /*minTaskSize=*/1));
-    pm.addPass(mlir::createAsyncToAsyncRuntimePass());
-    pm.addPass(mlir::createAsyncRuntimeRefCountingPass());
-    pm.addPass(mlir::createAsyncRuntimeRefCountingOptPass());
-    // Yukarıdaki pass'lerin ürettiği yardımcı işlemleri (tavana bölme, affine
+    // Yukarıdaki pass'in ürettiği yardımcı işlemleri (tavana bölme, affine
     // ifadeler) temel işlemlere açar.
     pm.addPass(mlir::arith::createArithExpandOpsPass());
     pm.addPass(mlir::createLowerAffinePass());
@@ -210,6 +249,24 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
     //    yönlendirme gibi scf üzerinde çalışacak pass'ler bundan ÖNCE gelmeli.
     pm.addPass(mlir::createConvertSCFToCFPass());
 
+    // 2) Görevler (async.execute, async.func) → coroutine'ler + çalışma zamanı
+    //    çağrıları. `marl` ile başlatılan görevler ve paralel döngülerin
+    //    parçaları burada coroutine olur; görevden çağrılan ve bekleyebilen
+    //    fonksiyonlar (async.func) da öyle (bkz. MLIRGeneratorTask.cpp).
+    //    scf → cf dönüşümünden SONRA gelmelidir: coroutine'in askıya alındığı
+    //    nokta yeni bloklar açar ve bu bir scf.if / scf.for bölgesinin içinde
+    //    olamaz.
+    //    Coroutine'ler ve async tipleri hemen ardından llvm dialect'ine iner.
+    //    Araya başka pass girmemeli: desen yeniden yazıcısı kullanan pass'ler
+    //    (ör. math-to-libm) aynı görünen blokları birleştirir ve async tipli
+    //    blok argümanları açar; async → llvm dönüşümü dal işlenenlerini
+    //    çevirmediği için bunlar tutarsız kalırdı.
+    pm.addPass(mlir::createAsyncFuncToAsyncRuntimePass());
+    pm.addPass(mlir::createAsyncToAsyncRuntimePass());
+    pm.addPass(mlir::createAsyncRuntimeRefCountingPass());
+    pm.addPass(mlir::createAsyncRuntimeRefCountingOptPass());
+    pm.addPass(mlir::createConvertAsyncToLLVMPass());             // görevler → coroutine'ler
+
     if (usesGpu) {
         // G3 — yalnızca CPU fonksiyonlarında.
         pm.addNestedPass<mlir::func::FuncOp>(mlir::createGpuAsyncRegionPass());
@@ -223,19 +280,18 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
         pm.addPass(mlir::createGpuNVVMAttachTarget());
     }
 
-    // 2) Matematik. Önce LLVM'de doğrudan karşılığı (intrinsic) olanlar
+    // 3) Matematik. Önce LLVM'de doğrudan karşılığı (intrinsic) olanlar
     //    çevrilir; kalanlar (tan, atan, atan2, tanh) libm fonksiyonlarına
     //    çağrı olur. Bu çağrılar func dialect'inde üretildiği için func → llvm
     //    dönüşümünden önce gelmelidir.
     pm.addPass(mlir::createConvertMathToLLVMPass());
     pm.addPass(mlir::createConvertMathToLibmPass());
 
-    // 3) Kalan dialect'ler → llvm dialect'i.
+    // 4) Kalan dialect'ler → llvm dialect'i.
     //    Vektör işlemleri (CPU'daki matris çarpımı çekirdeği) memref'lerden
     //    önce çevrilmeli: vektör yükleme/yazma memref'in adres bilgisini okur.
     pm.addPass(mlir::createConvertVectorToLLVMPass());
     pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass()); // memref → ptr + GEP
-    pm.addPass(mlir::createConvertAsyncToLLVMPass());             // görevler → coroutine'ler
     pm.addPass(mlir::createArithToLLVMConversionPass());
     pm.addPass(mlir::createConvertFuncToLLVMPass());
     pm.addPass(mlir::createConvertControlFlowToLLVMPass());
@@ -246,21 +302,31 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
     }
     if (mlir::failed(pm.run(module))) return false;
 
-    // 4) Fonksiyon adreslerinin tip köprüleri → ptrtoint / inttoptr.
+    // 5) Fonksiyon adreslerinin tip köprüleri → ptrtoint / inttoptr; görevlerin
+    //    tipli runtime köprüleri → tek C fonksiyonu.
     lowerFunctionAddressCasts(module);
+    bindTaskBridges(module);
 
-    // 5) Dönüşümler arasında geçici olarak bırakılan tip köprülerini
+    // 6) Dönüşümler arasında geçici olarak bırakılan tip köprülerini
     //    (builtin.unrealized_conversion_cast) temizler.
     mlir::PassManager reconcile(module->getName());
     reconcile.addPass(mlir::createReconcileUnrealizedCastsPass());
     return mlir::succeeded(reconcile.run(module));
 }
 
-// Kullanıcının `main`i void dönüyorsa süreç çıkış kodu tanımsız kalırdı.
-// Fonksiyon içselleştirilir ve onu çağırıp 0 dönen bir `i32 main()` eklenir.
-static void wrapVoidMain(llvm::Module& module) {
+// Giriş noktası. Kullanıcının `main`i iki durumda sarmalanır; fonksiyon
+// içselleştirilir ve onu çağıran bir `i32 main()` eklenir:
+//
+//   * main void dönüyor: süreç çıkış kodu tanımsız kalırdı; 0 döner.
+//   * program görev başlatıyor (`exitThroughRuntime`): main bitince program
+//     biter, hâlâ çalışan görevler beklenmez. Sıradan dönüş, kapanışta görev
+//     havuzunun kuyruktaki işleri bitirmesini beklerdi; bunun yerine
+//     marlin_rt_exit süreci doğrudan kapatır (çıktıları boşaltarak).
+static void wrapMain(llvm::Module& module, bool exitThroughRuntime) {
     llvm::Function* userMain = module.getFunction("main");
-    if (!userMain || !userMain->getReturnType()->isVoidTy()) return;
+    if (!userMain) return;
+    const bool returnsVoid = userMain->getReturnType()->isVoidTy();
+    if (!returnsVoid && !exitThroughRuntime) return;
 
     userMain->setName("marlin.main");
     userMain->setLinkage(llvm::GlobalValue::InternalLinkage);
@@ -272,17 +338,26 @@ static void wrapVoidMain(llvm::Module& module) {
         llvm::GlobalValue::ExternalLinkage, "main", module);
 
     llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", entry));
-    builder.CreateCall(userMain);
-    builder.CreateRet(llvm::ConstantInt::get(i32, 0));
+    llvm::Value* call = builder.CreateCall(userMain);
+    llvm::Value* code = returnsVoid ? llvm::ConstantInt::get(i32, 0) : call;
+    if (exitThroughRuntime) {
+        llvm::FunctionCallee exit = module.getOrInsertFunction(
+            "marlin_rt_exit", llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i32}, false));
+        builder.CreateCall(exit, {code});
+        builder.CreateUnreachable();
+        return;
+    }
+    builder.CreateRet(code);
 }
 
 std::unique_ptr<llvm::Module> translateToLLVMIR(mlir::ModuleOp module,
-                                                llvm::LLVMContext& llvmContext) {
+                                                llvm::LLVMContext& llvmContext,
+                                                bool usesTasks) {
     std::unique_ptr<llvm::Module> llvmModule =
         mlir::translateModuleToLLVMIR(module, llvmContext, "marlin");
     if (!llvmModule) return nullptr;
 
-    wrapVoidMain(*llvmModule);
+    wrapMain(*llvmModule, usesTasks);
     return llvmModule;
 }
 

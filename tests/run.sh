@@ -27,6 +27,13 @@
 #                        olarak (satır sonları \n'e çevrilir). Tamamı birebir
 #                        aynı olmalı.
 #
+# Dış bir sunucu gerektiren testler:
+#
+#   // requires: postgres -> PostgreSQL sunucusu gerekir. Bağlantı bilgisi
+#                        MARLIN_PG_TEST ortam değişkenindedir (ör.
+#                        "host=localhost port=5432 dbname=test user=ad password=..").
+#                        Tanımlı değilse test atlanır.
+#
 # Çalıştırılan her test hem -O0 hem -O2 ile derlenir.
 #
 # @GPU fonksiyon içeren testler iki kez çalıştırılır: GPU'da ve --gpu=off ile
@@ -43,11 +50,14 @@ trap 'rm -rf "$TMP"' EXIT
 has_gpu=0
 if nvidia-smi > /dev/null 2>&1; then has_gpu=1; else echo "  (GPU bulunamadi: @GPU testleri yalnizca --gpu=off ile calisacak)"; fi
 
-pass=0; fail=0
+pass=0; fail=0; skipped=0
 ok()  { echo "  GECTI  $1"; pass=$((pass + 1)); }
 bad() { echo "  KALDI  $1: $2"; fail=$((fail + 1)); }
 
 for src in *.marl; do
+    if grep -q '^// requires: postgres' "$src" && [ -z "$MARLIN_PG_TEST" ]; then
+        echo "  ATLANDI  $src (MARLIN_PG_TEST tanimli degil)"; skipped=$((skipped + 1)); continue
+    fi
     if grep -q '^// error:' "$src"; then
         if "$COMPILER" "$src" --emit=mlir > /dev/null 2> "$TMP/err"; then
             bad "$src" "derleme basarili oldu, hata bekleniyordu"; continue
@@ -115,5 +125,5 @@ for src in *.marl; do
     done
 done
 
-echo "$pass gecti, $fail kaldi"
+echo "$pass gecti, $fail kaldi$( [ "$skipped" -gt 0 ] && echo ", $skipped atlandi")"
 [ "$fail" -eq 0 ]

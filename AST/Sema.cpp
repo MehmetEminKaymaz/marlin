@@ -43,7 +43,24 @@ Sema::Symbol* Sema::lookup(const std::string& name) {
         auto found = scopes[i].find(name);
         return found != scopes[i].end() ? &found->second : nullptr;
     }
-    return findGlobal(linkNameOf(name));
+    return findGlobal(globalLinkName(name));
+}
+
+// Kaynaktaki ismin global tanımdaki adı; bulunamazsa boş. Önce isim olduğu
+// gibi çözülür (fonksiyon, global, `modul.isim`). Olmazsa noktalı ismin bir
+// global struct'ın alanı olup olmadığına bakılır: `havuz.hata`, kökü
+// (`havuz` ya da `db.havuz`) global bir struct olan alan yoludur.
+std::string Sema::globalLinkName(const std::string& name) {
+    const std::string whole = linkNameOf(name);
+    if (!whole.empty() && findGlobal(whole)) return whole;
+    for (size_t dot = name.find('.'); dot != std::string::npos; dot = name.find('.', dot + 1)) {
+        const std::string root = linkNameOf(name.substr(0, dot));
+        if (root.empty()) continue;
+        Symbol* owner = findGlobal(root);
+        if (!owner || owner->kind != Symbol::Global || !owner->type.isStruct()) continue;
+        return root + name.substr(dot);
+    }
+    return whole;
 }
 
 Sema::Symbol* Sema::lookup(const Identifier* ident) {
@@ -237,8 +254,9 @@ SemType Sema::resolveType(Type* t) {
         case TypeKind::List: {
             SemType elem = resolveType(t->elementType.get());
             if (elem.isError()) return elem;
-            if (!elem.isScalar() && !elem.isString() && !elem.isStruct() && !elem.isFunction()) {
-                error(t, "liste elemani sayisal, bool, char, string, fonksiyon ya da struct olmali (bulunan: " + elem.str() + ")");
+            if (!elem.isScalar() && !elem.isString() && !elem.isStruct() && !elem.isFunction() &&
+                !elem.isTask()) {
+                error(t, "liste elemani sayisal, bool, char, string, fonksiyon, task ya da struct olmali (bulunan: " + elem.str() + ")");
                 return SemType::Error();
             }
             return SemType::List(elem);
@@ -267,6 +285,16 @@ SemType Sema::resolveType(Type* t) {
             SemType ret = resolveReturnType(t->returnType.get());
             if (!ok || ret.isError()) return SemType::Error();
             return SemType::Function(ret, params);
+        }
+        case TypeKind::Task: {
+            SemType result = resolveType(t->elementType.get());
+            if (result.isError()) return result;
+            if (!taskResultAllowed(result)) {
+                error(t, "gorev sonucu olarak " + result.str() + " henuz desteklenmiyor (sayi, bool, "
+                         "char, string, fonksiyon, void ya da bunlarin listesi olabilir)");
+                return SemType::Error();
+            }
+            return SemType::Task(result);
         }
         case TypeKind::Named:
             return resolveNamedType(t);
@@ -485,9 +513,11 @@ void Sema::visit(Program* node) {
         if (auto* fn = dynamic_cast<FunctionDecl*>(decl.get()); fn && !fn->isExtern)
             decl->accept(*this);
 
-    // Paralel döngülerden çağrılan fonksiyonlar, ancak bütün fonksiyonlar
-    // görüldükten sonra denetlenebilir.
+    // Paralel döngülerden çağrılan fonksiyonlar ve görevler, ancak bütün
+    // fonksiyonlar görüldükten sonra denetlenebilir.
     checkParallelCalls();
+    checkTasks();
+    markTemporaryListArguments();
 
     // Giriş noktası, işletim sisteminin çağırabileceği biçimde olmalı. Yalnızca
     // kök modülün (derlenen dosyanın) `main`i giriş noktasıdır.
@@ -512,11 +542,12 @@ std::vector<SemType> Sema::resolveParams(const std::vector<std::unique_ptr<Param
 
 void Sema::declareParams(const std::vector<std::unique_ptr<ParamDecl>>& params,
                          const std::vector<SemType>& types) {
-    for (size_t i = 0; i < params.size(); ++i)
-        declareVariable(params[i]->name,
-                        {types[i], Symbol::Variable, funcDepth,
-                         /*readOnly=*/types[i].containsMatrix(), /*isParam=*/true},
-                        params[i].get());
+    for (size_t i = 0; i < params.size(); ++i) {
+        Symbol param{types[i], Symbol::Variable, funcDepth,
+                     /*readOnly=*/types[i].containsMatrix(), /*isParam=*/true};
+        param.paramIndex = static_cast<int>(i);
+        declareVariable(params[i]->name, param, params[i].get());
+    }
 }
 
 void Sema::declareFunction(FunctionDecl* fn) {
@@ -536,6 +567,7 @@ void Sema::declareFunction(FunctionDecl* fn) {
     symbol.isPublic = fn->isPublic;
     symbol.isExtern = fn->isExtern;
     declare(fn->name, symbol, fn);
+    functionDecls[fn->name] = fn;
 }
 
 // extern func: gövdesi çalışma zamanı kütüphanesinde, C ile yazılı.
@@ -589,9 +621,18 @@ void Sema::checkGlobal(VariableDecl* v) {
         }
     }
 
-    if (!type.isError() && !type.isScalar() && !(type.isArray() && !v->initializer)) {
-        error(v, "global degisken olarak yalnizca sayisal/bool/char degerler ve baslangic "
-                 "degeri olmayan diziler destekleniyor (bulunan: " + type.str() + ")");
+    // Başlangıç değeri olmadan (sıfır, boş string) tanımlanabilenler: diziler,
+    // stringler ve alanları sayı / bool / char / string olan struct'lar.
+    // Değerleri fonksiyonlarda atanır.
+    auto globalLeaf = [](const SemType& t) { return t.isScalar() || t.isString(); };
+    bool structOk = type.isStruct();
+    for (const SemLeaf& leaf : leavesOf(type)) structOk = structOk && globalLeaf(leaf.type);
+    const bool withoutInit = !v->initializer &&
+                             (type.isArray() || type.isString() || structOk);
+    if (!type.isError() && !type.isScalar() && !withoutInit) {
+        error(v, "global degisken olarak yalnizca sayisal/bool/char degerler; baslangic degeri "
+                 "olmadan diziler, stringler ve alanlari sayisal/bool/char/string olan struct'lar "
+                 "destekleniyor (bulunan: " + type.str() + ")");
         type = SemType::Error();
     }
 
@@ -599,7 +640,8 @@ void Sema::checkGlobal(VariableDecl* v) {
     Symbol symbol{type, Symbol::Global, 0};
     symbol.module = v->module;
     symbol.isPublic = v->isPublic;
-    declare(v->name, symbol, v);
+    // Struct ise alanları da ("havuz.hata") global semboller olur.
+    declareVariable(v->name, symbol, v);
 }
 
 void Sema::visit(FunctionDecl* node) {
@@ -612,6 +654,7 @@ void Sema::visit(FunctionDecl* node) {
     returnTypes.push_back(ret);
     parallelLoops.clear();
     currentEffects = &effects[node->name];
+    currentFunction = node->name;
     gpuFunction = node->isGpu;
     if (node->hasMatrixSignature()) noteGpuWork("matris kullaniyor");
 
@@ -624,6 +667,7 @@ void Sema::visit(FunctionDecl* node) {
                     ret.str() + " bekleniyor)");
 
     currentEffects = nullptr;
+    currentFunction.clear();
     gpuFunction = false;
     returnTypes.pop_back();
     scopes.pop_back();
@@ -646,7 +690,9 @@ void Sema::visit(LambdaExpr* node) {
     std::vector<ParallelLoop> outerParallel = std::move(parallelLoops);
     parallelLoops.clear();
     FunctionEffects* outerEffects = currentEffects;
-    currentEffects = &lambdaEffects;
+    currentEffects = &effects[lambdaKey(node)];
+    const std::string outerFunction = currentFunction;
+    currentFunction = lambdaKey(node);
     ++funcDepth;
     scopes.emplace_back();
     returnTypes.push_back(ret);
@@ -667,11 +713,13 @@ void Sema::visit(LambdaExpr* node) {
     flow = std::move(outerFlow);
     parallelLoops = std::move(outerParallel);
     currentEffects = outerEffects;
+    currentFunction = outerFunction;
     gpuFunction = outerGpu;
 
     bool ok = !ret.isError();
     for (auto& p : params) ok = ok && !p.isError();
     node->type = ok ? SemType::Function(ret, params) : SemType::Error();
+    if (ok) noteValueFunction(lambdaKey(node), node->type, node, /*isLambda=*/true);
 }
 
 void Sema::visit(ParamDecl*) {}
@@ -695,7 +743,10 @@ void Sema::visit(CastExpr*) {} // Sema'nın kendi eklediği düğüm; tipi zaten
 void Sema::visit(Identifier* node) {
     const bool isAccessTarget = skipWholeRead;
     const bool isCallee = identIsCallee;
-    skipWholeRead = identIsCallee = false;
+    const bool iterated = identIsIterated;
+    const auto asArgument = argumentContext;
+    skipWholeRead = identIsCallee = identIsIterated = false;
+    argumentContext = {"", -1};
     node->type = SemType::Error();
     Symbol* sym = lookup(node);
     if (!sym) {
@@ -724,11 +775,25 @@ void Sema::visit(Identifier* node) {
         return;
     }
     // Global ve fonksiyonlarda kaynaktaki ad ("v.norm") tanımın adıyla değişir.
-    if (!isLocal && node->ref == Identifier::Ref::Unresolved) node->name = linkNameOf(node->name);
+    if (!isLocal && node->ref == Identifier::Ref::Unresolved) node->name = globalLinkName(node->name);
     node->ref = sym->kind == Symbol::Function ? Identifier::Ref::Function
               : sym->kind == Symbol::Global   ? Identifier::Ref::Global
                                               : Identifier::Ref::Local;
     node->type = sym->type;
+    if (sym->kind == Symbol::Function && !isCallee)
+        noteValueFunction(node->name, sym->type, node, /*isLambda=*/false);
+    // Liste parametresinin kullanımı (bkz. SemaBorrow.cpp).
+    if (sym->isParam && sym->paramIndex >= 0 && sym->type.isList() &&
+        node->name.find('.') == std::string::npos) {
+        ListParamUse& use = listParamUses[currentFunction][sym->paramIndex];
+        if (isAccessTarget || iterated || asArgument.second == -2) {
+            // ödünç: indeksleme, uzunluk, for ... in, yerleşik / göreve kopya
+        } else if (!asArgument.first.empty()) {
+            use.passes.push_back(asArgument);
+        } else {
+            use.escapes = true;
+        }
+    }
     checkGpuIdentifier(node, *sym, isCallee);
     // (İndeksleme ya da atama hedefi olarak kullanım ayrıca kaydedilir.)
     if (!isAccessTarget) noteWholeRead(node, *sym);
@@ -941,8 +1006,12 @@ void Sema::checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
     bool ok = true;
     for (size_t i = 0; i < args.size(); ++i) {
         skipWholeRead = onlyAsksSize && i == 0 && dynamic_cast<Identifier*>(args[i].get());
+        // Yerleşikler listeyi saklamaz (free hariç: listeyi bırakır).
+        if (node->builtin != Builtin::Free && dynamic_cast<Identifier*>(args[i].get()))
+            argumentContext = {"", -2};
         ok = !check(args[i]).isError() && ok;
         skipWholeRead = false;
+        argumentContext = {"", -1};
     }
 
     auto expectMatrix = [&](size_t i) {
@@ -1084,6 +1153,10 @@ void Sema::checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
             return;
 
         case Builtin::Matmul: {
+            // CPU'da matris çarpımı paralel döngüye açılıp çekirdeklere
+            // dağıtılır (bkz. ParallelMatmul.h): paralel döngü gibi bekler.
+            if (!gpuFunction && currentEffects && currentEffects->parallelReason.empty())
+                currentEffects->parallelReason = "matmul kullaniyor (cekirdeklere dagitilir)";
             if (!expectArgs(2) || !ok) return;
             if (!expectRank2(0) | !expectRank2(1)) return;
             SemType elem = commonType(args[0]->type.elementType(), args[1]->type.elementType());
@@ -1172,6 +1245,16 @@ void Sema::checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
             node->type = node->builtin == Builtin::ToInt ? SemType::Int(64) : SemType::Float(64);
             return;
 
+        case Builtin::Await:
+            if (!expectArgs(1) || !ok) return;
+            checkAwait(node);
+            return;
+
+        case Builtin::Scan:
+            if (!expectArgs(1) || !ok) return;
+            checkScan(node, expected);
+            return;
+
         case Builtin::Len: {
             if (!expectArgs(1) || !ok) return;
             const SemType& t = args[0]->type;
@@ -1212,9 +1295,21 @@ void Sema::visit(FunctionCallExpr* node) {
     const bool callable = callee.isFunction() && node->arguments.size() == callee.paramCount();
 
     // Argümanlar, biliniyorsa parametre tipi beklentisiyle denetlenir.
+    auto* calleeIdent = dynamic_cast<Identifier*>(node->target.get());
+    const bool direct = calleeIdent && calleeIdent->ref == Identifier::Ref::Function;
     for (size_t i = 0; i < node->arguments.size(); ++i) {
+        // Liste parametresinin başka bir fonksiyona verilmesi (SemaBorrow.cpp).
+        // Görev olarak başlatılan çağrının argümanları kopyalanır: ödünçtür.
+        if (dynamic_cast<Identifier*>(node->arguments[i].get())) {
+            if (node == startingTask) argumentContext = {"", -2};
+            else if (direct) argumentContext = {calleeIdent->name, static_cast<int>(i)};
+        }
         if (callable) checkExpecting(node->arguments[i], callee.paramType(i));
         else check(node->arguments[i]);
+        argumentContext = {"", -1};
+        if (auto* literal = dynamic_cast<ListLiteral*>(node->arguments[i].get());
+            literal && direct && node != startingTask)
+            literalArguments.push_back({literal, calleeIdent->name, static_cast<int>(i)});
     }
 
     if (callee.isError()) return;
@@ -1388,6 +1483,10 @@ void Sema::visit(VariableDecl* node) {
     } else if (type.isFunction()) {
         error(node, "fonksiyon tipli degisken baslangic degeri olmadan tanimlanamaz");
         type = SemType::Error();
+    } else if (type.isTask()) {
+        error(node, "task degiskeni baslangic degeri olmadan tanimlanamaz (or. " + type.str() +
+                    " t = marl f(...);)");
+        type = SemType::Error();
     } else if (type.isMatrix()) {
         error(node, "matris baslangic degeri olmadan tanimlanamaz (or. zeros(3, 4))");
         type = SemType::Error();
@@ -1538,6 +1637,11 @@ void Sema::visit(ForRangeStmt* node) {
     declare(node->iteratorName, {node->iterType, Symbol::Iterator, funcDepth}, node);
 
     if (node->isParallel) checkGpuParallelFor(node);
+    // CPU'daki paralel döngü, yinelemeleri iş parçacıklarına dağıtır ve hepsinin
+    // bitmesini bekler (görevlerin renklendirilmesi bunu bilmelidir).
+    if (node->isParallel && !gpuFunction && currentEffects &&
+        currentEffects->parallelReason.empty())
+        currentEffects->parallelReason = "paralel dongu iceriyor";
     if (node->isParallel)
         parallelLoops.push_back({node->iteratorName, static_cast<int>(scopes.size()) - 1, {}, {}});
     visitLoopBody(node);
@@ -1556,7 +1660,9 @@ void Sema::visit(ForCollectionStmt* node) {
     if (node->isParallel)
         error(node, "'parallel' yalnizca aralik dongusunde kullanilabilir "
                     "(or. parallel for i in 0 .. len(liste) { ... })");
+    identIsIterated = dynamic_cast<Identifier*>(node->collection.get()) != nullptr;
     SemType coll = check(node->collection);
+    identIsIterated = false;
     node->iterType = SemType::Error();
     if (!coll.isError()) {
         if (coll.isArray() || coll.isList()) node->iterType = coll.elementType();

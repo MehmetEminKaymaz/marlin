@@ -88,6 +88,8 @@ class Program : public ASTNode {
     std::vector<Module> modules;   // [0] kök modül
     // Bütün modüllerin bildirimleri (her birinin `module` alanı sahibini gösterir).
     std::vector<std::unique_ptr<Statement>> declarations;
+    // Program (main'den ulaşılan kodda) görev başlatıyor mu? Sema doldurur.
+    bool startsTasks = false;
     void accept(ASTVisitor& visitor) override {visitor.visit(this);};
 };
 
@@ -142,6 +144,9 @@ public:
 class ListLiteral : public Expression {
 public:
     std::vector<std::unique_ptr<Expression>> elements;
+    // Liste literali bir fonksiyona doğrudan verildi ve fonksiyon onu yalnızca
+    // ödünç alıyor: çağrının deyimi bitince bırakılır (Sema doldurur).
+    bool freeAfterCall = false;
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
@@ -166,6 +171,16 @@ public:
     // tipidir ve `target` çözülmez.
     bool isConstructor = false;
     FunctionCallExpr(std::unique_ptr<Expression> t) : target(std::move(t)) {}
+    void accept(ASTVisitor& visitor) override { visitor.visit(this); }
+};
+
+// marl f(a, b) — f'yi yeni bir görevde başlatır. Değeri task<T>'dir (T: f'nin
+// dönüş tipi); sonuç `await` ile alınır. Deyim olarak yazılırsa görev
+// başlatılıp bırakılır.
+class MarlExpr : public Expression {
+public:
+    std::unique_ptr<Expression> call;  // Sema bir FunctionCallExpr olduğunu denetler
+    explicit MarlExpr(std::unique_ptr<Expression> c) : call(std::move(c)) {}
     void accept(ASTVisitor& visitor) override { visitor.visit(this); }
 };
 
@@ -280,6 +295,10 @@ public:
     // Hedef (Sema doldurur). @GPU: fonksiyonun matrisleri GPU belleğinde
     // yaşar; içindeki `parallel for` ve matris işlemleri GPU'da çalışır.
     bool isGpu = false;
+    // Görevden ulaşılan ve bekleyebilen (await ya da CPU paralel döngüsü
+    // içeren) fonksiyon: coroutine olarak üretilir (async.func). Sema
+    // doldurur; bkz. Sema.h, "Görevler".
+    bool isAsync = false;
     // @GPU fonksiyonun parametre ya da dönüş tipinde matris var: CPU'dan
     // çağrılırken veriler GPU'ya (ve sonuç geri) kopyalanmalıdır.
     bool hasMatrixSignature() const {

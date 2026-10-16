@@ -148,6 +148,7 @@ expression
     : expression '[' exprList ']'                                   #ArrayAccessExpr   // dizi[i], matris[i, j]
     | expression '(' exprList? ')'                                  #FunctionCallExpr
     | expression '.' IDENTIFIER                                     #MemberAccessExpr  // f().x  (p.x: qualifiedName)
+    | 'marl' expression                                             #MarlExpr          // marl f(x): yeni görev
     | '-' expression                                                #UnaryMinusExpr
     | '!' expression                                                #NotExpr
     | expression op=('*'|'/'|'%') expression                        #MulDivExpr
@@ -178,6 +179,7 @@ variableType
     : baseType ('[' NUMBER ']')?                                    #ArrayOrBaseType
     | 'list' '<' variableType '>'                                   #ListType
     | 'matrix' '<' variableType (',' NUMBER)? '>'                   #MatrixType   // matrix<T> = matrix<T, 2>; sayı: boyut sayısı
+    | 'task' '<' variableType '>'                                   #TaskType     // marl ile başlatılan görevin sonucu
     | '(' typeList? ')' '->' variableType                           #LambdaType
     | qualifiedName                                                 #NamedType    // struct: Nokta, geometri.Nokta
     ;

@@ -41,7 +41,8 @@ MLIRGenerator::Values MLIRGenerator::emitLeaves(Expression* expr, size_t begin, 
         Values values;
         for (size_t i = begin; i < begin + count; ++i) {
             Identifier field(leaves[i].path);
-            field.ref = Identifier::Ref::Local;
+            field.ref = ident->ref == Identifier::Ref::Global ? Identifier::Ref::Global
+                                                              : Identifier::Ref::Local;
             field.type = leaves[i].type;
             field.line = ident->line;
             field.column = ident->column;
@@ -72,6 +73,7 @@ MLIRGenerator::Values MLIRGenerator::emitWholeLeaves(Expression* expr) {
         return emitStructListLiteral(list);
     auto* call = static_cast<FunctionCallExpr*>(expr);
     if (call->builtin == Builtin::Pop) return emitListPop(call);
+    if (call->builtin == Builtin::Scan) return emitScan(call);
 
     // Nokta(1.0, 2.0): argümanlar alanların değerleridir.
     if (call->isConstructor) {
@@ -152,8 +154,10 @@ void MLIRGenerator::assignStruct(AssignmentStmt* node, Identifier* target) {
             values[i] = ownString(values[i], loc);
     }
 
+    const bool isGlobal = target->ref == Identifier::Ref::Global;
     for (size_t i = 0; i < leaves.size(); ++i) {
-        mlir::Value storage = scopeManager.lookupVariable(leaves[i].path);
+        mlir::Value storage = isGlobal ? emitGlobalRef(leaves[i].path, loc)
+                                       : scopeManager.lookupVariable(leaves[i].path);
         if (leaves[i].type.isMatrix()) {
             mlir::Value oldBuffer = ctx.builder.create<mlir::memref::LoadOp>(loc, storage);
             ctx.builder.create<mlir::memref::StoreOp>(loc, values[i], storage);

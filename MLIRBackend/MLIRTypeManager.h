@@ -8,6 +8,7 @@
 #include "CodegenContext.h"
 #include "../AST/SemType.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -26,6 +27,8 @@
 //   matrix<T, N>               → memref<? x ... x T> (N boyut); ifade içinde tensor
 //                                (bkz. MLIRMatrixManager)
 //   (A, B) -> R                → i64   (fonksiyonun adresi; bkz. aşağıda)
+//   task<T>                    → i64   (runtime'daki görev nesnesinin adresi;
+//                                       bkz. MLIRGeneratorTask.cpp)
 //   struct                    → karşılığı yok; yapraklarına ayrılır (bkz. convertFunction)
 //   void                       → boş Type (çağıran taraf ele alır)
 class MLIRTypeManager {
@@ -60,6 +63,7 @@ public:
             // (func.constant) ve çağrılırken (call_indirect) gerçek fonksiyon
             // tipine köprülenir; bkz. MLIRGenerator::functionAddress.
             case SemType::Kind::Function:
+            case SemType::Kind::Task:
                 return builder.getI64Type();
             case SemType::Kind::Struct: // tek bir değer değildir; yaprakları çevrilir
             case SemType::Kind::Void:
@@ -121,6 +125,22 @@ public:
         }
 
         return mlir::FunctionType::get(&ctx.context, inputs, results);
+    }
+
+    // Coroutine olarak üretilen fonksiyonun (async.func) imzası: parametreler
+    // aynıdır; sonuç !async.value<T> içinde döner, void fonksiyon ise yalnızca
+    // bittiğini bildiren bir !async.token döndürür.
+    //
+    //   func f(int n) -> int64     →  async.func @f(i32) -> !async.value<i64>
+    //   func g() -> void           →  async.func @g() -> !async.token
+    mlir::FunctionType convertAsyncFunction(const SemType& type) {
+        mlir::FunctionType plain = convertFunction(type);
+        llvm::SmallVector<mlir::Type, 1> results;
+        if (plain.getNumResults() == 0)
+            results.push_back(mlir::async::TokenType::get(&ctx.context));
+        for (mlir::Type result : plain.getResults())
+            results.push_back(mlir::async::ValueType::get(result));
+        return mlir::FunctionType::get(&ctx.context, plain.getInputs(), results);
     }
 };
 

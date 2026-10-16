@@ -39,13 +39,19 @@
 //       }
 //   }
 //
-// Bellek: respond, isteğin ve yanıtın başlık listelerini bırakır. Yanıtı
-// gönderilmiş bir isteğin başlıkları bir daha kullanılmamalıdır.
+// Bellek: respond yanıtın başlık listesini bırakır; isteğinkini isteği alan
+// (next'i çağıran) free(req.headers) ile bırakır. handle ve serve bunu
+// kendileri yapar.
+//
+// EŞZAMANLI SUNUCU
+//
+// serve istekleri sırayla işler. serve_concurrent her isteği ayrı bir
+// görevde (marl) işler; işleyiciler görev kurallarına uymalıdır (global
+// değişkene yazmamalı, paralel döngü içermemeli).
 //
 // SINIRLAR (şimdilik)
 //
-//   * Her yanıttan sonra bağlantı kapanır (keep-alive yok); istekler sırayla
-//     işlenir.
+//   * Her yanıttan sonra bağlantı kapanır (keep-alive yok).
 //   * Başlık en fazla 64 KB, gövde en fazla 8 MB; parçalı (chunked) istek
 //     gövdesi desteklenmez (501).
 //   * Yavaş istemci en fazla 10 saniye beklenir.
@@ -129,14 +135,14 @@ public func next(Server s) -> Request {
     return Request(c_method(handle), c_path(handle), c_query(handle), headers, c_body(handle), handle);
 }
 
-// Yanıtı gönderir ve bağlantıyı kapatır. İsteğin ve yanıtın başlık
-// listelerini bırakır.
+// Yanıtı gönderir ve bağlantıyı kapatır. Yanıt gönderilince biter: başlık
+// listesi bırakılır. İsteğin başlık listesi ise isteği alanındır (next'i
+// çağıranın): işi bitince free(req.headers) ile bırakır.
 public func respond(Request req, Response res) -> void {
     for i in 0 .. len(res.headers) {
         c_respond_header(req.handle, res.headers[i].name, res.headers[i].value);
     }
     c_respond(req.handle, res.status, res.body);
-    free(req.headers);
     free(res.headers);
 }
 
@@ -147,15 +153,33 @@ public func close(Server s) -> void {
 // Bir isteği bekler, uyan rotanın işleyicisine verir ve yanıtını gönderir.
 public func handle(Server s, list<Route> routes) -> void {
     Request req = next(s);
+    answer(req, routes);
+    free(req.headers);
+}
+
+func answer(Request req, list<Route> routes) -> void {
     respond(req, dispatch(routes, req));
 }
 
-// `port`u dinler ve istekleri sonsuza dek rotalara dağıtır. Port
-// dinlenemezse program mesajla durur.
+// `port`u dinler ve istekleri sonsuza dek rotalara dağıtır; istekler sırayla
+// işlenir. Port dinlenemezse program mesajla durur.
 public func serve(int port, list<Route> routes) -> void {
     Server s = Server(c_listen(port, true), true, "");
     while true {
         handle(s, routes);
+    }
+}
+
+// serve gibi, ama her istek ayrı bir görevde (marl) işlenir: yavaş bir
+// işleyici diğer istekleri bekletmez ve istekler bütün çekirdeklere dağılır.
+// Görev kuralları geçerlidir: işleyiciler global değişkene yazamaz ve
+// paralel döngü içeremez (derleyici denetler).
+public func serve_concurrent(int port, list<Route> routes) -> void {
+    Server s = Server(c_listen(port, true), true, "");
+    while true {
+        Request req = next(s);
+        marl answer(req, routes);   // istek ve rotalar göreve kopyalanır
+        free(req.headers);
     }
 }
 

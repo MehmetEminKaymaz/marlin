@@ -1,0 +1,146 @@
+// Görevler: marl, task<T>, await.
+// leaks: 0
+// output: 49
+// output: tamam
+// output: 36
+// output: merhaba Ayse
+// output: merhaba Ayse
+// output: 832040
+// output: 64 gorev, toplam 9979
+// output: 1 2 3
+// output: 2 4 6 99
+// output: 10 4
+// output: 12
+// output: 30.0
+// output: 15
+
+func kare(int64 n) -> int64 {
+    return n * n;
+}
+
+func bos() -> void {
+    print("tamam");
+}
+
+func parca(int bas, int son) -> int64 {
+    int64 toplam = 0;
+    for i in bas .. son {
+        toplam = toplam + i;
+    }
+    return toplam;
+}
+
+func selam(string ad) -> string {
+    return "merhaba " + ad;
+}
+
+// Görev içinde görev başlatır ve bekler: görevden ulaşılan ve bekleyen bu
+// fonksiyon coroutine olarak üretilir (beklerken iş parçacığını bırakır).
+func fib(int n) -> int64 {
+    if n < 20 {
+        return fib_sirali(n);
+    }
+    task<int64> a = marl fib(n - 1);
+    int64 b = fib(n - 2);
+    return await(a) + b;
+}
+
+func fib_sirali(int n) -> int64 {
+    if n < 2 {
+        return n;
+    }
+    return fib_sirali(n - 1) + fib_sirali(n - 2);
+}
+
+// Her görevde bir paralel döngü. Görev sayısı havuzdaki iş parçacığı
+// sayısından fazla; paralel döngünün beklemesi iş parçacığını tutsaydı
+// program kilitlenirdi.
+func paralel_toplam(int n) -> int64 {
+    int64[100] a;
+    parallel for i in 0 .. 100 {
+        a[i] = i * n;
+    }
+    int64 toplam = 0;
+    for x in a {
+        toplam = toplam + x;
+    }
+    return toplam;
+}
+
+// Görev kendi kopyasını değiştirir; çağıranın listesi değişmez.
+func ikiye_katla(list<int> l) -> list<int> {
+    for i in 0 .. len(l) {
+        l[i] = l[i] * 2;
+    }
+    push(l, 99);
+    return l;
+}
+
+func uzunluk_ve_ilk(list<string> l) -> int64 {
+    return len(l);
+}
+
+func carp(matrix<float64> a, matrix<float64> b) -> float64 {
+    return sum(matmul(a, b));
+}
+
+func main() -> void {
+    task<int64> t = marl kare(7);
+    print(await(t));
+
+    task<void> v = marl bos();
+    await(v);
+
+    // Görev listesi: 0..72 aralığı dört parçada.
+    list<task<int64>> isler = [];
+    for k in 0 .. 4 {
+        push(isler, marl parca(k * 18, (k + 1) * 18));
+    }
+    int64 toplam = 0;
+    for g in isler {
+        toplam = toplam + await(g);
+    }
+    print(toplam / 71);
+    free(isler);
+
+    task<string> s = marl selam("Ayse");
+    print(await(s));
+    print(await(s));                      // ikinci await aynı sonucu verir
+
+    print(await(marl fib(30)));
+
+    list<task<int64>> paraleller = [];
+    for k in 0 .. 64 {
+        push(paraleller, marl paralel_toplam(k));
+    }
+    int64 genel = 0;
+    for g in paraleller {
+        genel = genel + await(g);
+    }
+    print(len(paraleller), "gorev, toplam", genel / 1000);
+    free(paraleller);
+
+    list<int> sayilar = [1, 2, 3];
+    task<list<int>> kat = marl ikiye_katla(sayilar);
+    list<int> sonuc = await(kat);
+    print(sayilar[0], sayilar[1], sayilar[2]);
+    print(sonuc[0], sonuc[1], sonuc[2], sonuc[3]);
+    free(sayilar);
+    free(sonuc);
+
+    list<string> adlar = ["a", "b" + "c", "d", "e"];
+    print(10, await(marl uzunluk_ve_ilk(adlar)));
+    free(adlar);
+
+    // Fonksiyon değeriyle başlatılan görev.
+    (int64) -> int64 f = (int64 x) -> int64 | x * 3;
+    print(await(marl f(4)));
+
+    matrix<float64> a = [[1.0, 2.0], [3.0, 4.0]];
+    matrix<float64> b = [[1.0, 0.0], [0.0, 1.0]];
+    print(await(marl carp(a, b)) * 3);
+
+    // Başlat ve bırak: sonucu kimse beklemez (main bitince program biter).
+    marl kare(5);
+    print(15);
+}

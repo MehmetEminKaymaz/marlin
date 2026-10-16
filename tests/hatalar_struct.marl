@@ -60,7 +60,7 @@ func Ayni() -> int {        // struct ile aynı adda fonksiyon
     return 0;
 }
 
-Nokta globalNokta;          // global struct henüz yok
+Kutu globalKutu;            // matris alanlı global struct yok
 
 func kutuYap() -> Kutu {
     return Kutu(ones(2, 2), 1);

@@ -1,0 +1,45 @@
+// Global struct ve global string: sıfırla başlar, fonksiyonlarda atanır.
+// leaks: 0
+// output: 0 false
+// output: 3 true baglandi
+// output: 4 yeni yeni
+// output: hiz 7
+// output: hiz 8
+
+import moduller.ayarlar as ayarlar;
+
+struct Durum {
+    int64 sayac;
+    bool hazir;
+    string mesaj;
+}
+
+Durum durum;
+string son;
+
+func artir() -> void {
+    durum.sayac = durum.sayac + 1;
+}
+
+func kur() -> Durum {
+    return Durum(2, true, "bag" + "landi");
+}
+
+func main() -> void {
+    print(durum.sayac, durum.hazir);
+    durum = kur();                    // bütün olarak atama
+    artir();
+    print(durum.sayac, durum.hazir, durum.mesaj);
+
+    artir();
+    durum.mesaj = "ye" + "ni";        // alan atama (eski string bırakılır)
+    son = durum.mesaj;
+    print(durum.sayac, durum.mesaj, son);
+
+    // Başka modülün global struct'ı
+    ayarlar.kur("hiz", 7);
+    print(ayarlar.varsayilan.ad, ayarlar.varsayilan.deger);
+    ayarlar.varsayilan.deger = ayarlar.varsayilan.deger + 1;
+    Durum kopya = durum;              // global'den yerel kopya
+    print(ayarlar.varsayilan.ad, ayarlar.varsayilan.deger);
+}

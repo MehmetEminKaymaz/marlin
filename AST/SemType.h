@@ -14,14 +14,14 @@
 // tutulur. Kod üretimi (MLIRBackend) yalnızca SemType'a bakar.
 // ---------------------------------------------------------------------------
 struct SemType {
-    enum class Kind { Error, Void, Bool, Char, Int, Float, String, Array, List, Matrix, Function, Struct };
+    enum class Kind { Error, Void, Bool, Char, Int, Float, String, Array, List, Matrix, Function, Struct, Task };
 
     Kind kind = Kind::Error;
     unsigned width = 0;        // Int / Float
     bool isSigned = true;      // Int
     int64_t arraySize = 0;     // Array
     int rank = 0;              // Matrix: boyut sayısı (1 = vektör, 2 = matris, ...)
-    // Array / List / Matrix: {eleman};  Function: {dönüş, param0, param1, ...};
+    // Array / List / Matrix: {eleman};  Task: {sonuç};  Function: {dönüş, param0, param1, ...};
     // Struct: alanların tipleri, tanım sırasıyla
     std::vector<SemType> sub;
     std::string name;                     // Struct: tanımın adı (modül önekiyle)
@@ -68,6 +68,15 @@ struct SemType {
         return t;
     }
 
+    // marl ile başlatılan görev: sonucu (henüz) hazır olmayabilir; `await`
+    // bekler ve sonucu verir. Başvuru olarak dolaşır (string gibi başvuru
+    // sayılır): kopyalanınca iki değişken aynı görevi gösterir.
+    static SemType Task(const SemType& result) {
+        SemType t = make(Kind::Task);
+        t.sub.push_back(result);
+        return t;
+    }
+
     // Kullanıcının tanımladığı kayıt tipi. İki struct tipi adları aynıysa
     // aynıdır. Struct değeri tek bir değer olarak saklanmaz; alanlarına
     // ayrılır (bkz. leavesOf).
@@ -92,6 +101,7 @@ struct SemType {
     bool isMatrix() const   { return kind == Kind::Matrix; }
     bool isFunction() const { return kind == Kind::Function; }
     bool isStruct() const   { return kind == Kind::Struct; }
+    bool isTask() const     { return kind == Kind::Task; }
     bool isNumeric() const  { return isInt() || isFloat(); }
     // Tek bir SSA değeri / memref elemanı olarak saklanabilen tipler
     bool isScalar() const   { return isNumeric() || isBool() || isChar(); }
@@ -164,6 +174,7 @@ struct SemType {
                 return s + ") -> " + returnType().str();
             }
             case Kind::Struct: return name;
+            case Kind::Task:   return "task<" + elementType().str() + ">";
         }
         return "?";
     }

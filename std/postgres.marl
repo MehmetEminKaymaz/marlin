@@ -1,0 +1,277 @@
+// std.postgres — PostgreSQL istemcisi.
+//
+//   import std.postgres as pg;
+//
+//   struct Kullanici {
+//       int64 id;
+//       string ad;
+//       int yas;
+//   }
+//
+//   func main() -> void {
+//       pg.Conn db = pg.connect("host=localhost dbname=uygulama user=marlin password=...");
+//       if !db.ok { print(db.error); return; }
+//
+//       pg.Result r = pg.query(db, "INSERT INTO kullanici (ad, yas) VALUES ($1, $2)",
+//                              [pg.arg_text("Ayse"), pg.arg_int(31)]);
+//       if !r.ok { print(r.error, r.code); }
+//       pg.clear(r);
+//
+//       r = pg.query(db, "SELECT id, ad, yas FROM kullanici WHERE yas > $1", [pg.arg_int(18)]);
+//       list<Kullanici> l = scan(r.rows);       // satırlar struct'lara (bkz. std/db.marl)
+//       pg.clear(r);
+//       ...
+//       pg.close(db);
+//   }
+//
+// PARAMETRELER
+//
+// Değerler sorguya $1, $2 ... ile verilir; SQL metnine eklenmezler (SQL
+// injection olmaz). Değerleri SQL metnine + ile eklemeyin. Parametreler metin
+// olarak gider; tiplerini PostgreSQL sorgudan çıkarır.
+//
+// HATALAR
+//
+//   * Bağlanılamazsa connect durmaz: Conn.ok yanlış, sebebi Conn.error.
+//   * Sorgu hataları (sözdizimi, kısıt ihlali ...) de durdurmaz: Result.ok,
+//     Result.error ve Result.code (SQLSTATE; ör. "23505" tekrarlanan anahtar).
+//   * Programı yalnızca kullanım hataları durdurur: sınır dışı satır / sütun,
+//     NULL ya da sayı olmayan bir değere get_int ...
+//
+// BELLEK
+//
+// Her Result işi bitince clear ile bırakılır; bağlantı close ile kapatılır.
+//
+// GÖREVLER (marl)
+//
+// Bir bağlantı aynı anda tek sorgu çalıştırır (aynı bağlantıyı kullanan
+// görevler sıraya girer). Sorguların aynı anda çalışması için havuz:
+//
+//   pg.Pool havuz;                                   // global (main'de kurulur)
+//   havuz = pg.pool(conninfo, 8);
+//   pg.Result r = pg.pool_query(havuz, "SELECT ...", []);   // görevlerden de
+
+import std.db as db;
+
+// C tarafı: runtime/std_postgres.c (libpq)
+extern func c_connect(string conninfo) -> int64;
+extern func c_close(int64 conn) -> void;
+extern func c_error() -> string;
+extern func c_conn_error(int64 conn) -> string;
+extern func c_pool(string conninfo, int size) -> int64;
+extern func c_pool_close(int64 pool) -> void;
+extern func c_acquire(int64 pool) -> int64;
+extern func c_release(int64 pool, int64 conn) -> void;
+extern func c_params_new() -> int64;
+extern func c_params_add(int64 params, string text, bool is_null) -> void;
+extern func c_query(int64 conn, string sql, int64 params) -> int64;
+extern func c_pool_query(int64 pool, string sql, int64 params) -> int64;
+extern func c_command(int64 conn, string sql) -> bool;
+extern func c_result_ok(int64 result) -> bool;
+extern func c_result_error(int64 result) -> string;
+extern func c_result_code(int64 result) -> string;
+extern func c_rows(int64 result) -> int64;
+extern func c_cols(int64 result) -> int64;
+extern func c_affected(int64 result) -> int64;
+extern func c_column(int64 result, string name) -> int64;
+extern func c_column_name(int64 result, int64 col) -> string;
+extern func c_is_null(int64 result, int64 row, int64 col) -> bool;
+extern func c_text(int64 result, int64 row, int64 col) -> string;
+extern func c_null_value(int64 result, int64 row, int64 col) -> void;
+extern func c_clear(int64 result) -> void;
+
+// Bir bağlantı. `ok` yanlışsa bağlanılamadı; sebebi `error`.
+public struct Conn {
+    int64 handle;
+    bool ok;
+    string error;
+}
+
+// Bağlantı havuzu (görevler için; bkz. yukarıda).
+public struct Pool {
+    int64 handle;
+    bool ok;
+    string error;
+}
+
+// Sorgu parametresi: değerin metni ya da NULL. arg_* ile kurulur.
+public struct Value {
+    string text;
+    bool is_null;
+}
+
+// Sorgunun sonucu. `ok` yanlışsa sorgu başarısız; sebebi `error`, SQLSTATE
+// kodu `code`. Satırlar get_* ile ya da scan(r.rows) ile okunur.
+public struct Result {
+    bool ok;
+    string error;
+    string code;
+    int64 handle;
+    db.Rows rows;
+}
+
+// ---------------------------------------------------------------------------
+// Bağlantı ve havuz
+// ---------------------------------------------------------------------------
+
+// conninfo: "host=localhost port=5432 dbname=uygulama user=ad password=sifre"
+// ya da "postgresql://ad:sifre@localhost:5432/uygulama".
+public func connect(string conninfo) -> Conn {
+    int64 handle = c_connect(conninfo);
+    if handle == 0 {
+        return Conn(0, false, c_error());
+    }
+    return Conn(handle, true, "");
+}
+
+public func close(Conn c) -> void {
+    c_close(c.handle);
+}
+
+// `size` bağlantılı havuz. Bağlantılardan biri bile kurulamazsa ok yanlış.
+public func pool(string conninfo, int size) -> Pool {
+    int64 handle = c_pool(conninfo, size);
+    if handle == 0 {
+        return Pool(0, false, c_error());
+    }
+    return Pool(handle, true, "");
+}
+
+public func close_pool(Pool p) -> void {
+    c_pool_close(p.handle);
+}
+
+// Havuzdan bir bağlantı ayırır (işlem / transaction için); işi bitince
+// release ile geri verilmelidir. Boş bağlantı yoksa bekler.
+public func acquire(Pool p) -> Conn {
+    return Conn(c_acquire(p.handle), true, "");
+}
+
+public func release(Pool p, Conn c) -> void {
+    c_release(p.handle, c.handle);
+}
+
+// ---------------------------------------------------------------------------
+// Sorgular
+// ---------------------------------------------------------------------------
+
+func params_of(list<Value> params) -> int64 {
+    int64 handle = c_params_new();
+    for v in params {
+        c_params_add(handle, v.text, v.is_null);
+    }
+    return handle;
+}
+
+func rows_count(int64 r) -> int64 { return c_rows(r); }
+func rows_column(int64 r, string name) -> int64 { return c_column(r, name); }
+func rows_text(int64 r, int64 row, int64 col) -> string { return c_text(r, row, col); }
+func rows_null(int64 r, int64 row, int64 col) -> bool { return c_is_null(r, row, col); }
+
+func result_of(int64 handle) -> Result {
+    bool ok = c_result_ok(handle);
+    string error = "";
+    if !ok {
+        error = c_result_error(handle);
+    }
+    return Result(ok, error, c_result_code(handle), handle,
+                  db.Rows(handle, rows_count, rows_column, rows_text, rows_null));
+}
+
+// Parametreli sorgu: $1, $2 ... sırasıyla `params`.
+public func query(Conn c, string sql, list<Value> params) -> Result {
+    return result_of(c_query(c.handle, sql, params_of(params)));
+}
+
+// Parametresiz sorgu ya da komut (CREATE TABLE ...).
+public func exec(Conn c, string sql) -> Result {
+    list<Value> none = [];
+    Result r = query(c, sql, none);
+    free(none);
+    return r;
+}
+
+// Havuzdan boş bir bağlantıyla sorgu (görevlerden aynı anda çağrılabilir).
+public func pool_query(Pool p, string sql, list<Value> params) -> Result {
+    return result_of(c_pool_query(p.handle, sql, params_of(params)));
+}
+
+public func pool_exec(Pool p, string sql) -> Result {
+    list<Value> none = [];
+    Result r = pool_query(p, sql, none);
+    free(none);
+    return r;
+}
+
+// İşlem (transaction). Başarısızsa false; sebebi last_error(c).
+public func begin(Conn c) -> bool { return c_command(c.handle, "BEGIN"); }
+public func commit(Conn c) -> bool { return c_command(c.handle, "COMMIT"); }
+public func rollback(Conn c) -> bool { return c_command(c.handle, "ROLLBACK"); }
+
+// Bağlantının son hata mesajı.
+public func last_error(Conn c) -> string {
+    return c_conn_error(c.handle);
+}
+
+// Sonucu bırakır; bir daha kullanılmamalıdır.
+public func clear(Result r) -> void {
+    c_clear(r.handle);
+}
+
+// ---------------------------------------------------------------------------
+// Parametre değerleri
+// ---------------------------------------------------------------------------
+
+public func arg_text(string s) -> Value { return Value(s, false); }
+public func arg_int(int64 n) -> Value { return Value(str(n), false); }
+public func arg_float(float64 x) -> Value { return Value(str(x), false); }
+public func arg_null() -> Value { return Value("", true); }
+
+public func arg_bool(bool b) -> Value {
+    if b {
+        return Value("true", false);
+    }
+    return Value("false", false);
+}
+
+// ---------------------------------------------------------------------------
+// Sonuçtan okuma (satır ve sütun 0'dan başlar)
+// ---------------------------------------------------------------------------
+
+public func row_count(Result r) -> int64 { return c_rows(r.handle); }
+public func column_count(Result r) -> int64 { return c_cols(r.handle); }
+
+// INSERT / UPDATE / DELETE'in etkilediği satır sayısı.
+public func affected(Result r) -> int64 { return c_affected(r.handle); }
+
+// Adı verilen sütunun sırası; yoksa -1.
+public func column(Result r, string name) -> int64 { return c_column(r.handle, name); }
+public func column_name(Result r, int64 col) -> string { return c_column_name(r.handle, col); }
+
+public func is_null(Result r, int64 row, int64 col) -> bool {
+    return c_is_null(r.handle, row, col);
+}
+
+// Değerin metni; NULL ise "".
+public func get_text(Result r, int64 row, int64 col) -> string {
+    return c_text(r.handle, row, col);
+}
+
+public func get_int(Result r, int64 row, int64 col) -> int64 {
+    return to_int(not_null(r, row, col));
+}
+
+public func get_float(Result r, int64 row, int64 col) -> float64 {
+    return to_float(not_null(r, row, col));
+}
+
+public func get_bool(Result r, int64 row, int64 col) -> bool {
+    return not_null(r, row, col) == "t";
+}
+
+func not_null(Result r, int64 row, int64 col) -> string {
+    if c_is_null(r.handle, row, col) {
+        c_null_value(r.handle, row, col); // program mesajla durur
+    }
+    return c_text(r.handle, row, col);
+}

@@ -91,6 +91,8 @@ set(PROJECT_SOURCES
         MLIRBackend/MLIRGeneratorStruct.cpp
         MLIRBackend/MLIRGeneratorList.cpp
         MLIRBackend/MLIRGeneratorString.cpp
+        MLIRBackend/MLIRGeneratorTask.cpp
+        MLIRBackend/MLIRGeneratorScan.cpp
         MLIRBackend/MLIRListManager.cpp
         MLIRBackend/MLIRListManager.h
         MLIRBackend/MLIRRuntime.h
@@ -118,6 +120,8 @@ set(PROJECT_SOURCES
         AST/SemaParallel.cpp
         AST/SemaGpu.cpp
         AST/SemaStruct.cpp
+        AST/SemaTask.cpp
+        AST/SemaBorrow.cpp
         AST/Sema.h
 )
 
@@ -167,9 +171,37 @@ add_library(marlinrt STATIC
         runtime/std_random.c
         runtime/std_http.c
         runtime/http_parser.c
-        runtime/http_parser.h)
+        runtime/http_parser.h
+        runtime/marlin_task.c)
 add_dependencies(marlin_lang marlinrt)
 target_compile_definitions(marlin_lang PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE:marlinrt>")
+
+# Veritabanı sürücüleri (isteğe bağlı). Kütüphanesi bulunan sürücü derlenir;
+# bulunmayanı import eden program açık bir hatayla durur. Önce sistem paketleri
+# (libpq-dev, libsqlite3-dev), sonra MARLIN_DEPS_DIR altına yönetici izni
+# olmadan açılmış paketler aranır (apt-get download + dpkg -x).
+set(MARLIN_DEPS_DIR "$ENV{HOME}/marlin-deps/root/usr" CACHE PATH
+    "Sisteme kurulmadan acilmis kutuphaneler (libpq, sqlite)")
+find_path(MARLIN_PQ_INCLUDE libpq-fe.h PATH_SUFFIXES postgresql PATHS ${MARLIN_DEPS_DIR}/include)
+find_library(MARLIN_PQ_LIB NAMES pq PATHS ${MARLIN_DEPS_DIR}/lib/x86_64-linux-gnu)
+if(MARLIN_PQ_INCLUDE AND MARLIN_PQ_LIB)
+    message(STATUS "std.postgres: libpq ${MARLIN_PQ_LIB}")
+    target_sources(marlinrt PRIVATE runtime/std_postgres.c)
+    set_source_files_properties(runtime/std_postgres.c PROPERTIES INCLUDE_DIRECTORIES "${MARLIN_PQ_INCLUDE}")
+    target_compile_definitions(marlin_lang PRIVATE MARLIN_PQ_LIB="${MARLIN_PQ_LIB}")
+else()
+    message(STATUS "std.postgres: libpq bulunamadi (libpq-dev); surucu derlenmeyecek")
+endif()
+find_path(MARLIN_SQLITE_INCLUDE sqlite3.h PATHS ${MARLIN_DEPS_DIR}/include)
+find_library(MARLIN_SQLITE_LIB NAMES sqlite3 libsqlite3.so.0 PATHS ${MARLIN_DEPS_DIR}/lib/x86_64-linux-gnu)
+if(MARLIN_SQLITE_INCLUDE AND MARLIN_SQLITE_LIB)
+    message(STATUS "std.sqlite: ${MARLIN_SQLITE_LIB}")
+    target_sources(marlinrt PRIVATE runtime/std_sqlite.c)
+    set_source_files_properties(runtime/std_sqlite.c PROPERTIES INCLUDE_DIRECTORIES "${MARLIN_SQLITE_INCLUDE}")
+    target_compile_definitions(marlin_lang PRIVATE MARLIN_SQLITE_LIB="${MARLIN_SQLITE_LIB}")
+else()
+    message(STATUS "std.sqlite: sqlite3 bulunamadi (libsqlite3-dev); surucu derlenmeyecek")
+endif()
 
 # Standart kütüphanenin marlin dosyaları (import std.file → std/file.marl).
 # marlin_lang önce yanındaki `std` dizinine, sonra buraya bakar.

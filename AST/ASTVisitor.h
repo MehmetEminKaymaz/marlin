@@ -17,6 +17,7 @@ class ListLiteral;
 class ArrayAccessExpr;
 class FunctionCallExpr;
 class MemberExpr;
+class MarlExpr;
 class UnaryExpr;
 class BinaryExpr;
 class CastExpr;
@@ -51,6 +52,7 @@ public:
     virtual void visit(ArrayAccessExpr* node) = 0;
     virtual void visit(FunctionCallExpr* node) = 0;
     virtual void visit(MemberExpr* node) = 0;
+    virtual void visit(MarlExpr* node) = 0;
     virtual void visit(UnaryExpr* node) = 0;
     virtual void visit(BinaryExpr* node) = 0;
     virtual void visit(CastExpr* node) = 0;

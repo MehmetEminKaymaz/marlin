@@ -51,8 +51,10 @@ void Sema::noteWholeRead(Identifier* ident, const Symbol& sym) {
 
 // degisken = ...
 void Sema::noteWholeWrite(Identifier* ident, const Symbol& sym) {
-    if (sym.kind == Symbol::Global)
+    if (sym.kind == Symbol::Global) {
         noteUnsafe("global degisken '" + ident->name + "' uzerine yaziyor");
+        noteGlobalWrite(ident->name);
+    }
 
     for (auto& loop : parallelLoops) {
         if (!isOutside(sym, loop)) continue;
@@ -71,8 +73,10 @@ void Sema::noteElementAccess(ArrayAccessExpr* access, bool isWrite) {
     if (!sym || (sym->kind != Symbol::Variable && sym->kind != Symbol::Global)) return;
 
     if (isWrite) {
-        if (sym->kind == Symbol::Global)
+        if (sym->kind == Symbol::Global) {
             noteUnsafe("global '" + root->name + "' uzerine yaziyor");
+            noteGlobalWrite(root->name);
+        }
         else if (sym->type.isList())
             noteUnsafe("'" + root->name + "' listesini degistiriyor");
         else if (sym->isParam && sym->type.isArray())
@@ -147,7 +151,15 @@ void Sema::noteCall(FunctionCallExpr* call) {
     auto* ident = dynamic_cast<Identifier*>(call->target.get());
     const bool direct = ident && ident->ref == Identifier::Ref::Function;
 
+    // marl f(...): f bu fonksiyonun içinde çağrılmaz, ayrı bir görevde çalışır;
+    // etkileri bu fonksiyona geçmez (bkz. SemaTask.cpp).
+    if (call == startingTask) {
+        taskStarts.push_back({direct ? ident->name : "", call->target->type, call, currentFunction});
+        return;
+    }
+
     if (!direct) {
+        if (currentEffects) currentEffects->indirectCalls.push_back({call->target->type, call});
         // Hangi fonksiyonun çağrılacağı derlerken bilinmiyor.
         noteUnsafe("degisken uzerinden (dolayli) fonksiyon cagiriyor");
         if (inParallel())

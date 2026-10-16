@@ -1,0 +1,24 @@
+// scan: struct'ın bir alanına karşılık gelen sütun yoksa program durur.
+// expect: 1
+// stderr: sorgu sonucunda 'eposta' adinda bir sutun yok
+
+import std.db as db;
+
+struct Kullanici {
+    string ad;
+    string eposta;
+}
+
+func say(int64 h) -> int64 { return 1; }
+func sutun(int64 h, string ad) -> int64 {
+    if ad == "ad" { return 0; }
+    return -1;
+}
+func metin(int64 h, int64 satir, int64 sutun) -> string { return "Ayse"; }
+func bos(int64 h, int64 satir, int64 sutun) -> bool { return false; }
+
+func main() -> void {
+    db.Rows r = db.Rows(0, say, sutun, metin, bos);
+    list<Kullanici> l = scan(r);
+    print(len(l));
+}

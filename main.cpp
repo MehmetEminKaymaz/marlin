@@ -173,6 +173,33 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Veritabanı sürücüleri dış bir C kütüphanesi kullanır; program yalnızca
+    // o modülü import ediyorsa bağlanır (bkz. CMakeLists.txt).
+    std::vector<std::string> extraLibs;
+    for (const Module& module : astRoot->modules) {
+        const char* lib = nullptr;
+        const char* missing = nullptr;
+        if (module.name == "std.postgres") {
+#ifdef MARLIN_PQ_LIB
+            lib = MARLIN_PQ_LIB;
+#else
+            missing = "libpq (paket: libpq-dev)";
+#endif
+        } else if (module.name == "std.sqlite") {
+#ifdef MARLIN_SQLITE_LIB
+            lib = MARLIN_SQLITE_LIB;
+#else
+            missing = "sqlite3 (paket: libsqlite3-dev)";
+#endif
+        }
+        if (missing) {
+            std::cerr << module.name << " kullanilamiyor: derleyici " << missing
+                      << " olmadan derlenmis; kutuphaneyi kurup derleyiciyi yeniden derleyin\n";
+            return 1;
+        }
+        if (lib) extraLibs.push_back(lib);
+    }
+
     // --- Semantik analiz ---
     // Tipleri çözer, örtük dönüşümleri AST'ye yazar ve akış yapısını işaretler.
     // Kod üretimi geçerli bir ağaç varsaydığı için hata varsa burada durulur.
@@ -201,7 +228,7 @@ int main(int argc, char** argv) {
     registry.insert<mlir::tensor::TensorDialect>();
     registry.insert<mlir::linalg::LinalgDialect>();
     registry.insert<mlir::bufferization::BufferizationDialect>();
-    registry.insert<mlir::async::AsyncDialect>();   // paralel döngülerin indirilmesi için
+    registry.insert<mlir::async::AsyncDialect>();   // görevler (marl) ve paralel döngüler
     registry.insert<mlir::affine::AffineDialect>();
     registry.insert<mlir::gpu::GPUDialect>();       // @GPU fonksiyonlar
     marlin::registerLoweringInterfaces(registry);
@@ -220,6 +247,7 @@ int main(int argc, char** argv) {
     mlirCtx.getOrLoadDialect<mlir::linalg::LinalgDialect>();
     mlirCtx.getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
     mlirCtx.getOrLoadDialect<mlir::gpu::GPUDialect>();
+    mlirCtx.getOrLoadDialect<mlir::async::AsyncDialect>();
 
     mlir::OpBuilder mlirBuilder(&mlirCtx);
     mlir::ModuleOp moduleOp = mlir::ModuleOp::create(mlirBuilder.getUnknownLoc());
@@ -251,7 +279,8 @@ int main(int argc, char** argv) {
 
     // --- llvm dialect'i → LLVM IR ---
     llvm::LLVMContext llvmContext;
-    std::unique_ptr<llvm::Module> llvmModule = marlin::translateToLLVMIR(moduleOp, llvmContext);
+    std::unique_ptr<llvm::Module> llvmModule =
+        marlin::translateToLLVMIR(moduleOp, llvmContext, generator.usesTaskCode());
     if (!llvmModule) {
         llvm::errs() << "LLVM IR'a ceviri basarisiz!\n";
         return 1;
@@ -294,7 +323,7 @@ int main(int argc, char** argv) {
               marlin::NativeCodegen::link(objectPath.str().str(), runtimeLib,
                                          outputPath.empty() ? "a.out" : outputPath,
                                          generator.usesParallelLoops(), generator.usesGpuCode(),
-                                         error);
+                                         extraLibs, error);
     llvm::sys::fs::remove(objectPath);
     if (!ok) {
         llvm::errs() << error << "\n";

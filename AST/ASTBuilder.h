@@ -355,6 +355,11 @@ virtual std::any visitParenExpr(marlinParser::ParenExprContext *ctx) override {
     return visit(ctx->expression());
 }
 
+virtual std::any visitMarlExpr(marlinParser::MarlExprContext *ctx) override {
+    auto call = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
+    return static_cast<Expression*>(new MarlExpr(std::move(call)));
+}
+
 virtual std::any visitUnaryMinusExpr(marlinParser::UnaryMinusExprContext *ctx) override {
     auto op = std::unique_ptr<Expression>(std::any_cast<Expression*>(visit(ctx->expression())));
     return static_cast<Expression*>(new UnaryExpr(UnaryExpr::Negate, std::move(op)));
@@ -450,6 +455,12 @@ virtual std::any visitMatrixType(marlinParser::MatrixTypeContext *ctx) override 
         matrixType->rank = isInteger ? std::stoi(text) : -1;
     }
     return matrixType;
+}
+
+virtual std::any visitTaskType(marlinParser::TaskTypeContext *ctx) override {
+    auto taskType = new Type(TypeKind::Task);
+    taskType->elementType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType())));
+    return taskType;
 }
 
 virtual std::any visitLambdaType(marlinParser::LambdaTypeContext *ctx) override {

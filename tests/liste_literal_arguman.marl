@@ -1,0 +1,53 @@
+// Fonksiyona doğrudan verilen liste literali: fonksiyon onu yalnızca ödünç
+// alıyorsa deyim bitince bırakılır; saklıyor / döndürüyorsa bırakılmaz.
+// leaks: 0
+// output: 6
+// output: 9
+// output: 8
+// output: 2
+// output: 3
+
+struct Satir {
+    string ad;
+    int n;
+}
+
+func toplam(list<int> l) -> int64 {
+    int64 t = 0;
+    for x in l {
+        t = t + x;
+    }
+    return t;
+}
+
+// Başka bir ödünç alan fonksiyona verir: o da ödünç alır.
+func ilet(list<int> l) -> int64 {
+    return toplam(l);
+}
+
+// Listeyi döndürür: literal bırakılamaz (artık sonucun kendisi).
+func ayni(list<int> l) -> list<int> {
+    return l;
+}
+
+func say(list<string> l) -> int64 {
+    return len(l);
+}
+
+func satir_say(list<Satir> l) -> int64 {
+    int64 n = 0;
+    for i in 0 .. len(l) {
+        n = n + l[i].n;
+    }
+    return n;
+}
+
+func main() -> void {
+    print(toplam([1, 2, 3]));
+    print(ilet([4, 5]));
+    list<int> k = ayni([7, 8]);
+    print(k[1]);
+    free(k);
+    print(say(["a" + "b", str(5)]));                  // stringleri listeyle bırakılır
+    print(satir_say([Satir("x" + "y", 1), Satir(str(2), 2)]));
+}

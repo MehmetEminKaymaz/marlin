@@ -222,6 +222,15 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `std_string.marl`, `std_file.marl`, `std_diger.marl` | Standart kütüphane: string fonksiyonları, dosya işlemleri, `os` / `time` / `random` / `math` / `io` |
 | `std_dosya_yok.marl` | Olmayan dosyayı okumak: programın mesajla durması |
 | `http_sunucu.marl` | `std.http`: yönlendirme, sorgu, gövde, başlıklar, HEAD / 204 / 404 / 405; ayrıştırıcının reddettiği geçersiz istekler |
+| `http_gorev.marl` | Her isteğin ayrı bir görevde (`marl`) yanıtlanması |
+| `gorevler.marl` | `marl` / `task<T>` / `await`: sonuç tipleri, görev listesi, görev içinde görev (`fib`), her biri paralel döngü çalıştıran 64 görev, kopyalanan liste argümanı, fonksiyon değeriyle görev, görevde `matmul`; sızıntı yok |
+| `gorev_gpu.marl` | Dört görevin aynı anda `@GPU` fonksiyon çağırması |
+| `global_struct.marl` | Global struct ve global string: okuma, bütün / alan atama, başka modülün global struct'ı |
+| `liste_literal_arguman.marl` | Fonksiyona doğrudan verilen liste literalinin (ödünç alınıyorsa) bırakılması; döndürülen literalin bırakılmaması |
+| `scan.marl`, `scan_sutun_yok.marl`, `hatalar_scan.marl` | `scan`: satırları struct'a doldurma (bellekte sahte bir satır kaynağıyla), NULL, tek satır; eksik sütun; hatalı kullanım |
+| `sqlite.marl` | `std.sqlite`: tablo, `$n` parametreleri, NULL, kısıt hatası, `scan`, işlem, etkilenen satır |
+| `postgres.marl` | `std.postgres` (sunucu gerekir): SQLSTATE kodları, `scan`, işlem, global havuzu kullanan görevler |
+| `hatalar_gorev.marl` | Görev kurallarının ihlalleri: global'e yazan görev, `await` içeren fonksiyonun değer olması, paralel döngüde `marl` / `await`, desteklenmeyen sonuç tipleri |
 | `hatalar_std.marl` | Kullanıcı kodunda `extern`, std'nin iç fonksiyonlarına erişim, paralel döngüden yan etkili fonksiyon |
 | `struct.marl` | Struct'lar: oluşturma, kopyalama, her tipten alan, iç içe struct, fonksiyona verme ve döndürme, lambdalar, paralel döngü |
 | `modul_struct.marl` | Başka modülde tanımlı struct'ların kullanılması |
@@ -351,6 +360,17 @@ func main() -> void {
 
 İstemci `tests/http_gonder.py`'dir (`python3` gerekir). Her test farklı bir port kullanmalıdır.
 
+### PostgreSQL testi
+
+`// requires: postgres` yazan testler bir PostgreSQL sunucusu ister. Bağlantı bilgisi `MARLIN_PG_TEST` ortam değişkeninden okunur; tanımlı değilse test atlanır (`ATLANDI`). Yerel bir test sunucusu (yönetici izni gerekmez):
+
+```bash
+bash tests/pg_test_sunucu.sh
+export MARLIN_PG_TEST="host=localhost port=54329 dbname=marlin_test user=marlin password=marlin"
+bash tests/run.sh
+bash tests/pg_test_sunucu.sh dur     # işin bitince
+```
+
 ### Bir test kaldığında
 
 `run.sh` neyin farklı olduğunu gösterir:
@@ -422,6 +442,10 @@ Sabit boyutlu dizilerin (`int[5]`) indeksleri çalışma zamanında denetlenmez;
 // Global değişkenler (başlangıç değeri sabit olmalı)
 int sayac = 0;
 float oran = 0.5;
+// Başlangıç değeri olmadan (sıfır / boş string): dizi, string ve alanları
+// sayı / bool / char / string olan struct. Değerleri fonksiyonlarda atanır.
+string son_mesaj;
+Ayar ayar;            // ayar.ad, ayar.deger ...
 
 func topla(int a, int b) -> int {
     return a + b;
@@ -497,7 +521,9 @@ func main() -> void {
 
 Listeler **başvuru** olarak dolaşır: `list<int> b = a;` listeyi kopyalamaz, `a` ve `b` aynı listeyi gösterir; birine eklenen eleman diğerinde de görünür. Fonksiyona verilen liste de aynı listedir, fonksiyon onu değiştirebilir.
 
-Listelerin belleği kendiliğinden geri verilmez; program bitene kadar yaşar. Uzun çalışan bir programda işi biten listeyi `free(l)` ile bırakabilirsin (bıraktıktan sonra o listeyi kullanma). Liste elemanları sayı, `bool`, `char` ya da `string` olabilir.
+Listelerin belleği kendiliğinden geri verilmez; program bitene kadar yaşar. Uzun çalışan bir programda işi biten listeyi `free(l)` ile bırakabilirsin (bıraktıktan sonra o listeyi kullanma). Liste elemanları sayı, `bool`, `char`, `string`, fonksiyon, görev (`task<T>`) ya da struct olabilir.
+
+Bir istisna: fonksiyona **doğrudan verilen liste literali** (`toplam([1, 2, 3])`, `pg.query(db, sql, [pg.arg_int(5)])`) çağrının deyimi bitince kendiliğinden bırakılır. Literalin adı olmadığı için onu `free` edemezdin. Bunun koşulu, fonksiyonun listeyi yalnızca **ödünç alması**: listeyi okuması, üzerinde dönmesi, uzunluğunu sorması ya da yine ödünç alan bir fonksiyona vermesi. Listeyi döndüren, bir yere saklayan ya da `free` eden fonksiyona verilen literal bırakılmaz. Derleyici bunu kendisi çıkarır.
 
 **Matrisler**
 
@@ -617,7 +643,8 @@ func main() -> void {
   }
   ```
 - Struct'lar `+`, `==` gibi işleçlerle kullanılamaz ve `print` ile bütün olarak yazdırılamaz; alanları tek tek kullanılır.
-- **Henüz olmayanlar:** struct dizisi (`Nokta[3]`), global struct değişkeni, `@GPU` fonksiyonlarda struct.
+- **Global struct:** alanları sayı, `bool`, `char` ya da string olan struct global olarak tanımlanabilir (başlangıç değeri olmadan; alanlar sıfır ve boş string başlar). Bütün olarak (`ayar = Ayar("hiz", 7);`) ya da alan alan (`ayar.deger = 8;`) atanır; başka modülden `m.ayar.deger` ile okunur. Görevler okuyabilir ama yazamaz.
+- **Henüz olmayanlar:** struct dizisi (`Nokta[3]`), liste / matris / fonksiyon alanlı global struct, `@GPU` fonksiyonlarda struct.
 
 **Struct listesi (`list<Nokta>`)**
 
@@ -716,6 +743,9 @@ func main() -> void {
 | `std.time` | `now()` — 1970'ten beri geçen saniye; `sleep(seconds)` |
 | `std.random` | `seed(n)` `random()` — [0, 1); `rand_int(low, high)` — [low, high); `rand_matrix(rows, cols)` |
 | `std.math` | `PI` `E` sabitleri |
+| `std.postgres` | PostgreSQL: `connect` `close` `query(db, sql, params)` `exec(db, sql)` `begin` `commit` `rollback`; havuz `pool` `pool_query` `pool_exec` `acquire` `release`; parametreler `arg_text` `arg_int` `arg_float` `arg_bool` `arg_null`; sonuç `row_count` `column` `get_text` `get_int` `get_float` `get_bool` `is_null` `affected` `clear`; satırları struct'a: `scan(r.rows)` (aşağıda) |
+| `std.sqlite` | SQLite (tek dosya, sunucusuz): `open(path)` (`":memory:"` bellekte); geri kalanı `std.postgres` ile aynı |
+| `std.db` | Sürücülerin ortak satır kaynağı tipi `Rows` (kendi satır kaynağını yazmak için) |
 | `std.http` | HTTP/1.1 sunucusu: `serve(port, rotalar)`; rotalar `get` `post` `put` `delete` `route(method, path, f)`; yanıtlar `text` `html` `json` `response` `redirect` `add_header`; istekten `header` `query_param` `form_value` `url_decode`; alt seviye `listen` `next` `respond` `handle` `dispatch` `close` (aşağıda) |
 
 Bilinmesi gerekenler:
@@ -785,9 +815,84 @@ Tarayıcıdan `http://localhost:8080/` ya da `curl -i localhost:8080/selam?ad=Ay
   http.close(s);
   ```
 
-  `next(s)` sıradaki isteği bekler, `respond(req, res)` yanıtı gönderir. `respond` isteğin ve yanıtın başlık listelerini bırakır; yanıtı gönderilmiş isteğin başlıkları bir daha kullanılmamalı.
-- **Şimdilik:** her yanıttan sonra bağlantı kapanır (keep-alive yok) ve istekler sırayla işlenir. Ağır bir işi hızlandırmak için işleyicinin içinde `parallel for` ya da `@GPU` fonksiyon kullanılabilir. HTTPS yok; gerekirse sunucunun önüne nginx / caddy konur. HTTP istemcisi ve JSON ayrıştırma da henüz yok.
+  `next(s)` sıradaki isteği bekler, `respond(req, res)` yanıtı gönderir ve yanıtın başlık listesini bırakır. İsteğin başlık listesi isteği alanındır: işin bitince `free(req.headers)` (`handle` ve `serve` bunu kendileri yapar).
+- **Eşzamanlı sunucu:** `serve` istekleri sırayla işler. `http.serve_concurrent(port, rotalar)` her isteği ayrı bir görevde (`marl`, aşağıda) işler: yavaş bir işleyici diğer istekleri bekletmez, istekler çekirdeklere dağılır. Görev kuralları geçerlidir: işleyiciler global değişkene yazamaz ve paralel döngü içeremez (derleyici denetler). Kendi döngünde de aynısı yapılabilir:
+
+  ```
+  func cevapla(http.Request req, list<http.Route> rotalar) -> void {
+      http.respond(req, http.dispatch(rotalar, req));
+  }
+  ...
+  while true {
+      http.Request req = http.next(s);
+      marl cevapla(req, rotalar);     // istek ve rotalar göreve kopyalanır
+      free(req.headers);
+  }
+  ```
+- **Şimdilik:** her yanıttan sonra bağlantı kapanır (keep-alive yok). Ağır bir işi hızlandırmak için işleyicinin içinde `parallel for` ya da `@GPU` fonksiyon kullanılabilir (sıralı `serve` ile). HTTPS yok; gerekirse sunucunun önüne nginx / caddy konur. HTTP istemcisi ve JSON ayrıştırma da henüz yok.
 - Ayrıştırıcının kaynağı `runtime/http_parser.c`'dir: soket kullanmaz, her kuralın yanında ilgili RFC maddesi yazar.
+
+**Veritabanı (`std.postgres`, `std.sqlite`)**
+
+```
+import std.postgres as pg;
+
+struct Kullanici {
+    int64 id;
+    string ad;
+    int yas;
+}
+
+func main() -> void {
+    pg.Conn db = pg.connect("host=localhost dbname=uygulama user=marlin password=gizli");
+    if !db.ok { print(db.error); return; }
+
+    pg.Result r = pg.query(db, "INSERT INTO kullanici (ad, yas) VALUES ($1, $2) RETURNING id",
+                           [pg.arg_text("Ayse"), pg.arg_int(31)]);
+    if !r.ok { print(r.error, r.code); }        // code: SQLSTATE, ör. 23505
+    else { print("yeni id:", pg.get_int(r, 0, 0)); }
+    pg.clear(r);
+
+    r = pg.query(db, "SELECT id, ad, yas FROM kullanici WHERE yas > $1", [pg.arg_int(18)]);
+    list<Kullanici> l = scan(r.rows);           // her satır bir Kullanici
+    pg.clear(r);
+    for k in l { print(k.id, k.ad, k.yas); }
+    free(l);
+
+    pg.close(db);
+}
+```
+
+`std.sqlite` aynı biçimdedir; yalnızca bağlantı `sql.open("veri.db")` ile açılır (`":memory:"` bellekte, geçici).
+
+- **Parametreler** `$1`, `$2` ... ile verilir. Değerler SQL metnine hiç eklenmez, bu yüzden SQL injection olmaz. Değerleri SQL metnine `+` ile ekleme. NULL için `arg_null()`.
+- **`scan(r.rows)`** satırları, adları sütun adlarıyla aynı olan struct alanlarına doldurur. Doldurulacak tip bağlamdan anlaşılır: `list<Kullanici> l = scan(r.rows);` bütün satırlar, `Kullanici k = scan(r.rows);` ilk satır (sonuç boşsa program durur). Sütun sırası önemli değildir, fazla sütunlar yok sayılır; eksik sütun programı durdurur (`AS` ile ad verilebilir). Alanlar sayı, `bool` ya da string olabilir. NULL değer alanın sıfır değeri olur (0, `false`, `""`); ayırt etmek gerekiyorsa `is_null`.
+- **Satır / sütun numarasıyla da okunur:** `get_int(r, satir, sutun)`, `get_text`, `get_float`, `get_bool`, `is_null`, `column(r, "ad")`. NULL bir değere `get_int` programı durdurur.
+- **Hatalar:** bağlanılamazsa `connect` durmaz (`ok` / `error`). Sorgu hataları da durdurmaz (`r.ok`, `r.error`, `r.code`). Programı yalnızca kullanım hataları durdurur (sınır dışı satır / sütun gibi).
+- **Bellek:** her sonuç işi bitince `pg.clear(r)` ile bırakılır, bağlantı `pg.close(db)` ile kapatılır.
+- **İşlem:** `pg.begin(db)`, `pg.commit(db)`, `pg.rollback(db)`. Başarısızsa `false` döner, sebebi `pg.last_error(db)`.
+- **Görevler ve sunucular:** bir bağlantı aynı anda tek sorgu çalıştırır; aynı bağlantıyı kullanan görevlerin sorguları sıraya girer (bozulmaz). Sorguların aynı anda çalışması için havuz kullan ve onu global yap; görevler ve `serve_concurrent` işleyicileri global'i okuyabilir:
+
+  ```
+  pg.Pool havuz;
+
+  func urunler(http.Request req) -> http.Response {
+      pg.Result r = pg.pool_query(havuz, "SELECT ad, adet FROM urun WHERE adet >= $1",
+                                  [pg.arg_int(to_int(http.query_param(req, "en_az")))]);
+      list<Urun> l = scan(r.rows);
+      pg.clear(r);
+      ...
+  }
+
+  func main() -> void {
+      havuz = pg.pool("host=localhost dbname=uygulama user=marlin password=gizli", 8);
+      ...
+      http.serve_concurrent(8080, rotalar);
+  }
+  ```
+
+  İşlem (transaction) için havuzdan bir bağlantı ayrılır: `pg.Conn c = pg.acquire(havuz); ... pg.release(havuz, c);`
+- Sürücüler PostgreSQL'in resmi C kütüphanesi **libpq**'yu ve **SQLite**'ı kullanır (kurulum: `sudo apt install libpq-dev libsqlite3-dev`). Derleyici bu kütüphaneleri bulamadan derlenmişse `import std.postgres` açık bir hata verir. Programa yalnızca kullandığı sürücü bağlanır.
 
 Kütüphanenin kaynağı `std/` dizinindedir ve okunabilir. Her modül, C ile yazılmış küçük bir çekirdeğin (`runtime/std_*.c`) üzerine marlin ile yazılmıştır; C fonksiyonları `extern func` ile bildirilir. `extern` yalnızca bu dizindeki dosyalarda yazılabilir.
 
@@ -812,6 +917,40 @@ Döngünün içinde tanımlanan değişkenler her yinelemeye özeldir; onlarla h
 Bu kurallar katıdır: aslında güvenli olan bazı döngüleri de reddeder. Karşılığında, derlenen her paralel döngünün doğru sonuç vereceği garantidir. Paralel döngüde `print` çağrılabilir: her satır bütün olarak yazılır, ama satırların sırası belirsizdir ve her çalıştırmada değişebilir. Döngünün gerçekten paralel çalıştığını görmenin en kolay yolu da budur: `parallel for i in 0 .. 20 { print(i); }` sayıları karışık sırada yazar.
 
 Küçük ve hafif döngülerde paralellik fayda sağlamaz, hatta yavaşlatabilir (işi dağıtmanın da bir maliyeti var); ağır hesaplarda kullan.
+
+**Görevler (`marl`)**
+
+```
+func parca(int bas, int son) -> int64 { ... }
+
+func fib(int n) -> int64 {
+    if n < 20 { return fib_sirali(n); }
+    task<int64> a = marl fib(n - 1);     // yeni görev
+    int64 b = fib(n - 2);                // bu görevde devam
+    return await(a) + b;                 // a'nın sonucunu bekle
+}
+
+func main() -> void {
+    task<int64> t = marl fib(35);
+    marl logla("basladi");               // başlat ve bırak
+
+    list<task<int64>> isler = [];
+    for k in 0 .. 8 { push(isler, marl parca(k * 1000, (k + 1) * 1000)); }
+    int64 toplam = 0;
+    for g in isler { toplam = toplam + await(g); }
+    free(isler);
+
+    print(await(t), toplam);
+}
+```
+
+- `marl f(a, b)` f'yi yeni bir görevde başlatır ve hemen bir `task<T>` döner (T, f'nin dönüş tipi). Görevler işlemcinin çekirdeklerine dağılır. `await(t)` görev bitene kadar bekler ve sonucunu verir; aynı görev birden çok kez beklenebilir. Deyim olarak yazılan `marl f();` görevi başlatıp bırakır.
+- **`main` bitince program biter;** hâlâ çalışan görevler beklenmez. Sonucu gereken görevi `await` ile bekle.
+- **Argümanlar kopyalanır.** Görev başlamadan sayılar, stringler, matrisler, diziler ve listeler kopyalanır: görev ile onu başlatan aynı listeyi asla görmez. Kopyalar görev bitince kendiliğinden bırakılır (görev listeyi sonuç olarak döndürürse o liste artık sonucundur).
+- **Görev global değişkene yazamaz;** sonucu yalnızca `await` ile verir. Görevin çağırdığı fonksiyonlar da yazamaz. Görevin içinden fonksiyon değeriyle (lambda, fonksiyon değişkeni) çağrılabilecek fonksiyonlar da bu kurala uymalı ve paralel döngü içermemelidir. Derleyici denetler.
+- **`await` içeren bir fonksiyon değer olarak kullanılamaz** (yalnızca adıyla çağrılır). `parallel for` içinde `marl` ve `await` kullanılamaz.
+- `task<T>`'nin sonucu olarak şimdilik sayı, `bool`, `char`, string, fonksiyon, `void` ya da bunların listesi olabilir; struct ve matris sonuçlar sonra. Görev, struct alanında tutulamaz; listede tutulabilir.
+- Görevler MLIR'in `async` dialect'i ile üretilir ve iş parçacığı havuzunda çalışır (paralel döngülerle aynı havuz). Bir görevde başka bir görevi `await` ile beklemek ya da paralel döngü çalıştırmak iş parçacığını tutmaz: derleyici bu fonksiyonları coroutine olarak üretir, bekleme sırasında iş parçacığı başka işe geçer. Bu yüzden havuzdakinden çok daha fazla görev aynı anda bekleyebilir, program kilitlenmez.
 
 **GPU'da çalışan fonksiyonlar (`@GPU`):**
 
@@ -892,7 +1031,7 @@ print("sure:", time() - once, "saniye");
 - `for` döngüsünün değişkeni döngü içinde değiştirilemez; `step` pozitif olmalı.
 - Lambdalar dışarıdaki yerel değişkenleri kullanamaz; gerekeni parametre olarak ver.
 
-**Henüz olmayanlar:** farklı boyut sayıları arasında işlem (matrise vektör eklemek gibi), dilimleme (`m[0]` ile satır almak), eksen boyunca toplam, matris karşılaştırma, global matris, iç içe listeler, global liste, global string, dizi döndüren fonksiyonlar, dizi ve listelerin doğrudan `print` ile yazdırılması, azalan `for` aralıkları, ikili dosyalar.
+**Henüz olmayanlar:** farklı boyut sayıları arasında işlem (matrise vektör eklemek gibi), dilimleme (`m[0]` ile satır almak), eksen boyunca toplam, matris karşılaştırma, global matris, iç içe listeler, global liste, başlangıç değeri verilen global string, dizi döndüren fonksiyonlar, dizi ve listelerin doğrudan `print` ile yazdırılması, azalan `for` aralıkları, ikili dosyalar.
 
 ---
 
@@ -929,6 +1068,8 @@ AST/                Ağaç yapısı ve semantik analiz
   SemaParallel.cpp    Paralel döngülerin güvenlik denetimi
   SemaGpu.cpp         @GPU fonksiyonların kuralları
   SemaStruct.cpp      Struct tipleri, kurucu çağrıları, alan erişimi
+  SemaTask.cpp        Görevler (marl, await): kurallar ve coroutine renklendirmesi
+  SemaBorrow.cpp      Fonksiyona verilen liste literalinin ödünç alınıp alınmadığı
   SemType.h           Çözülmüş tipler
   Builtins.h          Yerleşik fonksiyonların listesi
 
@@ -942,7 +1083,9 @@ MLIRBackend/        AST → MLIR
   MLIRGeneratorMatrix.cpp    matris ifadeleri, füzyon, bellek sahipliği
   MLIRGeneratorStruct.cpp    struct değerleri (alanlarına ayrılarak üretilir)
   MLIRGeneratorList.cpp      liste elemanları ve struct listeleri (alan başına bir liste)
-  MLIRGeneratorString.cpp    stringlerin belleği (başvuru sayımı)
+  MLIRGeneratorString.cpp    stringlerin ve görevlerin belleği (başvuru sayımı)
+  MLIRGeneratorTask.cpp      görevler: marl → async.execute, await, coroutine fonksiyonlar
+  MLIRGeneratorScan.cpp      scan: sorgu satırlarını struct'lara doldurma
   MLIRRuntime.h              runtime kütüphanesine çağrılar
 
 LLVMBackend/        MLIR → çalıştırılabilir dosya
@@ -955,11 +1098,14 @@ runtime/            Derlenen programlara eklenen C kütüphanesi (libmarlinrt.a)
   marlin_rt.c          print, stringler, hata mesajları
   std_*.c             standart kütüphane modüllerinin C ile yazılmış kısmı
   http_parser.*       HTTP/1.1 istek ayrıştırıcısı (soket kullanmaz; std_http.c kullanır)
+  marlin_task.c       görev handle'ı (task<T>): MLIR async çalışma zamanının değerini sarar
+  std_postgres.c      PostgreSQL sürücüsü (libpq), bağlantı havuzu
+  std_sqlite.c        SQLite sürücüsü
 std/                Standart kütüphane modülleri (import std.file → std/file.marl)
 tests/              Test programları ve run.sh
 ```
 
-**Gereksinimler** (WSL içinde kurulu olanlar): LLVM/MLIR 19.1.7 (`/home/emin/llvm-project/build-gpu`; X86 ve NVPTX hedefleriyle derlenmiş), ANTLR 4.10 (`/home/emin/antlr-4.10-complete.jar` ve `libantlr4-runtime-dev`), Java, CMake, bir C/C++ derleyicisi. `@GPU` için ayrıca bir NVIDIA ekran kartı ve CUDA araç takımı (`/usr/local/cuda-12.9`). Bu yollar `CMakeLists.txt` içinde sabit yazılıdır; başka bir makinede derlemek için orada değiştirmek gerekir.
+**Gereksinimler** (WSL içinde kurulu olanlar): LLVM/MLIR 19.1.7 (`/home/emin/llvm-project/build-gpu`; X86 ve NVPTX hedefleriyle derlenmiş), ANTLR 4.10 (`/home/emin/antlr-4.10-complete.jar` ve `libantlr4-runtime-dev`), Java, CMake, bir C/C++ derleyicisi. `@GPU` için ayrıca bir NVIDIA ekran kartı ve CUDA araç takımı (`/usr/local/cuda-12.9`). Veritabanı sürücüleri için `libpq-dev` ve `libsqlite3-dev` (isteğe bağlı; yoksa CMake bunları `~/marlin-deps` altında da arar, bkz. `tests/pg_test_sunucu.sh`). Bu yollar `CMakeLists.txt` içinde sabit yazılıdır; başka bir makinede derlemek için orada değiştirmek gerekir.
 
 
 

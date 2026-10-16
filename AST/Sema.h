@@ -41,6 +41,7 @@ public:
     void visit(ArrayAccessExpr* node) override;
     void visit(FunctionCallExpr* node) override;
     void visit(MemberExpr* node) override;
+    void visit(MarlExpr* node) override;
     void visit(UnaryExpr* node) override;
     void visit(BinaryExpr* node) override;
     void visit(CastExpr* node) override;
@@ -76,6 +77,7 @@ private:
         int module = 0;
         bool isPublic = false;
         bool isExtern = false; // fonksiyon: gövdesi C'de (extern func)
+        int paramIndex = -1;   // parametre: fonksiyondaki sırası
     };
 
     // Açık olan her if ve döngü için bir çerçeve. break/continue/return
@@ -140,6 +142,7 @@ private:
     void collectTopLevel();
     void bindImports();
     std::string linkNameOf(const std::string& name) const; // çözülemezse boş
+    std::string globalLinkName(const std::string& name);   // global struct alanları dahil
     void reportUndefined(const Identifier* ident);
 
     // -----------------------------------------------------------------------
@@ -202,6 +205,8 @@ private:
     void checkCondition(ExprPtr& cond, const char* what);
     void checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
                           const SemType& expected);
+    /// scan(rows): satır kaynağı std.db.Rows; sonuç tipi `expected` (S ya da list<S>).
+    void checkScan(FunctionCallExpr* node, const SemType& expected);
 
     // --- bildirimler ---
     void declareFunction(FunctionDecl* fn);
@@ -245,13 +250,25 @@ private:
         int bodyDepth; // döngü değişkeninin kapsam sırası; daha küçük derinlik = döngü dışı
         std::vector<ParallelAccess> writes, reads;
     };
-    // Bir fonksiyonun paralel döngüden çağrılmaya uygun olup olmadığı.
+    // Bir fonksiyonun (ya da lambdanın) etkileri: paralel döngüden ve
+    // görevden çağrılmaya uygun olup olmadığı. "...Reason" alanları boşsa o
+    // etki yoktur; doluysa sebebini (hata mesajı için) söyler. Program
+    // sonunda çağrı zinciri boyunca yayılırlar.
     struct FunctionEffects {
-        std::string unsafeReason;          // boşsa güvenli (şimdilik)
+        std::string unsafeReason;          // paylaşılan veriyi değiştiriyor (paralel döngü kuralları)
         std::vector<std::string> callees;  // doğrudan çağırdığı fonksiyonlar
         // Boş değilse fonksiyon GPU'ya iş verir (bkz. GPU kuralları, kural 5);
         // paralel döngünün içinden çağrılamaz.
         std::string gpuWorkReason;
+        // Görevler (bkz. SemaTask.cpp):
+        std::string globalWriteReason;     // global değişkene yazıyor
+        std::string awaitReason;           // await ile bekliyor
+        std::string parallelReason;        // CPU'da paralel döngü çalıştırıyor (o da bekler)
+        struct IndirectCall {
+            SemType type;       // çağrılan fonksiyon değerinin tipi
+            const ASTNode* at;
+        };
+        std::vector<IndirectCall> indirectCalls;  // fonksiyon değeri üzerinden çağrılar
     };
     struct ParallelCall {
         std::string callee;
@@ -259,9 +276,9 @@ private:
     };
 
     std::vector<ParallelLoop> parallelLoops;                  // içinde bulunulan paralel döngüler
-    std::unordered_map<std::string, FunctionEffects> effects; // fonksiyon adı → etkileri
+    // fonksiyon adı → etkileri. Lambdalar da burada, lambdaKey adıyla durur.
+    std::unordered_map<std::string, FunctionEffects> effects;
     FunctionEffects* currentEffects = nullptr;                // denetlenmekte olan fonksiyonunki
-    FunctionEffects lambdaEffects;                            // lambdalar için (kullanılmaz)
     std::vector<ParallelCall> parallelCalls;                  // paralel döngülerden yapılan çağrılar
     bool skipWholeRead = false;    // sıradaki Identifier bir indekslemenin/atamanın hedefi
     bool accessIsWrite = false;    // sıradaki ArrayAccessExpr bir atamanın hedefi
@@ -278,6 +295,94 @@ private:
     void noteCall(FunctionCallExpr* call);
     void finishParallelLoop(ParallelLoop& loop);
     void checkParallelCalls();
+
+    // -----------------------------------------------------------------------
+    // Görevler: marl, task<T>, await (SemaTask.cpp)
+    //
+    // `marl f(a, b)` f'yi iş parçacığı havuzunda yeni bir görev olarak
+    // başlatır ve task<T> döner; `await(t)` görevin bitmesini bekleyip sonucu
+    // verir. Kurallar:
+    //
+    //   1. Argümanlar görev başlamadan KOPYALANIR (liste ve dizi dahil);
+    //      görev ile çağıran aynı listeyi asla görmez.
+    //   2. Görev olarak çalışan fonksiyon ve çağırdıkları global değişkene
+    //      yazamaz. Sonuç yalnızca await ile alınır.
+    //   3. Görevin içinden fonksiyon değeriyle (dolaylı) çağrılabilecek her
+    //      fonksiyon da kural 2'ye uymalı ve paralel döngü içermemelidir.
+    //   4. await içeren (bekleyebilen) bir fonksiyon değer olarak kullanılamaz.
+    //   5. paralel döngüde marl ve await kullanılamaz.
+    //
+    // RENKLENDİRME
+    //
+    // İş parçacığı havuzu sabit boyutludur. Havuzdaki bir iş parçacığı başka
+    // bir görevi BLOKLAYARAK beklerse, bekleyenler havuzu doldurup beklenenleri
+    // kuyrukta bırakabilir: program kilitlenir. Bu yüzden bir görevden
+    // ulaşılabilen ve bekleyebilen (await ya da CPU paralel döngüsü içeren)
+    // fonksiyonlar coroutine olarak üretilir (FunctionDecl::isAsync →
+    // async.func): beklerken iş parçacığını bırakır, beklenen bitince devam
+    // eder. Kullanıcı bunu görmez; görevlerden ulaşılmayan fonksiyonlar (ve
+    // main) olduğu gibi kalır, onlarda await yalnızca kendi iş parçacığını
+    // bekletir.
+    // -----------------------------------------------------------------------
+    struct TaskStart {
+        std::string callee;   // doğrudan: fonksiyonun adı; dolaylıysa boş
+        SemType valueType;    // dolaylı: çağrılan fonksiyon değerinin tipi
+        const ASTNode* at;
+        std::string owner;    // marl'ın yazıldığı fonksiyon (ya da lambdaKey)
+    };
+    // Değer olarak kullanılan bir fonksiyon ya da lambda: dolaylı çağrıların
+    // hangi fonksiyonlara gidebileceği bunlardan (tipi aynı olanlar) çıkarılır.
+    struct ValueFunction {
+        std::string name;     // fonksiyonun adı ya da lambdaKey
+        SemType type;
+        const ASTNode* at;
+        bool isLambda;
+        std::string owner;    // değer olarak kullanıldığı fonksiyon
+    };
+    // Denetlenmekte olan fonksiyonun adı (lambdada lambdaKey).
+    std::string currentFunction;
+    std::vector<TaskStart> taskStarts;
+    std::vector<ValueFunction> valueFunctions;
+    std::unordered_map<std::string, FunctionDecl*> functionDecls; // ad → bildirim
+    FunctionCallExpr* startingTask = nullptr; // denetlenmekte olan marl çağrısı
+
+    static std::string lambdaKey(const LambdaExpr* lambda);
+    static bool taskResultAllowed(const SemType& type);
+    static bool taskArgumentAllowed(const SemType& type);
+    void noteGlobalWrite(const std::string& name);
+    void noteValueFunction(const std::string& name, const SemType& type, const ASTNode* at,
+                           bool isLambda);
+    void checkAwait(FunctionCallExpr* node);
+    void checkTasks();
+
+    // -----------------------------------------------------------------------
+    // Liste literallerinin bırakılması (SemaBorrow.cpp)
+    //
+    // Listeler elle bırakılır; ama fonksiyona doğrudan verilen bir literalin
+    // (f([1, 2, 3])) adı yoktur, kimse free edemez. Çağrılan fonksiyon o
+    // parametreyi yalnızca ÖDÜNÇ alıyorsa literal deyim bitince bırakılır
+    // (ListLiteral::freeAfterCall). Ödünç almak: parametre yalnızca
+    // indekslenir, üzerinde dönülür, uzunluğu sorulur ya da yine ödünç alan
+    // bir parametreye verilir; saklanmaz, döndürülmez, free edilmez.
+    // Kanıtlanamazsa (dolaylı çağrı, parametrenin başka kullanımı) literal
+    // bırakılmaz.
+    // -----------------------------------------------------------------------
+    struct ListParamUse {
+        bool escapes = false;                              // ödünç almanın dışında kullanıldı
+        std::vector<std::pair<std::string, int>> passes;  // (fonksiyon, parametre) olarak verildi
+    };
+    std::unordered_map<std::string, std::unordered_map<int, ListParamUse>> listParamUses;
+    struct LiteralArgument {
+        ListLiteral* literal;
+        std::string callee;
+        int index;
+    };
+    std::vector<LiteralArgument> literalArguments;
+    std::pair<std::string, int> argumentContext{"", -1}; // sıradaki Identifier bir çağrının argümanı
+    bool identIsIterated = false;                        // sıradaki Identifier for ... in'in koleksiyonu
+
+    void noteListParamUse(const Identifier* ident, const Symbol& sym, bool borrowed);
+    void markTemporaryListArguments();
 
     // -----------------------------------------------------------------------
     // @GPU fonksiyonların kuralları (SemaGpu.cpp)

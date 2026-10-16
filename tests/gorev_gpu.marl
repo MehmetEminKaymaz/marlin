@@ -1,0 +1,26 @@
+// Görevlerden @GPU fonksiyon çağırmak: dört görev aynı anda GPU'ya iş verir.
+// output: 0 4096.0
+// output: 1 8192.0
+// output: 2 12288.0
+// output: 3 16384.0
+
+@GPU
+func olcekli_toplam(matrix<float64> a, float64 k) -> float64 {
+    return sum(a * k);
+}
+
+func is(int k) -> float64 {
+    matrix<float64> a = ones(64, 64);
+    return olcekli_toplam(a, k + 1.0);
+}
+
+func main() -> void {
+    list<task<float64>> isler = [];
+    for k in 0 .. 4 {
+        push(isler, marl is(k));
+    }
+    for k in 0 .. 4 {
+        print(k, await(isler[k]));
+    }
+    free(isler);
+}

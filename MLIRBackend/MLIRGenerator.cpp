@@ -5,6 +5,7 @@
 #include "MLIRGenerator.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -76,6 +77,15 @@ void MLIRGenerator::declareFunctionSignature(FunctionDecl* node) {
         return;
     }
 
+    // Görevden ulaşılan ve bekleyebilen fonksiyon coroutine olur (bkz.
+    // MLIRGeneratorTask.cpp).
+    if (node->isAsync) {
+        usesTasks = true;
+        ctx.builder.create<mlir::async::FuncOp>(locOf(node), node->name,
+                                                typeManager.convertAsyncFunction(node->fnType));
+        return;
+    }
+
     auto funcType = typeManager.convertFunction(node->fnType);
     auto funcOp = ctx.builder.create<mlir::func::FuncOp>(locOf(node), node->name, funcType);
     if (!targetsGpu(node)) return;
@@ -89,13 +99,17 @@ void MLIRGenerator::declareFunctionSignature(FunctionDecl* node) {
 }
 
 void MLIRGenerator::visit(FunctionDecl* node) {
-    // FuncOp, Program ziyaretinin 1. geçişinde oluşturuldu; burada gövdesi doldurulur.
-    auto funcOp = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(node->name);
+    // Fonksiyon, Program ziyaretinin 1. geçişinde oluşturuldu; burada gövdesi
+    // doldurulur. (func.func ya da coroutine ise async.func)
+    auto funcOp = mlir::dyn_cast_or_null<mlir::FunctionOpInterface>(
+        ctx.theModule.lookupSymbol(node->name));
     assert(funcOp && "fonksiyon imzasi 1. geciste olusturulmus olmali");
 
     ctx.onDevice = targetsGpu(node);
+    emittingMain = node->name == "main";
     emitFunctionBody(funcOp, node->fnType, node->params, locOf(node),
                      [&] { node->body->accept(*this); });
+    emittingMain = false;
     ctx.onDevice = false;
 
     if (targetsGpu(node) && node->hasMatrixSignature())
@@ -152,12 +166,18 @@ void MLIRGenerator::emitHostEntry(FunctionDecl* node) {
     ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange(result));
 }
 
-void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& fnType,
+void MLIRGenerator::emitFunctionBody(mlir::FunctionOpInterface funcOp, const SemType& fnType,
                                      const std::vector<std::unique_ptr<ParamDecl>>& params,
                                      mlir::Location loc, llvm::function_ref<void()> emitBody) {
     mlir::OpBuilder::InsertionGuard guard(ctx.builder);
     mlir::Block* entryBlock = funcOp.addEntryBlock();
     ctx.builder.setInsertionPointToEnd(entryBlock);
+    const bool savedAsync = emittingAsync;
+    emittingAsync = mlir::isa<mlir::async::FuncOp>(funcOp.getOperation());
+    const bool savedHeapLocals = ctx.heapLocals;
+    auto savedHeapLocalValues = std::move(ctx.heapLocalValues);
+    ctx.heapLocals = emittingAsync;
+    ctx.heapLocalValues.clear();
 
     // Fonksiyona özgü durum: iç içe üretilen bir lambda, dıştaki fonksiyonun
     // değişkenlerini, döngülerini ya da giriş bloğunu görmemeli.
@@ -196,8 +216,8 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
             }
             mlir::Value storage = createStorage(leaf.type, loc);
             storeTo(arg, storage, leaf.type, loc);
-            if (leaf.type.isString()) {
-                retainString(arg, loc);
+            if (isHandle(leaf.type)) {
+                retainHandle(arg, leaf.type, loc);
                 ownedScopes.back().push_back({storage, leaf.type});
             }
             scopeManager.declareVariable(leaf.path, storage);
@@ -212,7 +232,7 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
     if (!MLIRControlFlowManager::isTerminated(ctx.builder.getInsertionBlock())) {
         if (fnType.returnType().isVoid()) {
             freeScopes(0, loc);
-            ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange());
+            emitReturnOp({}, loc);
         } else
             // Sema her yolun return ettiğini doğruladı; buraya gelinemez.
             ctx.builder.create<mlir::LLVM::UnreachableOp>(loc);
@@ -226,6 +246,9 @@ void MLIRGenerator::emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& f
     cfManager.leaveFunction(std::move(savedFlow));
     ctx.allocaBlock = savedAllocaBlock;
     ctx.symbolTable = std::move(savedSymbols);
+    emittingAsync = savedAsync;
+    ctx.heapLocals = savedHeapLocals;
+    ctx.heapLocalValues = std::move(savedHeapLocalValues);
 }
 
 // ===========================================================================
@@ -278,6 +301,17 @@ mlir::Attribute MLIRGenerator::constantAttr(Expression* expr, const SemType& typ
 // (initial_value'suz bir memref.global dış bildirim sayılırdı).
 void MLIRGenerator::emitGlobalVariable(VariableDecl* node) {
     const SemType& type = node->varType;
+    // Struct: her yaprağı ayrı bir global ("havuz.hata"); hepsi sıfırla başlar.
+    if (type.isStruct()) {
+        for (const SemLeaf& leaf : leavesOf(type, node->name))
+            emitZeroGlobal(leaf.path, leaf.type, locOf(node));
+        return;
+    }
+    // String: boş string (0 adresi) ile başlar.
+    if (type.isString()) {
+        emitZeroGlobal(node->name, type, locOf(node));
+        return;
+    }
     mlir::MemRefType memRefType = type.isArray()
         ? mlir::cast<mlir::MemRefType>(typeManager.convert(type))
         : mlir::MemRefType::get({}, typeManager.convert(type));
@@ -301,6 +335,18 @@ void MLIRGenerator::emitGlobalVariable(VariableDecl* node) {
         initAttr,
         /*constant=*/false,
         /*alignment=*/nullptr);
+}
+
+void MLIRGenerator::emitZeroGlobal(const std::string& name, const SemType& type,
+                                   mlir::Location loc) {
+    auto memRefType = mlir::MemRefType::get({}, typeManager.convert(type));
+    auto tensorType = mlir::RankedTensorType::get({}, memRefType.getElementType());
+    mlir::OpBuilder::InsertionGuard guard(ctx.builder);
+    ctx.builder.setInsertionPointToEnd(ctx.theModule.getBody());
+    ctx.builder.create<mlir::memref::GlobalOp>(loc, name, ctx.builder.getStringAttr("private"),
+                                               memRefType, ctx.builder.getZeroAttr(tensorType),
+                                               /*constant=*/false, /*alignment=*/nullptr);
+    if (type.isString()) globalStrings.push_back(name);
 }
 
 mlir::Value MLIRGenerator::emitGlobalRef(const std::string& name, mlir::Location loc) {

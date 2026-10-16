@@ -8,7 +8,9 @@
 // Argümanlar bilerek en az 32 bit genişliğindedir: daha dar tamsayıların
 // çağrı sırasında nasıl genişletileceği platforma bağlıdır.
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE // getline, flockfile
+#endif
 
 #include "marlin_rt.h"
 
@@ -222,10 +224,23 @@ static const char* str_data(int64_t handle) { return handle ? str_of(handle)->da
 // (testler sızıntıyı böyle yakalar; bkz. tests/run.sh).
 static int64_t live_strings = 0;
 
-__attribute__((destructor)) static void report_live_strings(void) {
+static void report_live_strings(void) {
     if (!getenv("MARLIN_STRING_CHECK")) return;
     const int64_t live = __atomic_load_n(&live_strings, __ATOMIC_RELAXED);
     if (live != 0) fprintf(stderr, "string denetimi: %lld string birakilmadi\n", (long long)live);
+}
+
+__attribute__((destructor)) static void report_at_exit(void) { report_live_strings(); }
+
+// Görev başlatan programlarda main bittiğinde süreç buradan kapanır: hâlâ
+// çalışan görevler beklenmez (bkz. LLVMBackend/LLVMLowering.cpp, wrapMain).
+// Sıradan çıkış (exit) kapanış kodlarını çalıştırırdı; görevlerin iş
+// parçacığı havuzu orada kuyruktaki bütün görevlerin bitmesini bekler.
+void marlin_rt_exit(int32_t code) {
+    report_live_strings();
+    fflush(stdout);
+    fflush(stderr);
+    _exit(code);
 }
 
 // `length` baytlık yeni bir string ayırır; içeriğini çağıran doldurur.
@@ -357,6 +372,31 @@ double marlin_str_to_f64(int64_t s, int32_t line) {
     const double value = strtod(text, &end);
     if (end == text || !rest_is_blank(end)) panic_number(s, line, "sayi");
     return value;
+}
+
+// --- scan: satırları struct'a doldurma (bkz. MLIRBackend/MLIRGeneratorScan.cpp) ---
+
+// Veritabanlarının bool yazımları: PostgreSQL "t" / "f", SQLite 1 / 0.
+int32_t marlin_str_to_bool(int64_t s, int32_t line) {
+    const char* text = str_data(s);
+    if (!strcmp(text, "t") || !strcmp(text, "true") || !strcmp(text, "1")) return 1;
+    if (!strcmp(text, "f") || !strcmp(text, "false") || !strcmp(text, "0")) return 0;
+    panic_number(s, line, "bool (t/f, true/false, 1/0)");
+    return 0;
+}
+
+void marlin_panic_no_column(int64_t name, int32_t line) {
+    begin_panic();
+    fprintf(stderr, "calisma zamani hatasi (satir %d): sorgu sonucunda '%s' adinda bir sutun yok\n",
+            (int)line, str_data(name));
+    fail();
+}
+
+void marlin_panic_no_row(int32_t line) {
+    begin_panic();
+    fprintf(stderr, "calisma zamani hatasi (satir %d): sorgu sonucu bos; tek satir okunamadi "
+                    "(birden cok satir icin: list<...> l = scan(...))\n", (int)line);
+    fail();
 }
 
 // --- standart kütüphane dosyalarının (std_*.c) kullandığı yardımcılar ---

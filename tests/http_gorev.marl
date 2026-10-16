@@ -1,0 +1,69 @@
+// std.http ile görevler: her istek ayrı bir görevde (marl) yanıtlanır.
+// İstek ve rota listesi göreve kopyalanır; görev bitince kopyalar bırakılır.
+// leaks: 0
+// output: hazir
+// output: bitti
+// http: 18473
+// send: GET /kare?n=12 HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 4
+// reply: Connection: close
+// reply:
+// reply: 144
+// send: GET /selam HTTP/1.1\r\nHost: a\r\nX-Ad: Ayse\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 13
+// reply: Connection: close
+// reply:
+// reply: merhaba Ayse
+// send: GET /yok HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 404 Not Found
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 10
+// reply: Connection: close
+// reply:
+// reply: Not Found
+
+import std.http as http;
+
+func kare(http.Request req) -> http.Response {
+    int64 n = to_int(http.query_param(req, "n"));
+    return http.text(200, str(n * n) + "\n");
+}
+
+func selam(http.Request req) -> http.Response {
+    return http.text(200, "merhaba " + http.header(req, "x-ad") + "\n");
+}
+
+func cevapla(http.Request req, list<http.Route> rotalar) -> void {
+    http.respond(req, http.dispatch(rotalar, req));
+}
+
+func main() -> void {
+    list<http.Route> rotalar = [];
+    push(rotalar, http.get("/kare", kare));
+    push(rotalar, http.get("/selam", selam));
+
+    http.Server s = http.listen(18473);
+    if !s.ok {
+        print(s.error);
+        return;
+    }
+    print("hazir");
+
+    list<task<void>> isler = [];
+    for i in 0 .. 3 {
+        http.Request req = http.next(s);
+        push(isler, marl cevapla(req, rotalar));
+        free(req.headers);
+    }
+    for t in isler {
+        await(t);
+    }
+    free(isler);
+    http.close(s);
+    free(rotalar);
+    print("bitti");
+}

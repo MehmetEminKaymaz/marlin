@@ -42,9 +42,11 @@ public:
     /// zamanı da bağlanır.
     /// `needsGpu`: program GPU'da çalışan kod içeriyor; GPU çalışma zamanı da
     /// bağlanır.
+    /// `extraLibs`: programın kullandığı standart kütüphane modüllerinin dış C
+    /// kütüphaneleri (tam yol; ör. libpq).
     static bool link(const std::string& objectPath, const std::string& runtimeLib,
                      const std::string& exePath, bool needsThreads, bool needsGpu,
-                     std::string& error);
+                     const std::vector<std::string>& extraLibs, std::string& error);
 
     /// libmarlinrt.a'nın yolunu bulur: önce MARLIN_RUNTIME ortam değişkeni, sonra
     /// derleyicinin yanındaki dosya, en son derleme sırasında gömülen yol.

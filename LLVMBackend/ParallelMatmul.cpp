@@ -14,6 +14,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;
@@ -192,7 +193,8 @@ public:
     }
 
     void runOnOperation() override {
-        for (func::FuncOp function : getOperation().getOps<func::FuncOp>()) {
+        // func.func ve görevlerden çağrılan coroutine fonksiyonlar (async.func).
+        for (FunctionOpInterface function : getOperation().getOps<FunctionOpInterface>()) {
             if (function.isExternal() || function->hasAttr(kGpuFunctionAttr)) continue;
 
             llvm::SmallVector<linalg::MatmulOp, 4> products;

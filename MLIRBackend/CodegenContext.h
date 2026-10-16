@@ -51,11 +51,24 @@ struct CodegenContext {
     // koyar. Döngü gövdesinde üretilen bir alloca her yinelemede yığıtı
     // büyütürdü; ayrıca tek bloklu scf bölgelerinin içinden de her zaman
     // erişilebilir (giriş bloğu her şeye hâkimdir).
+    //
+    // Coroutine fonksiyonda (async.func; bkz. MLIRGeneratorTask.cpp) yer
+    // yığıtta değil yığın belleğinde ayrılır (`heapLocals`): async.func bir
+    // otomatik bellek kapsamı değildir, ayrıca değişkenleri askıya alma
+    // noktaları boyunca yaşamalıdır. Bu yerler fonksiyon dönerken bırakılır
+    // (bkz. MLIRGenerator::emitReturnOp).
     mlir::Value createEntryAlloca(mlir::Location loc, mlir::MemRefType type) {
         mlir::OpBuilder::InsertionGuard guard(builder);
         builder.setInsertionPointToStart(allocaBlock);
+        if (heapLocals) {
+            mlir::Value local = builder.create<mlir::memref::AllocOp>(loc, type);
+            heapLocalValues.push_back(local);
+            return local;
+        }
         return builder.create<mlir::memref::AllocaOp>(loc, type);
     }
+    bool heapLocals = false;
+    std::vector<mlir::Value> heapLocalValues;
 };
 
 #endif //CODEGENCONTEXT_H

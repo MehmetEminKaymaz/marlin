@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include <string>
 #include <unordered_map>
 
@@ -38,7 +39,7 @@
 //   MLIRMatrixManager       matrix<T>: tensor üzerinde işlemler, eleman erişimi
 //   MLIRRuntime             çalışma zamanı kütüphanesine çağrılar
 //
-// Uygulama yedi dosyaya bölünmüştür:
+// Uygulama sekiz dosyaya bölünmüştür:
 //   MLIRGenerator.cpp        program, fonksiyonlar, globaller, bellek yardımcıları
 //   MLIRGeneratorExpr.cpp    ifadeler
 //   MLIRGeneratorStmt.cpp    deyimler
@@ -46,6 +47,7 @@
 //   MLIRGeneratorStruct.cpp  struct değerleri: oluşturma, kopyalama, alan erişimi
 //   MLIRGeneratorList.cpp    liste elemanları: push / pop / free, struct listesi
 //   MLIRGeneratorString.cpp  stringlerin belleği: başvuru sayımı
+//   MLIRGeneratorTask.cpp    görevler: marl, await, coroutine fonksiyonlar
 //
 // Değerlerin gösterimi:
 //   sayısal / bool / char  → SSA değeri; değişkense memref<T> yuvasında
@@ -68,7 +70,10 @@
 //   struct listesi         → o da yapraklarına ayrılır: list<Nokta> l, alan
 //                            başına bir listedir ("l.x", "l.y")
 //                            (bkz. MLIRGeneratorList.cpp)
-//   fonksiyon / lambda     → fonksiyon tipli SSA değeri (func.constant)
+//   fonksiyon / lambda     → i64: fonksiyonun adresi (skaler gibi saklanır;
+//                            bkz. functionAddress)
+//   görev task<T>          → i64: runtime'daki görev nesnesinin adresi
+//                            (string gibi başvuru sayılır; bkz. MLIRGeneratorTask.cpp)
 //
 // GPU
 //
@@ -105,6 +110,10 @@ class MLIRGenerator : public ASTVisitor {
     int         lambdaCounter      = 0;
     bool        usesParallel       = false;
     bool        usesGpu            = false;
+    bool        usesTasks          = false;
+    // Üretilmekte olan fonksiyon bir coroutine (async.func) mu? main mi?
+    bool        emittingAsync      = false;
+    bool        emittingMain       = false;
     // Programdaki fonksiyonlar (çağrı üretilirken hedefleri buradan okunur).
     std::unordered_map<std::string, FunctionDecl*> functions;
     // Derlenen program; konum bilgisine dosya adını yazmak için.
@@ -146,7 +155,10 @@ public:
     /// Program CPU'da paralel çalışan kod (`parallel for` ya da matris çarpımı)
     /// içeriyor mu? (İçeriyorsa çalıştırılabilir dosyaya iş parçacığı çalışma
     /// zamanı da bağlanmalıdır.)
-    bool usesParallelLoops() const { return usesParallel; }
+    bool usesParallelLoops() const { return usesParallel || usesTasks; }
+    /// Program `marl` ile görev başlatıyor mu? (Başlatıyorsa main bittiğinde
+    /// süreç, çalışan görevleri beklemeden kapanmalıdır; bkz. LLVMLowering.)
+    bool usesTaskCode() const { return usesTasks; }
 
     /// @GPU fonksiyonlar GPU için mi üretilsin? (Varsayılan: evet.)
     void setGpuEnabled(bool enabled) { ctx.gpuEnabled = enabled; }
@@ -168,6 +180,7 @@ public:
     void visit(ArrayAccessExpr* node) override;
     void visit(FunctionCallExpr* node) override;
     void visit(MemberExpr* node) override;
+    void visit(MarlExpr* node) override;
     void visit(UnaryExpr* node) override;
     void visit(BinaryExpr* node) override;
     void visit(CastExpr* node) override;
@@ -207,11 +220,17 @@ private:
     static std::string hostEntryName(const std::string& name) { return name + ".host"; }
     void emitHostEntry(FunctionDecl* node);
     void emitGlobalVariable(VariableDecl* node);
+    /// Sıfırla başlayan tek değerlik global (struct yaprağı, string).
+    void emitZeroGlobal(const std::string& name, const SemType& type, mlir::Location loc);
+    /// String tutan globaller: main dönerken bırakılırlar.
+    std::vector<std::string> globalStrings;
     /// Fonksiyon ve lambdaların ortak gövde üretimi: giriş bloğu, parametreler,
     /// fonksiyona özgü durumun (kapsam, döngü yığını) kurulup geri alınması.
-    void emitFunctionBody(mlir::func::FuncOp funcOp, const SemType& fnType,
+    void emitFunctionBody(mlir::FunctionOpInterface funcOp, const SemType& fnType,
                           const std::vector<std::unique_ptr<ParamDecl>>& params,
                           mlir::Location loc, llvm::function_ref<void()> emitBody);
+    /// func.return ya da (coroutine'de) async.return.
+    void emitReturnOp(mlir::ValueRange values, mlir::Location loc);
     mlir::Value emitGlobalRef(const std::string& name, mlir::Location loc);
     mlir::Attribute constantAttr(Expression* expr, const SemType& type);
 
@@ -257,18 +276,28 @@ private:
     /// İsim, bu fonksiyonda tanımlı (sahibi olduğumuz) bir matris değişkeniyse yuvası.
     mlir::Value ownedMatrixSlot(Expression* expr);
 
-    // --- Stringler: başvuru sayımı (MLIRGeneratorString.cpp) ---
-    /// Tip string ya da string dizisi mi? (Bırakılması gereken değerler.)
+    // --- Stringler ve görevler: başvuru sayımı (MLIRGeneratorString.cpp) ---
+    //
+    // String ve task<T> değerleri, çalışma zamanındaki başvuru sayılan bir
+    // nesnenin adresidir (i64). Sahiplik kuralları ikisinde aynıdır; yalnızca
+    // sayacı değiştiren runtime fonksiyonları farklıdır. Aşağıdaki "handle"
+    // yardımcıları ikisi için de çalışır.
+    static bool isHandle(const SemType& type) { return type.isString() || type.isTask(); }
+    /// Bırakılması gereken bir handle ya da string dizisi mi?
     static bool holdsStrings(const SemType& type) {
-        return type.isString() || (type.isArray() && type.elementType().isString());
+        return isHandle(type) || (type.isArray() && type.elementType().isString());
     }
     void retainString(mlir::Value value, mlir::Location loc);
     void releaseString(mlir::Value value, mlir::Location loc);
+    void retainHandle(mlir::Value value, const SemType& type, mlir::Location loc);
+    void releaseHandle(mlir::Value value, const SemType& type, mlir::Location loc);
     /// Yeni üretilmiş (başvurusu bu deyime ait) stringi geçici olarak kaydeder.
     mlir::Value stringResult(mlir::Value value);
+    mlir::Value handleResult(mlir::Value value, const SemType& type);
     /// Stringi saklamak üzere sahiplenir: deyimin geçicisiyse başvurusunu
     /// devralır, başkasınınsa sayacını artırır.
     mlir::Value ownString(mlir::Value value, mlir::Location loc);
+    mlir::Value ownHandle(mlir::Value value, const SemType& type, mlir::Location loc);
     /// Diziyi kopyalar. String dizisinde her elemanın sayacı artar;
     /// `releaseOld`: hedefin eski elemanları bırakılır (hedef başlatılmışsa).
     void copyArray(mlir::Value source, mlir::Value target, const SemType& type, bool releaseOld,
@@ -306,6 +335,10 @@ private:
     void emitListPush(FunctionCallExpr* node);
     Values emitListPop(FunctionCallExpr* node);
     void emitListFree(FunctionCallExpr* node);
+    void freeListValue(mlir::Value cell, const SemType& listType, mlir::Location loc);
+    /// Fonksiyona doğrudan verilen ve ödünç alınan liste literalini (Sema:
+    /// ListLiteral::freeAfterCall) deyim sonunda bırakılmak üzere kaydeder.
+    void ownTemporaryList(Expression* arg, const Values& cells);
     /// liste[i] = ...;   liste[i].alan = ...;
     void assignElement(AssignmentStmt* node);
     /// for p in liste — elemanı struct olan liste üzerinde.
@@ -320,6 +353,33 @@ private:
     /// Kullanıcı fonksiyonuna çağrıyı üretir. Sonuçlar: dönüş tipinin yaprakları
     /// sırasıyla (struct değilse tek değer, void ise boş).
     Values emitCall(FunctionCallExpr* node);
+    /// Argümanları hazır çağrının kendisi (func.call / async.call /
+    /// call_indirect). `calleeValue`: dolaylı çağrıda fonksiyonun adresi.
+    /// Sonuçlar ham haliyle döner; geçici kaydı (stringResult ...) çağıranın işidir.
+    Values emitCallOp(FunctionCallExpr* node, mlir::Value calleeValue,
+                      llvm::ArrayRef<mlir::Value> args, mlir::Location loc);
+
+    // --- scan (MLIRGeneratorScan.cpp) ---
+    /// scan(rows): satırları struct'a / struct listesine doldurur; yapraklar döner.
+    Values emitScan(FunctionCallExpr* node);
+    /// Fonksiyon değerini (adres, i64) çağırır; tek sonucu döner (void ise boş).
+    mlir::Value callFunctionValue(mlir::Value function, const SemType& type,
+                                  llvm::ArrayRef<mlir::Value> args, mlir::Location loc);
+
+    // --- Görevler (MLIRGeneratorTask.cpp) ---
+    /// await(t)
+    void emitAwait(FunctionCallExpr* node);
+    /// Görevin kullanacağı, ona ait kopya (bkz. Sema.h, görev kuralı 1).
+    mlir::Value copyForTask(mlir::Value value, const SemType& type, int line, mlir::Location loc);
+    /// Görev bitince kopyayı bırakır.
+    void releaseTaskCopy(mlir::Value copy, const SemType& type, mlir::Location loc);
+    /// list<T>'nin yeni (elemanları kopyalanmış) bir kopyası.
+    mlir::Value cloneList(mlir::Value list, const SemType& listType, mlir::Location loc);
+    /// Runtime'daki görev fonksiyonunun, `asyncType` için bildirilmiş adı
+    /// (bkz. MLIRGeneratorTask.cpp, "Tipli köprüler").
+    std::string taskBridge(llvm::StringRef base, mlir::Type asyncType);
+    llvm::DenseMap<mlir::Type, unsigned> taskBridgeIds;
+    int taskBodyCounter = 0;
     /// `symbol` adlı fonksiyonun değer olarak kullanımı: adresi (i64).
     mlir::Value functionAddress(const std::string& symbol, const SemType& type, mlir::Location loc);
     /// extern fonksiyona (çalışma zamanı kütüphanesindeki C fonksiyonuna) çağrı.

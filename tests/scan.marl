@@ -1,0 +1,80 @@
+// scan: satır kaynağının (std.db.Rows) satırlarını struct'lara doldurma.
+// Veritabanı yerine bellekteki sahte bir tablo kullanılır:
+//
+//   id | ad     | yas | aktif | puan
+//   1  | Ayse   | 20  | t     | 1.5
+//   2  | Mehmet | 25  | f     | 2.5
+//   3  | NULL   | 30  | t     | NULL
+//
+// leaks: 0
+// output: 1 [Ayse] 20 true 1.5
+// output: 2 [Mehmet] 25 false 2.5
+// output: 3 [] 30 true 0.0
+// output: ilk: Ayse 20
+// output: 1 Ayse
+
+import std.db as db;
+
+struct Kisi {
+    int64 id;
+    string ad;
+    int yas;
+    bool aktif;
+    float64 puan;
+}
+
+// Sütun sırası ve alanların sırası farklı olabilir: eşleme adla yapılır.
+struct Kisa {
+    string ad;
+    int id;
+}
+
+func satir_sayisi(int64 h) -> int64 {
+    return 3;
+}
+
+func sutun(int64 h, string ad) -> int64 {
+    if ad == "id" { return 0; }
+    if ad == "ad" { return 1; }
+    if ad == "yas" { return 2; }
+    if ad == "aktif" { return 3; }
+    if ad == "puan" { return 4; }
+    return -1;
+}
+
+func metin(int64 h, int64 satir, int64 sutun) -> string {
+    if sutun == 0 { return str(satir + 1); }
+    if sutun == 1 {
+        if satir == 0 { return "Ayse"; }
+        if satir == 1 { return "Mehmet"; }
+        return "";
+    }
+    if sutun == 2 { return str(20 + satir * 5); }
+    if sutun == 3 {
+        if satir == 1 { return "f"; }
+        return "t";
+    }
+    if satir == 2 { return ""; }
+    return str(satir + 1.5);
+}
+
+func bos_mu(int64 h, int64 satir, int64 sutun) -> bool {
+    return satir == 2 && (sutun == 1 || sutun == 4);
+}
+
+func main() -> void {
+    db.Rows tablo = db.Rows(0, satir_sayisi, sutun, metin, bos_mu);
+
+    list<Kisi> hepsi = scan(tablo);
+    for k in hepsi {
+        print(k.id, "[" + k.ad + "]", k.yas, k.aktif, k.puan);
+    }
+    free(hepsi);
+
+    Kisi ilk = scan(tablo);
+    print("ilk:", ilk.ad, ilk.yas);
+
+    list<Kisa> kisalar = scan(tablo);
+    print(kisalar[0].id, kisalar[0].ad);
+    free(kisalar);
+}

@@ -4,6 +4,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -245,18 +246,38 @@ MLIRGenerator::Values MLIRGenerator::emitCall(FunctionCallExpr* node) {
     // Struct argüman yaprak yaprak verilir; her yaprak kendi tipinin kuralıyla.
     llvm::SmallVector<mlir::Value, 4> args;
     for (auto& argExpr : node->arguments) {
+        auto* literal = dynamic_cast<ListLiteral*>(argExpr.get());
         if (argExpr->type.isComposite()) {
             Values values = emitLeaves(argExpr.get());
             const std::vector<SemLeaf> leaves = leavesOf(argExpr->type);
             for (size_t i = 0; i < leaves.size(); ++i)
                 args.push_back(leaves[i].type.isMatrix() ? matrixManager.toBuffer(values[i], loc)
                                                          : values[i]);
+            if (literal && literal->freeAfterCall) ownTemporaryList(literal, values);
             continue;
         }
         mlir::Value arg = emitExpr(argExpr.get());
         if (argExpr->type.isMatrix()) arg = matrixManager.toBuffer(arg, loc);
+        if (literal && literal->freeAfterCall) ownTemporaryList(literal, {arg});
         args.push_back(arg);
     }
+
+    Values results = emitCallOp(node, calleeValue, args, loc);
+    const std::vector<SemLeaf> resultLeaves = leavesOf(node->type);
+    for (size_t i = 0; i < resultLeaves.size(); ++i) {
+        const SemType& type = resultLeaves[i].type;
+        // Dönen string ve görevlerin başvurusu artık bu deyimindir.
+        if (isHandle(type)) handleResult(results[i], type);
+        else if (node->type.isStruct() && type.isArray() && holdsStrings(type))
+            temporaries.push_back({results[i], type});
+    }
+    return results;
+}
+
+MLIRGenerator::Values MLIRGenerator::emitCallOp(FunctionCallExpr* node, mlir::Value calleeValue,
+                                                llvm::ArrayRef<mlir::Value> argValues,
+                                                mlir::Location loc) {
+    llvm::SmallVector<mlir::Value, 4> args(argValues.begin(), argValues.end());
 
     // Dönen struct'ın dizi alanları için yeri çağıran ayırır ve son
     // parametreler olarak verir (bkz. MLIRTypeManager::convertFunction).
@@ -270,24 +291,38 @@ MLIRGenerator::Values MLIRGenerator::emitCall(FunctionCallExpr* node) {
         }
     }
 
-    mlir::Operation* callOp;
-    if (isDirect) {
-        // CPU'dan, matris alan/döndüren bir @GPU fonksiyona çağrı: veriyi
-        // GPU'ya (ve sonucu geri) kopyalayan giriş fonksiyonu çağrılır.
+    llvm::SmallVector<mlir::Value, 4> callResults;
+    auto* ident = dynamic_cast<Identifier*>(node->target.get());
+    if (!calleeValue) {
         FunctionDecl* decl = functions.at(ident->name);
-        const bool crossesToGpu = decl->isGpu && ctx.gpuEnabled && !ctx.onDevice &&
-                                  decl->hasMatrixSignature();
-        auto callee = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(
-            crossesToGpu ? hostEntryName(ident->name) : ident->name);
-        callOp = ctx.builder.create<mlir::func::CallOp>(loc, callee, mlir::ValueRange(args));
+        if (decl->isAsync) {
+            // Coroutine fonksiyon: async.call sonucu bir görev değeridir;
+            // hemen beklenir. Çağıran da coroutine ise bekleme onu askıya
+            // alır (iş parçacığını bırakır), değilse iş parçacığını bekletir.
+            auto callee = ctx.theModule.lookupSymbol<mlir::async::FuncOp>(ident->name);
+            auto call = ctx.builder.create<mlir::async::CallOp>(loc, callee, mlir::ValueRange(args));
+            for (mlir::Value result : call.getResults()) {
+                auto await = ctx.builder.create<mlir::async::AwaitOp>(loc, result);
+                if (await.getResult()) callResults.push_back(await.getResult());
+            }
+        } else {
+            // CPU'dan, matris alan/döndüren bir @GPU fonksiyona çağrı: veriyi
+            // GPU'ya (ve sonucu geri) kopyalayan giriş fonksiyonu çağrılır.
+            const bool crossesToGpu = decl->isGpu && ctx.gpuEnabled && !ctx.onDevice &&
+                                      decl->hasMatrixSignature();
+            auto callee = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(
+                crossesToGpu ? hostEntryName(ident->name) : ident->name);
+            auto call = ctx.builder.create<mlir::func::CallOp>(loc, callee, mlir::ValueRange(args));
+            callResults.append(call.getResults().begin(), call.getResults().end());
+        }
     } else {
         // Fonksiyon değeri bir adrestir (i64); çağrı için gerçek fonksiyon
         // tipine köprülenir (bkz. functionAddress).
         mlir::Value callee = ctx.builder.create<mlir::UnrealizedConversionCastOp>(
             loc, mlir::TypeRange{typeManager.convertFunction(node->target->type)},
             mlir::ValueRange{calleeValue}).getResult(0);
-        callOp = ctx.builder.create<mlir::func::CallIndirectOp>(
-            loc, callee, mlir::ValueRange(args));
+        auto call = ctx.builder.create<mlir::func::CallIndirectOp>(loc, callee, mlir::ValueRange(args));
+        callResults.append(call.getResults().begin(), call.getResults().end());
     }
 
     Values results;
@@ -295,10 +330,7 @@ MLIRGenerator::Values MLIRGenerator::emitCall(FunctionCallExpr* node) {
     size_t nextSlot = 0;
     for (const SemLeaf& leaf : resultLeaves) {
         const bool viaSlot = node->type.isStruct() && leaf.type.isArray();
-        results.push_back(viaSlot ? arraySlots[nextSlot++] : callOp->getResult(nextResult++));
-        // Dönen stringlerin başvurusu artık bu deyimindir.
-        if (leaf.type.isString()) stringResult(results.back());
-        else if (viaSlot && holdsStrings(leaf.type)) temporaries.push_back({results.back(), leaf.type});
+        results.push_back(viaSlot ? arraySlots[nextSlot++] : callResults[nextResult++]);
     }
     return results;
 }
@@ -349,6 +381,13 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
         case Builtin::Shape: case Builtin::Rows: case Builtin::Cols:
         case Builtin::Matmul: case Builtin::Transpose: case Builtin::Sum:
             emitMatrixBuiltin(node);
+            return;
+        case Builtin::Await:
+            emitAwait(node);
+            return;
+        case Builtin::Scan:  // değeri emitLeaves ile alınır (struct ya da struct listesi)
+            emitScan(node);
+            lastValue = mlir::Value{};
             return;
         case Builtin::Print:
             if (node->arguments.size() == 1 && node->arguments[0]->type.isMatrix()) {
@@ -514,6 +553,8 @@ void MLIRGenerator::visit(LambdaExpr* node) {
         lambdaOp.setPrivate();
     }
 
+    const bool savedMain = emittingMain;
+    emittingMain = false; // lambda main'in içinde yazılmış olsa da main değildir
     emitFunctionBody(lambdaOp, node->type, node->params, loc, [&] {
         if (node->blockBody) {
             node->blockBody->accept(*this);
@@ -527,6 +568,7 @@ void MLIRGenerator::visit(LambdaExpr* node) {
         flushTemporaries(loc);
         ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange());
     });
+    emittingMain = savedMain;
 
     lastValue = functionAddress(lambdaName, node->type, loc);
 }

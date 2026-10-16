@@ -45,6 +45,10 @@ SemType Sema::resolveStruct(StructInfo& info) {
 
     for (auto& field : decl->fields) {
         SemType type = resolveValueType(field.type.get());
+        if (type.isTask()) {
+            error(field.type.get(), "struct alani task olamaz (henuz); gorevleri bir listede tutun");
+            type = SemType::Error();
+        }
         if (!seen.insert(field.name).second) {
             error(field.type.get(), "'" + field.name + "' alani birden cok kez tanimlanmis");
             type = SemType::Error();
@@ -104,6 +108,47 @@ void Sema::visit(MemberExpr* node) {
         return;
     }
     node->type = base.sub[node->fieldIndex];
+}
+
+// scan(rows) — sorgu sonucunun satırlarını struct'lara doldurur (bkz.
+// std/db.marl). Doldurulacak tip bağlamdan gelir: list<S> bütün satırlar, S
+// ilk satır. S'nin alanları sütunlara adlarıyla eşlenir; alanlar tek değerlik
+// olmalıdır (sayı, bool, string).
+void Sema::checkScan(FunctionCallExpr* node, const SemType& expected) {
+    const SemType& source = node->arguments[0]->type;
+    if (!source.isStruct() || source.name != "std$db$Rows") {
+        error(node->arguments[0].get(), "'scan' bir satir kaynagi (std.db.Rows) bekler, ornegin "
+                                        "scan(r.rows) (bulunan: " + source.str() + ")");
+        return;
+    }
+    if (inParallel()) {
+        error(node, "paralel dongude 'scan' kullanilamaz");
+        return;
+    }
+
+    const SemType row = expected.isList() ? expected.elementType() : expected;
+    if (!row.isStruct()) {
+        error(node, "'scan' satirlari hangi struct'a dolduracagini bilmiyor; tipi belirtin "
+                    "(or. list<Kullanici> l = scan(r.rows); ya da Kullanici k = scan(r.rows);)");
+        return;
+    }
+    bool ok = true;
+    for (size_t i = 0; i < row.sub.size(); ++i) {
+        const SemType& field = row.sub[i];
+        if (field.isInt() || field.isFloat() || field.isBool() || field.isString()) continue;
+        error(node, "'scan' ile doldurulan " + row.str() + " struct'inin '" + row.fieldNames[i] +
+                    "' alani " + field.str() + " olamaz (sayi, bool ya da string olmali)");
+        ok = false;
+    }
+    if (!ok) return;
+
+    // Satır kaynağının fonksiyonları dolaylı çağrılır (görev ve paralel döngü
+    // kuralları için).
+    noteUnsafe("degisken uzerinden (dolayli) fonksiyon cagiriyor");
+    if (currentEffects)
+        for (size_t i = 1; i < source.sub.size(); ++i)
+            currentEffects->indirectCalls.push_back({source.sub[i], node});
+    node->type = expected;
 }
 
 void Sema::declareVariable(const std::string& name, const Symbol& sym, const ASTNode* at) {

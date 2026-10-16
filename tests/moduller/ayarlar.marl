@@ -1,0 +1,12 @@
+// Test modülü: public global struct (bkz. tests/global_struct.marl).
+
+public struct Ayar {
+    string ad;
+    int64 deger;
+}
+
+public Ayar varsayilan;
+
+public func kur(string ad, int64 deger) -> void {
+    varsayilan = Ayar(ad, deger);
+}

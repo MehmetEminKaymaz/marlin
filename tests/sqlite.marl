@@ -1,0 +1,105 @@
+// std.sqlite: bellekte bir veritabanıyla tablo, parametreli sorgu, NULL,
+// kısıt hatası, scan ile struct'a doldurma, işlem (transaction).
+// leaks: 0
+// output: acildi
+// output: eklenen: 3
+// output: hata: UNIQUE constraint failed: kullanici.ad 2067
+// output: 1 Ayse 31 true 4.5
+// output: 2 Mehmet 25 false 3.0
+// output: 3 Zeynep 0 true 0.0
+// output: tek: Mehmet 25
+// output: yasi bos: true
+// output: get: 2 Ayse 4.5 true
+// output: guncellenen: 2
+// output: geri alindi: 3
+// output: bos sonuc: 0
+
+import std.sqlite as sql;
+
+struct Kullanici {
+    int64 id;
+    string ad;
+    int yas;
+    bool aktif;
+    float64 puan;
+}
+
+struct Ozet {
+    string ad;
+    int yas;
+}
+
+func ekle(sql.Conn db, string ad, int yas, bool aktif, float64 puan) -> void {
+    // $2 ve $1'in sırası sorguda karışık: parametreler adlarıyla bağlanır.
+    sql.Result r = sql.query(db, "INSERT INTO kullanici (yas, ad, aktif, puan) VALUES ($2, $1, $3, $4)",
+                             [sql.arg_text(ad), sql.arg_int(yas), sql.arg_bool(aktif), sql.arg_float(puan)]);
+    if !r.ok {
+        print("hata:", r.error, r.code);
+    }
+    sql.clear(r);
+}
+
+func main() -> void {
+    sql.Conn db = sql.open(":memory:");
+    if !db.ok {
+        print(db.error);
+        return;
+    }
+    print("acildi");
+
+    sql.clear(sql.exec(db, "CREATE TABLE kullanici (id INTEGER PRIMARY KEY, ad TEXT UNIQUE, yas INTEGER, aktif INTEGER, puan REAL)"));
+    ekle(db, "Ayse", 31, true, 4.5);
+    ekle(db, "Mehmet", 25, false, 3.0);
+    sql.Result r = sql.query(db, "INSERT INTO kullanici (ad, yas, aktif) VALUES ($1, $2, $3)",
+                             [sql.arg_text("Zeynep"), sql.arg_null(), sql.arg_bool(true)]);
+    sql.clear(r);
+    r = sql.exec(db, "SELECT count(*) AS n FROM kullanici");
+    print("eklenen:", sql.get_int(r, 0, 0));
+    sql.clear(r);
+
+    ekle(db, "Ayse", 40, true, 1.0);           // tekrarlanan ad: kısıt hatası
+
+    // Bütün satırlar struct listesine
+    r = sql.exec(db, "SELECT id, ad, yas, aktif, puan FROM kullanici ORDER BY id");
+    list<Kullanici> hepsi = scan(r.rows);
+    for k in hepsi {
+        print(k.id, k.ad, k.yas, k.aktif, k.puan);
+    }
+    free(hepsi);
+    sql.clear(r);
+
+    // Tek satır, sütun sırası farklı ve fazla sütunla
+    r = sql.query(db, "SELECT puan, yas, ad, id FROM kullanici WHERE ad = $1", [sql.arg_text("Mehmet")]);
+    Ozet tek = scan(r.rows);
+    print("tek:", tek.ad, tek.yas);
+    sql.clear(r);
+
+    // Satır / sütun numarasıyla okuma
+    r = sql.exec(db, "SELECT yas FROM kullanici WHERE ad = 'Zeynep'");
+    print("yasi bos:", sql.is_null(r, 0, 0));
+    sql.clear(r);
+    r = sql.exec(db, "SELECT id + 1 AS sonraki, ad, puan, aktif FROM kullanici WHERE id = 1");
+    print("get:", sql.get_int(r, 0, 0), sql.get_text(r, 0, sql.column(r, "ad")),
+          sql.get_float(r, 0, 2), sql.get_bool(r, 0, 3));
+    sql.clear(r);
+
+    r = sql.exec(db, "UPDATE kullanici SET puan = puan + 1 WHERE aktif = 1");
+    print("guncellenen:", sql.affected(r));
+    sql.clear(r);
+
+    // İşlem: geri alınan ekleme sayılmaz
+    sql.begin(db);
+    ekle(db, "Gecici", 1, false, 0.0);
+    sql.rollback(db);
+    r = sql.exec(db, "SELECT count(*) FROM kullanici");
+    print("geri alindi:", sql.get_int(r, 0, 0));
+    sql.clear(r);
+
+    r = sql.exec(db, "SELECT id, ad, yas, aktif, puan FROM kullanici WHERE id > 100");
+    list<Kullanici> bos = scan(r.rows);
+    print("bos sonuc:", len(bos));
+    free(bos);
+    sql.clear(r);
+
+    sql.close(db);
+}

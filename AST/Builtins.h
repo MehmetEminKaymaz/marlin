@@ -45,6 +45,11 @@ enum class Builtin {
     Shape,                    // shape(m, i): i. boyutun uzunluğu
     Rows, Cols,               // iki boyutlu matriste shape(m, 0) ve shape(m, 1)
     Matmul, Transpose, Sum,   // matris çarpımı, devrik, elemanların toplamı
+    // Görevler: await(t) görev bitene kadar bekler ve sonucunu verir.
+    Await,
+    // Veritabanı: scan(rows) sorgu sonucunun satırlarını struct'lara doldurur
+    // (bkz. std/db.marl). Sonuç tipi bağlamdan gelir: list<S> ya da S.
+    Scan,
 };
 
 inline Builtin lookupBuiltin(const std::string& name) {
@@ -63,6 +68,7 @@ inline Builtin lookupBuiltin(const std::string& name) {
         {"zeros", Builtin::Zeros}, {"ones", Builtin::Ones},   {"fill", Builtin::Fill},
         {"rows", Builtin::Rows},   {"cols", Builtin::Cols},   {"shape", Builtin::Shape},
         {"matmul", Builtin::Matmul}, {"transpose", Builtin::Transpose}, {"sum", Builtin::Sum},
+        {"await", Builtin::Await},   {"scan", Builtin::Scan},
     };
     for (const auto& entry : table)
         if (name == entry.name) return entry.builtin;

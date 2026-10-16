@@ -3,6 +3,7 @@
 #include "MLIRGenerator.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
@@ -79,9 +80,9 @@ void MLIRGenerator::declareLocal(const std::string& name, const SemType& type, m
         mlir::Value buffer = takeMatrixOwnership(value, line, loc);
         ctx.builder.create<mlir::memref::StoreOp>(loc, buffer, storage);
         ownedScopes.back().push_back({storage, type});
-    } else if (type.isString()) {
-        // String: değişken bir başvuru tutar; blok bitince bırakılır.
-        ctx.builder.create<mlir::memref::StoreOp>(loc, ownString(value, loc), storage);
+    } else if (isHandle(type)) {
+        // String / task: değişken bir başvuru tutar; blok bitince bırakılır.
+        ctx.builder.create<mlir::memref::StoreOp>(loc, ownHandle(value, type, loc), storage);
         ownedScopes.back().push_back({storage, type});
     } else if (type.isArray()) {
         copyArray(value, storage, type, /*releaseOld=*/false, loc);
@@ -150,12 +151,12 @@ void MLIRGenerator::visit(AssignmentStmt* node) {
             mlir::Value oldBuffer = ctx.builder.create<mlir::memref::LoadOp>(loc, storage);
             ctx.builder.create<mlir::memref::StoreOp>(loc, newBuffer, storage);
             matrixManager.freeBuffer(oldBuffer, loc);
-        } else if (ident->type.isString()) {
+        } else if (isHandle(ident->type)) {
             // Önce yeni değer tutulur, sonra eskisi bırakılır (s = s + "x").
-            mlir::Value newValue = ownString(value, loc);
+            mlir::Value newValue = ownHandle(value, ident->type, loc);
             mlir::Value oldValue = ctx.builder.create<mlir::memref::LoadOp>(loc, storage);
             ctx.builder.create<mlir::memref::StoreOp>(loc, newValue, storage);
-            releaseString(oldValue, loc);
+            releaseHandle(oldValue, ident->type, loc);
         } else if (ident->type.isArray()) {
             copyArray(value, storage, ident->type, /*releaseOld=*/true, loc);
         } else {
@@ -301,6 +302,9 @@ void MLIRGenerator::emitParallelFor(ForRangeStmt* node, mlir::Value start, mlir:
             // değişkenleri paylaşmamalı.
             mlir::Block* savedAllocaBlock = ctx.allocaBlock;
             ctx.allocaBlock = ctx.builder.getInsertionBlock();
+            // (Gövde, coroutine fonksiyonun içinde de kendi yığıtında çalışır.)
+            const bool savedHeapLocals = ctx.heapLocals;
+            ctx.heapLocals = false;
 
             mlir::Type mlirIterType = typeManager.convert(iterType);
             mlir::Value iv = iterType.isSigned
@@ -312,6 +316,7 @@ void MLIRGenerator::emitParallelFor(ForRangeStmt* node, mlir::Value start, mlir:
             emitLoopBody(node->body.get());
             scopeManager.popScope();
 
+            ctx.heapLocals = savedHeapLocals;
             ctx.allocaBlock = savedAllocaBlock;
             ctx.inKernel = savedInKernel;
         });
@@ -377,7 +382,7 @@ void MLIRGenerator::visit(ReturnStmt* node) {
     auto loc = locOf(node);
     if (!node->expr) {
         freeScopes(0, loc);
-        ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange());
+        emitReturnOp({}, loc);
         return;
     }
     emitReturn(node->expr.get(), node->line, loc);
@@ -397,14 +402,14 @@ void MLIRGenerator::emitReturn(Expression* expr, int line, mlir::Location loc) {
                           /*releaseOld=*/false, loc);
             else if (leaves[i].type.isMatrix())
                 results.push_back(takeMatrixOwnership(values[i], line, loc));
-            else if (leaves[i].type.isString())
-                results.push_back(ownString(values[i], loc));
+            else if (isHandle(leaves[i].type))
+                results.push_back(ownHandle(values[i], leaves[i].type, loc));
             else
                 results.push_back(values[i]);
         }
         flushTemporaries(loc);
         freeScopes(0, loc);
-        ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange(results));
+        emitReturnOp(results, loc);
         return;
     }
 
@@ -422,11 +427,37 @@ void MLIRGenerator::emitReturn(Expression* expr, int line, mlir::Location loc) {
             : takeMatrixOwnership(emitExpr(expr), line, loc);
     } else {
         value = emitExpr(expr);
-        // Dönen string çağıranın başvurusu olur.
-        if (expr->type.isString()) value = ownString(value, loc);
+        // Dönen string / task çağıranın başvurusu olur.
+        if (isHandle(expr->type)) value = ownHandle(value, expr->type, loc);
     }
 
     flushTemporaries(loc);
     freeScopes(0, loc, movedSlot);
-    ctx.builder.create<mlir::func::ReturnOp>(loc, mlir::ValueRange(value));
+    emitReturnOp(value, loc);
+}
+
+// Coroutine olarak üretilen fonksiyon (async.func) async.return ile döner;
+// değerler aynıdır, onları !async.value içine çalışma zamanı koyar.
+// Coroutine'in yerel yerleri yığın belleğindedir (bkz. createEntryAlloca);
+// dönerken bırakılırlar.
+//
+// main dönerken string tutan globaller bırakılır (program bitti; sızıntı
+// denetimi onları kaçak saymasın). Görev başlatan programda yapılmaz: main
+// bittiğinde hâlâ çalışan bir görev onları okuyor olabilir.
+void MLIRGenerator::emitReturnOp(mlir::ValueRange values, mlir::Location loc) {
+    if (!emittingAsync) {
+        if (emittingMain && !program->startsTasks) {
+            for (const std::string& name : globalStrings) {
+                mlir::Value slot = emitGlobalRef(name, loc);
+                releaseString(ctx.builder.create<mlir::memref::LoadOp>(loc, slot), loc);
+                ctx.builder.create<mlir::memref::StoreOp>(
+                    loc, emitZero(SemType::String(), loc), slot);
+            }
+        }
+        ctx.builder.create<mlir::func::ReturnOp>(loc, values);
+        return;
+    }
+    for (mlir::Value local : ctx.heapLocalValues)
+        ctx.builder.create<mlir::memref::DeallocOp>(loc, local);
+    ctx.builder.create<mlir::async::ReturnOp>(loc, values);
 }

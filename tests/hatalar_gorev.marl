@@ -1,0 +1,105 @@
+// error: 'marl' bir fonksiyon cagrisi bekler
+// error: 'marl' yerlesik bir fonksiyonla kullanilamaz
+// error: 'global_yaz' gorev olarak baslatilamaz: global degisken 'sayac' uzerine yaziyor
+// error: 'dolayli_yaz' gorev olarak baslatilamaz: 'global_yaz' fonksiyonunu cagiriyor
+// error: 'await' bir gorev (task) bekler (bulunan: int)
+// error: paralel dongude await kullanilamaz
+// error: paralel dongude marl kullanilamaz
+// error: 'bekleyen' deger olarak kullanilamaz: await kullaniyor
+// error: task degiskeni baslangic degeri olmadan tanimlanamaz
+// error: sonucu Nokta olan fonksiyon henuz gorev olarak baslatilamaz
+// error: sonucu matrix<float64> olan fonksiyon henuz gorev olarak baslatilamaz
+// error: struct alani task olamaz
+// error: gorevden ulasilan bu cagri 'global_yaz' fonksiyonuna gidebilir
+// error: @GPU fonksiyonda marl kullanilamaz
+// error: tip uyusmazligi: beklenen task<int>, bulunan task<string>
+// error: 'main' gorev olarak baslatilamaz
+// error: paralel dongude 'paralel_is' cagrilamaz: gorevlerden de cagriliyor
+
+int sayac = 0;
+
+struct Nokta {
+    int x;
+}
+
+struct Kutu {
+    task<int> t;
+}
+
+func global_yaz() -> void {
+    sayac = sayac + 1;
+}
+
+func dolayli_yaz() -> void {
+    global_yaz();
+}
+
+func bekleyen(task<int> t) -> int {
+    return await(t);
+}
+
+func bir() -> int {
+    return 1;
+}
+
+func ad() -> string {
+    return "a";
+}
+
+func nokta_yap() -> Nokta {
+    return Nokta(1);
+}
+
+func matris_yap() -> matrix<float64> {
+    return zeros(2, 2);
+}
+
+// Fonksiyon değeriyle çağrı: değer global_yaz da olabilir.
+func cagir(() -> void f) -> void {
+    f();
+}
+
+func paralel_is(int n) -> int {
+    int[4] a;
+    parallel for i in 0 .. 4 {
+        a[i] = i * n;
+    }
+    return a[3];
+}
+
+@GPU
+func gpuda(int n) -> int {
+    marl bir();
+    return n;
+}
+
+func main() -> void {
+    marl 5;
+    marl print(1);
+    marl global_yaz();
+    marl dolayli_yaz();
+    await(5);
+
+    task<int> t = marl bir();
+    parallel for i in 0 .. 4 {
+        await(t);
+        marl bir();
+    }
+
+    let f = bekleyen;
+    task<int> bos;
+    marl nokta_yap();
+    marl matris_yap();
+
+    () -> void g = global_yaz;
+    marl cagir(g);
+
+    task<int> yanlis = marl ad();
+    marl main();
+
+    marl paralel_is(3);
+    int[4] b;
+    parallel for i in 0 .. 4 {
+        b[i] = paralel_is(i);
+    }
+}

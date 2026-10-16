@@ -1,6 +1,8 @@
 // std.io — klavyeden okuma ve satır sonu eklemeden yazma (bkz. std/io.marl).
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE // flockfile
+#endif
 
 #include "marlin_rt.h"
 

@@ -2,22 +2,24 @@
 //
 // Üreteç (splitmix64) kütüphanenin kendisindedir: aynı tohum her makinede aynı
 // diziyi verir. Tohum verilmezse program her çalıştığında aynı sayılar gelir
-// (ölçümlerin tekrarlanabilir olması için). Üretecin durumu tektir ve
-// kilitsizdir; bu yüzden fonksiyonlar yan etkili sayılır (paralel döngüden
-// çağrılamaz).
+// (ölçümlerin tekrarlanabilir olması için). Üretecin durumu tektir; bu yüzden
+// fonksiyonlar yan etkili sayılır (paralel döngüden çağrılamaz).
+//
+// Durum yalnızca sabit bir sayı eklenerek ilerler; ekleme atomik olduğu için
+// görevler (marl) aynı anda sayı çekse de her biri farklı bir sayı alır.
 
 #include "marlin_rt.h"
 
 static uint64_t state = 0x853C49E6748FEA9BULL;
 
 static uint64_t next(void) {
-    uint64_t z = (state += 0x9E3779B97F4A7C15ULL);
+    uint64_t z = __atomic_add_fetch(&state, 0x9E3779B97F4A7C15ULL, __ATOMIC_RELAXED);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
     return z ^ (z >> 31);
 }
 
-void marlin_random_seed(int64_t seed) { state = (uint64_t)seed; }
+void marlin_random_seed(int64_t seed) { __atomic_store_n(&state, (uint64_t)seed, __ATOMIC_RELAXED); }
 
 // [0, 1) aralığında.
 double marlin_random_random(void) { return (double)(next() >> 11) * (1.0 / 9007199254740992.0); }

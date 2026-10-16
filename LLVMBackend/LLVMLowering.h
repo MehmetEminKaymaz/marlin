@@ -37,8 +37,11 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
 /// llvm dialect'indeki modülü LLVM IR'a çevirir ve programın giriş noktasını
 /// C çalışma zamanının beklediği `i32 main()` biçimine getirir. Başarısızsa
 /// nullptr döner.
+/// `usesTasks`: program görev başlatıyor; main bitince süreç hâlâ çalışan
+/// görevleri beklemeden kapanır (marlin_rt_exit).
 std::unique_ptr<llvm::Module> translateToLLVMIR(mlir::ModuleOp module,
-                                                llvm::LLVMContext& llvmContext);
+                                                llvm::LLVMContext& llvmContext,
+                                                bool usesTasks = false);
 
 } // namespace marlin
 
