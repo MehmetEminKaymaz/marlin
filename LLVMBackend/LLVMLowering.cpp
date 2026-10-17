@@ -1,6 +1,7 @@
 #include "LLVMLowering.h"
 
 #include "GpuOffload.h"
+#include "NestedParallel.h"
 #include "ParallelMatmul.h"
 
 #include "llvm/IR/IRBuilder.h"
@@ -227,6 +228,10 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
     //        durumda 1000 yinelemeden kısa döngüler hiç bölünmez ve tek iş
     //        parçacığında çalışır. Kullanıcı `parallel` yazdıysa, yineleme
     //        sayısı az ama her yinelemesi ağır döngüler de dağıtılmalıdır.
+    //    Paralel döngünün içinden (iç içe ya da çağrılan fonksiyonda) girilen
+    //    paralel döngüler çalışırken sıralı olur; aksi halde havuz işçileri
+    //    birbirini bekleyip kilitlenir (bkz. NestedParallel.h).
+    pm.addPass(createNestedParallelPass());
     pm.addPass(mlir::createAsyncParallelForPass(/*asyncDispatch=*/true,
                                                 /*numWorkerThreads=*/-1,
                                                 /*minTaskSize=*/1));

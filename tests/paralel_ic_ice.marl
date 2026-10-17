@@ -1,0 +1,37 @@
+// output: 9979200
+// output: 14850
+// output: 400.0
+// Paralel döngünün içinden girilen paralel döngüler (bkz.
+// LLVMBackend/NestedParallel.h). Gövdedeki döngü iş parçacıklarını
+// bekletirse az çekirdekli makinede program kilitlenir; içteki döngü sıralı
+// çalışmalı, sonuç aynı olmalı.
+
+// Kendi içinde paralel döngü çalıştıran fonksiyon: i * (0 + 1 + ... + 99)
+func satir_toplami(int i) -> int64 {
+    int64[100] t;
+    parallel for j in 0 .. 100 { t[j] = i * j; }
+    int64 s = 0;
+    for x in t { s = s + x; }
+    return s;
+}
+
+func main() -> void {
+    // Paralel gövdeden çağrılınca içteki döngü sıralı çalışır.
+    int64[64] r;
+    parallel for i in 0 .. 64 { r[i] = satir_toplami(i); }
+    int64 toplam = 0;
+    for x in r { toplam = toplam + x; }
+    print(toplam);
+
+    // Paralel döngünün dışından çağrılınca yine dağıtılır.
+    print(satir_toplami(3));
+
+    // Üç kat iç içe
+    matrix<float64, 3> g = zeros(10, 10, 4);
+    parallel for i in 0 .. 10 {
+        parallel for j in 0 .. 10 {
+            parallel for k in 0 .. 4 { g[i, j, k] = 1; }
+        }
+    }
+    print(sum(g));
+}

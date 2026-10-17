@@ -43,6 +43,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ANTLR aracı (jar) en az Java 11 ister; Windows makinesinin varsayılanı 8.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: marlin
@@ -86,6 +92,11 @@ jobs:
 
       - name: Derle
         run: cmake --build build --parallel
+
+      # macOS'ta timeout komutu yok; testler takılan programı onunla durdurur.
+      - name: coreutils (gtimeout)
+        if: runner.os == 'macOS'
+        run: brew install coreutils
 
       - name: PostgreSQL test sunucusu
         if: runner.os == 'Linux'

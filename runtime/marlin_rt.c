@@ -111,6 +111,15 @@ void marlin_panic_matmul(int32_t line) {
 // değiştirilse bile), bu yüzden süre ölçmeye uygundur.
 double marlin_time(void) { return mr_monotonic_seconds(); }
 
+// --- paralel döngü derinliği (bkz. LLVMBackend/NestedParallel.h) ---
+// Bu iş parçacığı şu an kaç paralel döngü gövdesinin içinde? Sıfırdan büyükse
+// yeni bir paralel döngü işçileri bekletmemek için sıralı çalışır.
+static _Thread_local int32_t parallel_depth;
+
+void marlin_parallel_enter(void) { ++parallel_depth; }
+void marlin_parallel_exit(void) { --parallel_depth; }
+int32_t marlin_parallel_nested(void) { return parallel_depth; }
+
 // --- print ---
 //
 // Bir print çağrısı birden çok parçadan oluşur (değerler, boşluklar, satır
