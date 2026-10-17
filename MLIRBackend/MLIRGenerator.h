@@ -367,6 +367,19 @@ private:
     void assignMapElement(AssignmentStmt* node, ArrayAccessExpr* access, size_t begin);
     /// len / free / has / remove / keys
     void emitMapBuiltin(FunctionCallExpr* node);
+
+    // --- JSON: from_json / to_json (MLIRGeneratorJson.cpp) ---
+    Values emitFromJson(FunctionCallExpr* node);
+    /// `json` düğümünü `type`a çözer; yaprakları döner (stringler yeni, sahibi çağıran).
+    Values decodeJson(const SemType& type, mlir::Value doc, mlir::Value json, const ASTNode* at,
+                      mlir::Location loc);
+    mlir::Value emitToJson(FunctionCallExpr* node);
+    void encodeJson(const SemType& type, llvm::ArrayRef<mlir::Value> leaves, mlir::Value writer,
+                    const ASTNode* at, mlir::Location loc);
+    /// Derlerken bilinen metin, string sabiti olarak.
+    mlir::Value jsonConstant(const std::string& text, const ASTNode* at);
+    void forEachJsonIndex(mlir::Value count, mlir::Location loc,
+                          llvm::function_ref<void(mlir::Value index, mlir::Value i64)> body);
     void declareStruct(VariableDecl* node);
     void assignStruct(AssignmentStmt* node, Identifier* target);
     /// Üretilmekte olan fonksiyon struct döndürüyorsa, dizi alanlarının

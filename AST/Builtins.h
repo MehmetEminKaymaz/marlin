@@ -53,6 +53,9 @@ enum class Builtin {
     // Veritabanı: scan(rows) sorgu sonucunun satırlarını struct'lara doldurur
     // (bkz. std/db.marl). Sonuç tipi bağlamdan gelir: list<S> ya da S.
     Scan,
+    // JSON (bkz. std/json.marl): to_json(x) değeri JSON metnine çevirir;
+    // from_json(v) bir json.Value'yu bağlamın istediği tipe doldurur.
+    ToJson, FromJson,
 };
 
 inline Builtin lookupBuiltin(const std::string& name) {
@@ -73,6 +76,7 @@ inline Builtin lookupBuiltin(const std::string& name) {
         {"rows", Builtin::Rows},   {"cols", Builtin::Cols},   {"shape", Builtin::Shape},
         {"matmul", Builtin::Matmul}, {"transpose", Builtin::Transpose}, {"sum", Builtin::Sum},
         {"await", Builtin::Await},   {"scan", Builtin::Scan},
+        {"to_json", Builtin::ToJson}, {"from_json", Builtin::FromJson},
     };
     for (const auto& entry : table)
         if (name == entry.name) return entry.builtin;

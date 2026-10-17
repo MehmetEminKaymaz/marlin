@@ -264,6 +264,9 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `map.marl` | `map<K, V>`: ekleme, okuma, `has`, `remove`, `keys`, eklenme sırası, büyüme, struct değer ve alan, struct alanı olarak map, başvuru davranışı |
 | `map_anahtar_yok.marl` | Olmayan anahtarı okumak programı durdurur |
 | `hatalar_map.marl` | Map'lerin hatalı kullanımı: anahtar/değer tipleri, paralel döngüde yazma, göreve verme, global map |
+| `json.marl` | `std.json` elle okuma: iç içe değerler, `\u` kaçışları ve vekil çiftleri, olmayan değerler, yanlış tipte okuma, konumlu ayrıştırma hataları, `quote` |
+| `json_tipli.marl` | `from_json` / `to_json`: iç içe struct, liste, map, gidiş-dönüş, yolu ile tip hatası, aralık denetimi |
+| `hatalar_json.marl` | `from_json` / `to_json`'un hatalı kullanımı |
 | `paralel_ic_ice.marl` | İç içe ve çağrı üzerinden iç içe paralel döngüler (az çekirdekte kilitlenmemeli) |
 | `modul_import.marl` | `import`, `as`, `from`: başka dosyalardaki fonksiyon ve globaller, alt dizin, birbirini import eden modüller |
 | `modul_gpu.marl` | Başka modüldeki `@GPU` fonksiyonların CPU'dan, GPU'dan ve çekirdek içinden çağrılması |
@@ -881,8 +884,40 @@ Tarayıcıdan `http://localhost:8080/` ya da `curl -i localhost:8080/selam?ad=Ay
       free(req.headers);
   }
   ```
-- **Şimdilik:** her yanıttan sonra bağlantı kapanır (keep-alive yok). Ağır bir işi hızlandırmak için işleyicinin içinde `parallel for` ya da `@GPU` fonksiyon kullanılabilir (sıralı `serve` ile). HTTPS yok; gerekirse sunucunun önüne nginx / caddy konur. HTTP istemcisi ve JSON ayrıştırma da henüz yok.
+- **Şimdilik:** her yanıttan sonra bağlantı kapanır (keep-alive yok). Ağır bir işi hızlandırmak için işleyicinin içinde `parallel for` ya da `@GPU` fonksiyon kullanılabilir (sıralı `serve` ile). HTTPS yok; gerekirse sunucunun önüne nginx / caddy konur. HTTP istemcisi henüz yok.
 - Ayrıştırıcının kaynağı `runtime/http_parser.c`'dir: soket kullanmaz, her kuralın yanında ilgili RFC maddesi yazar.
+
+**JSON (`std.json`, `from_json`, `to_json`)**
+
+```
+import std.json as json;
+
+struct Kullanici {
+    string ad;
+    int yas;
+    list<string> etiketler;
+}
+
+func kaydet(http.Request req) -> http.Response {
+    json.Doc d = json.parse(req.body);
+    if !d.ok {
+        return http.text(400, "gecersiz JSON: " + d.error);   // "satir 1, sutun 9: ..."
+    }
+    Kullanici k = from_json(d.root);                       // tip bağlamdan gelir
+    string hata = json.decode_error(d);                    // "$.yas: int32 tamsayi bekleniyordu, string bulundu"
+    json.free(d);
+    if hata != "" {
+        return http.text(422, hata);
+    }
+    return http.json(200, to_json(k));                     // {"ad":"Ayse","yas":30,"etiketler":[...]}
+}
+```
+
+- **Tipli:** `from_json(v)` bir JSON değerini bağlamın istediği tipe doldurur: sayılar, `bool`, `string`, struct (alanlar anahtarlara adlarıyla eşlenir, fazla anahtarlar yok sayılır), `list<T>`, `map<string, T>`, iç içe hepsi. `to_json(x)` bunlara ek olarak `char`, sabit diziler, her anahtarlı map ve `json.Value` yazar.
+- **Güvenilmeyen girdi programı durdurmaz:** geçersiz JSON'da `d.ok` yanlıştır; olmayan alan ve `null` sıfır değer olur; yanlış tipteki değer de sıfır değer olur ama ilk hata yolu ile `json.decode_error(d)`'de durur (her `from_json` başında silinir). `int8` alana 300 gibi sınır dışı sayılar da hatadır.
+- **Elle okuma** (şekli bilinmeyen veri): `json.get(v, "ad")`, `json.at(v, i)`, `json.length(v)`, `json.keys(v)`, `json.kind(v)` (`"null"`, `"bool"`, `"number"`, `"string"`, `"array"`, `"object"`, `"missing"`), `json.as_string` / `as_int` / `as_float` / `as_bool`. Olmayan anahtar `"missing"` döner, onun üzerinde de okumaya devam edilebilir.
+- Belge değişmezdir ve görevler arasında paylaşılabilir; işi bitince `json.free(d)`. Tek istisna: aynı belge aynı anda iki görevde `from_json` ile çözülmemeli (hata belgeye kaydedilir); paralel döngüde `from_json` yoktur.
+- Ayrıştırıcı katıdır (RFC 8259): sondaki virgül, yorum, tek tırnak, `NaN` yok; UTF-8 doğrulanır; iç içelik en fazla 256 seviye. Kaynağı `runtime/json_parser.c`.
 
 **Veritabanı (`std.postgres`, `std.sqlite`)**
 

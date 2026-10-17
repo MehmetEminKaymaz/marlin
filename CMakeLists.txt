@@ -141,6 +141,7 @@ set(PROJECT_SOURCES
         MLIRBackend/MLIRGeneratorTask.cpp
         MLIRBackend/MLIRGeneratorScan.cpp
         MLIRBackend/MLIRGeneratorMap.cpp
+        MLIRBackend/MLIRGeneratorJson.cpp
         Lsp/MarlinLsp.cpp
         Lsp/MarlinLsp.h
         Lsp/MarlinCheck.cpp

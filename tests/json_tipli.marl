@@ -1,0 +1,115 @@
+// output: true Ayşe 30 4.5 true
+// output: 2 b Ankara 6
+// output: 2 3 2 y x
+// output: {"ad":"Ayşe","yas":30,"puan":4.5,"aktif":true,"etiketler":["a","b"],"adres":{"sehir":"Ankara","kod":6},"sayaclar":{"y":2,"x":3}}
+// output: 2 B 0
+// output: $.ad: string bekleniyordu, sayi bulundu
+// output: true 0 2
+// output: $[0]: int8 tamsayi bekleniyordu, sinir disinda sayi bulundu
+// output: $.etiketler[1]: string bekleniyordu, sayi bulundu
+// output: merhaba
+// output: true 0 0
+// output: {"1":"bir","2":"i\"ki"}
+// output: [1,2,3]
+// output: "x" 1.5 true "a\nb" 0.1
+// output: {"sehir":"Ankara","kod":6}
+// output: [] {}
+// output: [{"sehir":"A","kod":1},{"sehir":"B","kod":0}]
+// leaks: 0
+// from_json / to_json: tipli JSON okuma ve yazma.
+import std.json as json;
+
+struct Adres {
+    string sehir;
+    int kod;
+}
+
+struct Kullanici {
+    string ad;
+    int yas;
+    float64 puan;
+    bool aktif;
+    list<string> etiketler;
+    Adres adres;
+    map<string, int> sayaclar;
+}
+
+func main() -> void {
+    string metin = "{\"ad\": \"Ay\\u015fe\", \"yas\": 30, \"puan\": 4.5, \"aktif\": true, " +
+                   "\"etiketler\": [\"a\", \"b\"], \"adres\": {\"sehir\": \"Ankara\", \"kod\": 6}, " +
+                   "\"sayaclar\": {\"x\": 1, \"y\": 2, \"x\": 3}, \"fazla\": [1, 2]}";
+    json.Doc d = json.parse(metin);
+    Kullanici k = from_json(d.root);
+    print(json.decode_error(d) == "", k.ad, k.yas, k.puan, k.aktif);
+    print(len(k.etiketler), k.etiketler[1], k.adres.sehir, k.adres.kod);
+    // Aynı anahtar iki kez: sonuncusu geçerli, sırası da sonuncunun yeri
+    list<string> sk = keys(k.sayaclar);
+    print(len(k.sayaclar), k.sayaclar["x"], k.sayaclar["y"], sk[0], sk[1]);
+    free(sk);
+
+    // Gidiş-dönüş: fazla anahtarlar ("fazla") yazılmaz
+    print(to_json(k));
+
+    // Struct listesi; eksik alan sıfır değer
+    json.Doc l = json.parse("[{\"sehir\": \"A\", \"kod\": 1}, {\"sehir\": \"B\"}]");
+    list<Adres> adresler = from_json(l.root);
+    print(len(adresler), adresler[1].sehir, adresler[1].kod);
+
+    // Yanlış tipler programı durdurmaz: ilk hata yolu ile kaydedilir, alan sıfır değer olur
+    json.Doc h = json.parse("{\"ad\": 5, \"yas\": \"otuz\", \"etiketler\": [\"a\", 7]}");
+    Kullanici hk = from_json(h.root);
+    print(json.decode_error(h));
+    print(hk.ad == "", hk.yas, len(hk.etiketler));
+
+    // Aralık denetimi
+    json.Doc r = json.parse("[300, 2]");
+    list<int8> kucuk = from_json(r.root);
+    print(json.decode_error(r));
+
+    // Her from_json önceki hatayı siler
+    list<string> ets = from_json(json.get(h.root, "etiketler"));
+    print(json.decode_error(h));
+
+    // Tek değer; null kök → sıfır değerler, hata değil
+    json.Doc s = json.parse("\"merhaba\"");
+    string m = from_json(s.root);
+    print(m);
+    json.Doc n = json.parse("null");
+    Kullanici bos = from_json(n.root);
+    print(json.decode_error(n) == "", bos.yas, len(bos.etiketler));
+
+    // to_json: map (string olmayan anahtar tırnaklanır), dizi, char, float, kaçışlar
+    map<int, string> mi = [];
+    mi[1] = "bir";
+    mi[2] = "i\"ki";
+    print(to_json(mi));
+    int[3] dz = [1, 2, 3];
+    print(to_json(dz));
+    float f = 0.1;
+    print(to_json('x'), to_json(1.5), to_json(true), to_json("a\nb"), to_json(f));
+    // json.Value olduğu gibi yazılır
+    print(to_json(json.get(d.root, "adres")));
+    list<int> bosl = [];
+    map<string, int> bosm = [];
+    print(to_json(bosl), to_json(bosm));
+    print(to_json(adresler));
+
+    free(k.etiketler);
+    free(k.sayaclar);
+    free(adresler);
+    free(hk.etiketler);
+    free(hk.sayaclar);
+    free(kucuk);
+    free(ets);
+    free(bos.etiketler);
+    free(bos.sayaclar);
+    free(mi);
+    free(bosl);
+    free(bosm);
+    json.free(d);
+    json.free(l);
+    json.free(h);
+    json.free(r);
+    json.free(s);
+    json.free(n);
+}

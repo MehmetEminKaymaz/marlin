@@ -75,6 +75,7 @@ MLIRGenerator::Values MLIRGenerator::emitWholeLeaves(Expression* expr) {
     auto* call = static_cast<FunctionCallExpr*>(expr);
     if (call->builtin == Builtin::Pop) return emitListPop(call);
     if (call->builtin == Builtin::Scan) return emitScan(call);
+    if (call->builtin == Builtin::FromJson) return emitFromJson(call);
 
     // Nokta(1.0, 2.0): argümanlar alanların değerleridir.
     if (call->isConstructor) {

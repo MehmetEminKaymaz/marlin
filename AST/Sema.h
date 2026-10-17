@@ -297,6 +297,8 @@ private:
     void noteNestedWrite(Expression* target);
     void noteMutatingBuiltin(const ASTNode* at, const std::string& name);
     void noteMapWrite(const ASTNode* at);
+    // to_json / from_json (SemaStruct.cpp)
+    void checkJson(FunctionCallExpr* node, const SemType& expected);
     void noteCall(FunctionCallExpr* call);
     void finishParallelLoop(ParallelLoop& loop);
     void checkParallelCalls();

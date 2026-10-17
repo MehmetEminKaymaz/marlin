@@ -125,7 +125,7 @@
     },
     "builtins": {
       "comment": "Yerleşik fonksiyonlar (AST/Builtins.h)",
-      "match": "\\b(print|time|sqrt|sin|cos|tan|atan|tanh|exp|log|log2|log10|floor|ceil|round|trunc|pow|atan2|abs|min|max|push|pop|len|free|has|remove|keys|str|to_int|to_float|zeros|ones|fill|shape|rows|cols|matmul|transpose|sum|await|scan)\\s*(?=\\()",
+      "match": "\\b(print|time|sqrt|sin|cos|tan|atan|tanh|exp|log|log2|log10|floor|ceil|round|trunc|pow|atan2|abs|min|max|push|pop|len|free|has|remove|keys|str|to_int|to_float|zeros|ones|fill|shape|rows|cols|matmul|transpose|sum|await|scan|to_json|from_json)\\s*(?=\\()",
       "captures": { "1": { "name": "support.function.builtin.marlin" } }
     },
     "function-call": {

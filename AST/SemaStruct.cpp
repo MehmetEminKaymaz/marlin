@@ -151,6 +151,85 @@ void Sema::checkScan(FunctionCallExpr* node, const SemType& expected) {
     node->type = expected;
 }
 
+// to_json(x) / from_json(v) — bkz. std/json.marl, MLIRBackend/MLIRGeneratorJson.cpp.
+//
+// Yazılabilen (to_json): sayılar, bool, char, string, sabit diziler, struct,
+// list<T>, map<K, V> (anahtar JSON'da string olarak yazılır) ve json.Value.
+// Okunabilen (from_json): sayılar, bool, string, struct, list<T> ve
+// map<string, V>. Matris, fonksiyon ve görev ikisinde de yok.
+static const char* const kJsonValueType = "std$json$Value";
+
+static bool jsonEncodable(const SemType& t, std::string& why) {
+    if (t.isScalar() || t.isString()) return true;
+    if (t.isStruct()) {
+        if (t.name == kJsonValueType) return true;
+        for (const SemType& field : t.sub)
+            if (!jsonEncodable(field, why)) return false;
+        return true;
+    }
+    if (t.isArray() || t.isList()) return jsonEncodable(t.elementType(), why);
+    if (t.isMap()) return jsonEncodable(t.valueType(), why);
+    why = t.str();
+    return false;
+}
+
+static bool jsonDecodable(const SemType& t, std::string& why) {
+    if (t.isNumeric() || t.isBool() || t.isString()) return true;
+    if (t.isStruct() && t.name != kJsonValueType) {
+        for (const SemType& field : t.sub)
+            if (!jsonDecodable(field, why)) return false;
+        return true;
+    }
+    if (t.isList()) return jsonDecodable(t.elementType(), why);
+    if (t.isMap()) {
+        if (!t.keyType().isString()) {
+            why = t.str() + " (JSON nesnesinin anahtarlari string; map<string, ...> kullanin)";
+            return false;
+        }
+        return jsonDecodable(t.valueType(), why);
+    }
+    why = t.str();
+    return false;
+}
+
+void Sema::checkJson(FunctionCallExpr* node, const SemType& expected) {
+    const SemType& arg = node->arguments[0]->type;
+    std::string why;
+    if (node->builtin == Builtin::ToJson) {
+        if (!jsonEncodable(arg, why)) {
+            error(node->arguments[0].get(), "'to_json' bu tipi JSON'a yazamaz: " + why +
+                                            " (sayi, bool, char, string, dizi, struct, liste ve map yazilabilir)");
+            return;
+        }
+        node->type = SemType::String();
+        return;
+    }
+
+    if (!arg.isStruct() || arg.name != kJsonValueType) {
+        error(node->arguments[0].get(), "'from_json' bir json.Value bekler, ornegin from_json(d.root) "
+                                        "(bulunan: " + arg.str() + ")");
+        return;
+    }
+    if (expected.isError() || expected.isVoid()) {
+        error(node, "'from_json' hangi tipe dolduracagini bilmiyor; tipi belirtin "
+                    "(or. Kullanici k = from_json(d.root);)");
+        return;
+    }
+    if (!jsonDecodable(expected, why)) {
+        error(node, "'from_json' bu tipi dolduramaz: " + why +
+                    " (sayi, bool, string, struct, liste ve map<string, ...> doldurulabilir)");
+        return;
+    }
+    // Hata belgeye kaydedilir (bkz. std/json.marl): paralel döngüde yinelemeler
+    // aynı belgeye yazabilirdi.
+    noteUnsafe("from_json ile bir JSON belgesine hata kaydediyor");
+    if (inParallel()) {
+        error(node, "paralel dongude 'from_json' kullanilamaz");
+        return;
+    }
+    node->type = expected;
+}
+
 void Sema::declareVariable(const std::string& name, const Symbol& sym, const ASTNode* at) {
     if (declare(name, sym, at)) declareFields(name, sym);
 }

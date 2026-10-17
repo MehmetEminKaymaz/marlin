@@ -395,6 +395,14 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
             emitScan(node);
             lastValue = mlir::Value{};
             return;
+        case Builtin::FromJson: {
+            Values values = emitFromJson(node);
+            lastValue = node->type.isComposite() ? mlir::Value{} : values.front();
+            return;
+        }
+        case Builtin::ToJson:
+            lastValue = emitToJson(node);
+            return;
         case Builtin::Print:
             if (node->arguments.size() == 1 && node->arguments[0]->type.isMatrix()) {
                 emitMatrixPrint(node->arguments[0].get(), loc);

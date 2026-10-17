@@ -1,0 +1,28 @@
+// from_json / to_json'un hatalı kullanımları.
+// error: 'from_json' hangi tipe dolduracagini bilmiyor
+// error: 'from_json' bir json.Value bekler, ornegin from_json(d.root) (bulunan: int)
+// error: 'from_json' bu tipi dolduramaz: matrix<float64>
+// error: 'from_json' bu tipi dolduramaz: map<int, int> (JSON nesnesinin anahtarlari string
+// error: 'to_json' bu tipi JSON'a yazamaz: matrix<float64>
+// error: 'to_json' bu tipi JSON'a yazamaz: (int) -> int
+// error: paralel dongude 'from_json' kullanilamaz
+import std.json as json;
+
+func kare(int x) -> int {
+    return x * x;
+}
+
+func main() -> void {
+    json.Doc d = json.parse("[1]");
+    let a = from_json(d.root);
+    int b = from_json(5);
+    matrix<float64> m = from_json(d.root);
+    map<int, int> mi = from_json(d.root);
+    string s = to_json(zeros(2, 2));
+    string f = to_json(kare);
+    int[4] sonuc;
+    parallel for i in 0 .. 4 {
+        int v = from_json(d.root);
+        sonuc[i] = v;
+    }
+}

@@ -33,6 +33,25 @@
 //
 // Ayrıştırma katıdır (RFC 8259): sondaki virgül, yorum, tek tırnak, NaN yok;
 // UTF-8 doğrulanır; iç içelik en fazla 256 seviyedir.
+//
+// TİPLİ OKUMA VE YAZMA: from_json / to_json (dilin yerleşikleri)
+//
+//   struct Kullanici { string ad; int yas; list<string> etiketler; }
+//
+//   Kullanici k = from_json(d.root);             // tip bağlamdan gelir
+//   if json.decode_error(d) != "" { ... }        // "$.yas: int32 tamsayi bekleniyordu, string bulundu"
+//   string metin = to_json(k);                   // {"ad":"Ayse","yas":30,"etiketler":["a"]}
+//
+//   * Struct alanları nesnenin anahtarlarına adlarıyla eşlenir; fazla
+//     anahtarlar yok sayılır.
+//   * Olmayan alan ve null, alanın sıfır değeri olur (0, "", false, boş liste).
+//   * Yanlış tipteki değer de sıfır değer olur ama hata kaydedilir; ilk hata
+//     json.decode_error(d) ile okunur (her from_json başında silinir).
+//   * from_json: sayılar, bool, string, struct, list<T>, map<string, T>.
+//     to_json: bunlara ek olarak char, sabit diziler, her anahtarlı map ve
+//     json.Value (belgedeki değeri olduğu gibi yazar).
+//   * Aynı belge aynı anda iki görevde from_json ile çözülmemelidir (hata
+//     belgeye kaydedilir).
 
 // C tarafı: runtime/std_json.c, runtime/json_parser.c
 extern func c_parse(string text) -> int64;
@@ -50,6 +69,7 @@ extern func c_free(int64 doc) -> void;
 @pure extern func c_number(int64 doc, int64 node) -> float64;
 @pure extern func c_bool(int64 doc, int64 node) -> bool;
 @pure extern func c_quote(string text) -> string;
+@pure extern func c_decode_error(int64 doc) -> string;
 
 // Belgedeki bir değer. node -1: olmayan değer ("missing").
 public struct Value {
@@ -157,6 +177,11 @@ public func as_bool(Value v) -> bool {
 // Sayı kesirsiz ve int64'e sığıyor mu? (1 ve 1.0 ayrılır: 1.0 tamsayı değildir.)
 public func is_integer(Value v) -> bool {
     return c_is_integer(v.doc, v.node);
+}
+
+// Bu belgeden yapılan son from_json'un ilk hatası (yolu ile); hata yoksa "".
+public func decode_error(Doc d) -> string {
+    return c_decode_error(d.handle);
 }
 
 // Metni JSON string literali olarak yazar: quote("a\"b") → "\"a\\\"b\"".

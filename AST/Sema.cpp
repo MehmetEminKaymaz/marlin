@@ -1314,6 +1314,11 @@ void Sema::checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
             checkScan(node, expected);
             return;
 
+        case Builtin::ToJson: case Builtin::FromJson:
+            if (!expectArgs(1) || !ok) return;
+            checkJson(node, expected);
+            return;
+
         case Builtin::Len: {
             if (!expectArgs(1) || !ok) return;
             const SemType& t = args[0]->type;
