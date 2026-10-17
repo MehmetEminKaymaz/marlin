@@ -18,6 +18,9 @@
 #   'GET /a ...\r\n\r\n|||GET /b ...\r\n\r\n'   a'nın yanıtı gelince b gönderilir
 #   'GET /a ...\r\n\r\nGET /b ...\r\n\r\n'      ikisi birlikte (pipelining)
 #   '@bekle 6'                                  6 saniye bekler
+#   '@gonder POST ...'                          gönderir, yanıt beklemez (isteğin
+#                                               bir parçası; yanıtı sonraki parçadan
+#                                               sonra okunur)
 #   '@kapandi-mi'                               sunucu bağlantıyı kapattı mı?
 #                                               "[kapandi]" ya da "[acik]" yazar
 
@@ -110,6 +113,9 @@ def main():
         for part in sys.argv[2].split("|||"):
             if part.startswith("@bekle "):
                 time.sleep(float(part.split()[1]))
+                continue
+            if part.startswith("@gonder "):
+                sock.sendall(unescape(part[len("@gonder "):]))
                 continue
             if part == "@kapandi-mi":
                 sock.settimeout(2)

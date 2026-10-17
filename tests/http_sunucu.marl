@@ -103,7 +103,7 @@
 // reply: Connection: close
 // reply:
 // reply: Bad Request
-// send: POST /yanki HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n
+// send: POST /yanki HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n
 // reply: HTTP/1.1 501 Not Implemented
 // reply: Content-Type: text/plain; charset=utf-8
 // reply: Content-Length: 16

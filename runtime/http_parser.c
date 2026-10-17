@@ -96,6 +96,34 @@ static HttpParseResult parse_request_line(HttpSlice line, HttpHead* out, int* st
     return HTTP_PARSE_OK;
 }
 
+// Transfer-Encoding = #transfer-coding  (RFC 9112 §6.1): virgülle ayrılmış
+// kodlamalar, uygulanma sırasıyla. Birden çok başlık satırı birleşik sayılır.
+typedef struct {
+    int present;       // başlık var mı?
+    int last_chunked;  // son kodlama chunked mı?
+    int chunked_count; // chunked kaç kez geçti?
+    int other;         // chunked dışında bir kodlama var mı?
+} TransferCodings;
+
+static void note_transfer_codings(HttpSlice value, TransferCodings* t) {
+    t->present = 1;
+    size_t start = 0;
+    while (start <= value.length) {
+        size_t end = start;
+        while (end < value.length && value.data[end] != ',') ++end;
+        size_t a = start, b = end;
+        while (a < b && (value.data[a] == ' ' || value.data[a] == '\t')) ++a;
+        while (b > a && (value.data[b - 1] == ' ' || value.data[b - 1] == '\t')) --b;
+        if (b > a) { // (boş liste elemanları yok sayılır: RFC 9110 §5.6.1)
+            HttpSlice coding = {value.data + a, b - a};
+            t->last_chunked = http_equals_ignore_case(coding, "chunked");
+            if (t->last_chunked) ++t->chunked_count;
+            else t->other = 1;
+        }
+        start = end + 1;
+    }
+}
+
 // Content-Length = 1*rakam   (RFC 9112 §6.3; RFC 9110 §8.6)
 static int parse_content_length(HttpSlice value, int64_t* result) {
     if (value.length == 0 || value.length > 15) return 0; // 15 hane: ~1 PB, taşmaz
@@ -121,7 +149,8 @@ HttpParseResult http_parse_head(const char* data, size_t length, HttpHead* out, 
     HttpParseResult result = parse_request_line(line, out, status);
     if (result != HTTP_PARSE_OK) return result;
 
-    int host_count = 0, has_transfer_encoding = 0, has_content_length = 0;
+    int host_count = 0, has_content_length = 0;
+    TransferCodings codings = {0, 0, 0, 0};
     for (;;) {
         if (!next_line(data, length, &pos, &line)) return HTTP_PARSE_INCOMPLETE;
         if (line.length == 0) break; // boş satır: başlık bitti
@@ -156,19 +185,108 @@ HttpParseResult http_parse_head(const char* data, size_t length, HttpHead* out, 
             out->content_length = n;
             has_content_length = 1;
         } else if (http_equals_ignore_case(name, "transfer-encoding")) {
-            has_transfer_encoding = 1;
+            note_transfer_codings(value, &codings);
         } else if (http_equals_ignore_case(name, "host")) {
             ++host_count;
         }
     }
 
-    // Parçalı (chunked) gövde desteklenmiyor.
-    if (has_transfer_encoding) return fail(status, 501);
+    // Gövdenin uzunluğu (RFC 9112 §6.1, §6.3): bkz. http_parser.h
+    if (codings.present) {
+        if (out->minor_version == 0) return fail(status, 400);   // HTTP/1.0'da tanımlı değil
+        if (has_content_length) return fail(status, 400);        // iki uzunluk: request smuggling
+        if (!codings.last_chunked || codings.chunked_count > 1) return fail(status, 400);
+        if (codings.other) return fail(status, 501);             // gzip, chunked ...
+        out->chunked = 1;
+        out->content_length = 0;
+    }
     // HTTP/1.1 isteğinde tam olarak bir Host olmalı (RFC 9112 §3.2).
     if (host_count > 1 || (out->minor_version >= 1 && host_count == 0)) return fail(status, 400);
 
     out->head_length = pos;
     return HTTP_PARSE_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Parçalı gövde (RFC 9112 §7.1)
+// ---------------------------------------------------------------------------
+
+enum { MAX_CHUNK_LINE = 4096, MAX_TRAILER_BYTES = 64 * 1024 };
+
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if ((c | 0x20) >= 'a' && (c | 0x20) <= 'f') return (c | 0x20) - 'a' + 10;
+    return -1;
+}
+
+// `pos`tan başlayan satırın sonu (LF); yoksa satır tamamlanmamıştır. Çok uzun
+// satır (bitmeyen parça başlığı) hata olsun diye `limit` aşılınca -2.
+static long find_line_end(const char* data, size_t length, size_t pos, size_t limit) {
+    const char* lf = memchr(data + pos, '\n', length - pos);
+    if (!lf) return length - pos > limit ? -2 : -1;
+    if ((size_t)(lf - data) - pos > limit) return -2;
+    return (long)(lf - data);
+}
+
+HttpParseResult http_parse_chunked(const char* data, size_t length, size_t max_body, char* out,
+                                   size_t* body_length, size_t* consumed, int* status) {
+    size_t pos = 0, body = 0;
+    for (;;) {
+        // parça-boyu [; uzantı] CRLF
+        const long lf = find_line_end(data, length, pos, MAX_CHUNK_LINE);
+        if (lf == -1) return HTTP_PARSE_INCOMPLETE;
+        if (lf == -2) return fail(status, 400);
+        size_t end = (size_t)lf;
+        if (end > pos && data[end - 1] == '\r') --end;
+
+        size_t i = pos, size = 0;
+        if (i == end || hex_digit(data[i]) < 0) return fail(status, 400);
+        for (; i < end && hex_digit(data[i]) >= 0; ++i) {
+            if (size > (SIZE_MAX - 15) / 16) return fail(status, 413);
+            size = size * 16 + (size_t)hex_digit(data[i]);
+        }
+        // Uzantılar (;ad=değer) okunup atılır; geri kalanında denetim karakteri olamaz.
+        while (i < end && (data[i] == ' ' || data[i] == '\t')) ++i;
+        if (i < end && data[i] != ';') return fail(status, 400);
+        for (; i < end; ++i)
+            if ((unsigned char)data[i] < 0x20 && data[i] != '\t') return fail(status, 400);
+        pos = (size_t)lf + 1;
+
+        // Son parça (0): ardından sondaki başlıklar ve boş satır.
+        if (size == 0) {
+            const size_t trailerStart = pos;
+            for (;;) {
+                const long tl = find_line_end(data, length, pos, MAX_TRAILER_BYTES);
+                if (tl == -1) return HTTP_PARSE_INCOMPLETE;
+                if (tl == -2 || (size_t)tl - trailerStart > MAX_TRAILER_BYTES) return fail(status, 400);
+                size_t te = (size_t)tl;
+                if (te > pos && data[te - 1] == '\r') --te;
+                if (te == pos) { // boş satır: gövde bitti
+                    *body_length = body;
+                    *consumed = (size_t)tl + 1;
+                    return HTTP_PARSE_OK;
+                }
+                // ad ":" değer — adın geçerli olması yeter; değer atılır.
+                size_t k = pos;
+                while (k < te && data[k] != ':') ++k;
+                if (k == pos || k == te || !http_is_token(data + pos, k - pos)) return fail(status, 400);
+                pos = (size_t)tl + 1;
+            }
+        }
+
+        // veri CRLF
+        if (size > max_body - body) return fail(status, 413);
+        if (length - pos < size + 1) return HTTP_PARSE_INCOMPLETE;
+        if (out) memcpy(out + body, data + pos, size);
+        body += size;
+        pos += size;
+        if (data[pos] == '\r') {
+            if (length - pos < 2) return HTTP_PARSE_INCOMPLETE;
+            ++pos;
+        }
+        if (data[pos] != '\n') return fail(status, 400);
+        ++pos;
+    }
 }
 
 const char* http_reason_phrase(int status) {

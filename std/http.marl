@@ -60,8 +60,10 @@
 //
 // SINIRLAR
 //
-//   * Başlık en fazla 64 KB, gövde en fazla 8 MB; parçalı (chunked) istek
-//     gövdesi henüz desteklenmez (501).
+//   * Başlık en fazla 64 KB, gövde en fazla 8 MB. Parçalı (Transfer-Encoding:
+//     chunked) gövde çözülür; işleyici req.body'de düz metni görür. Başka
+//     aktarım kodlamaları (gzip ...) 501; Content-Length ile birlikte
+//     Transfer-Encoding 400 (request smuggling'e karşı).
 //   * Yarım kalan istek 10 saniye beklenir (sonra 408); boştaki bağlantı 5
 //     saniye sonra kapanır; bir bağlantıda en fazla 1000 istek; aynı anda en
 //     fazla 1000 bağlantı.

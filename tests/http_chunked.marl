@@ -1,0 +1,99 @@
+// std.http: parçalı (Transfer-Encoding: chunked) istek gövdesi. İşleyici
+// gövdeyi çözülmüş haliyle görür. Program 5 geçerli isteği işleyip biter.
+// leaks: 0
+// output: hazir
+// output: bitti
+// http: 18477
+//
+// Temel: iki parça
+// send: POST /a HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 22
+// reply: Connection: keep-alive
+// reply:
+// reply: POST /a [Wikipedia] 9
+//
+// Büyük harfli onaltılık boy, uzantı, sondaki başlıklar; ardından aynı
+// bağlantıda pipelining ile bir istek daha
+// send: POST /b HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: Chunked\r\n\r\nA;ad=deger\r\n0123456789\r\n0\r\nX-Son: a\r\n\r\nGET /c HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 24
+// reply: Connection: keep-alive
+// reply:
+// reply: POST /b [0123456789] 10
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 12
+// reply: Connection: keep-alive
+// reply:
+// reply: GET /c [] 0
+//
+// Gövde gecikmeli, parça parça gelir
+// send: @gonder POST /d HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nab|||@bekle 0.3|||c\r\n0\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 16
+// reply: Connection: keep-alive
+// reply:
+// reply: POST /d [abc] 3
+//
+// Content-Length ile Transfer-Encoding birlikte: 400 (request smuggling)
+// send: POST /e HTTP/1.1\r\nHost: a\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n
+// reply: HTTP/1.1 400 Bad Request
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 12
+// reply: Connection: close
+// reply:
+// reply: Bad Request
+//
+// Geçersiz parça boyu
+// send: POST /f HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n
+// reply: HTTP/1.1 400 Bad Request
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 12
+// reply: Connection: close
+// reply:
+// reply: Bad Request
+//
+// Gövde sınırı (8 MB) parçanın boyu okunur okunmaz denetlenir
+// send: POST /g HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n800001\r\n
+// reply: HTTP/1.1 413 Content Too Large
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 18
+// reply: Connection: close
+// reply:
+// reply: Content Too Large
+//
+// send: GET /son HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 14
+// reply: Connection: close
+// reply:
+// reply: GET /son [] 0
+
+import std.http as http;
+
+func yanki(http.Request req) -> http.Response {
+    return http.text(200, req.method + " " + req.path + " [" + req.body + "] " + str(len(req.body)) + "\n");
+}
+
+func main() -> void {
+    list<http.Route> rotalar = [];
+    push(rotalar, http.route("", "/*", yanki));
+
+    http.Server s = http.listen(18477);
+    if !s.ok {
+        print(s.error);
+        return;
+    }
+    print("hazir");
+    for i in 0 .. 5 {
+        http.handle(s, rotalar);
+    }
+    http.close(s);
+    free(rotalar);
+    print("bitti");
+}

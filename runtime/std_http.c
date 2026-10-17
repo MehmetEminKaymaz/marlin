@@ -93,7 +93,9 @@ typedef struct {
     Server* server;
     Connection* conn;
     HttpHead head;          // conn->data'nın içini gösterir
-    size_t total;           // isteğin bayt sayısı (başlık + gövde)
+    size_t total;           // isteğin bayt sayısı (başlık + gövde; parçalıysa ham hali)
+    char* body;             // parçalı gövdenin çözülmüş hali (değilse NULL: gövde conn->data'da)
+    size_t body_length;
     int keep_alive;         // istemci bağlantının açık kalmasını kabul ediyor mu?
     // Yanıt başlıkları (respond_header ile eklenenler), "ad: değer\r\n" olarak.
     char* headers;
@@ -213,8 +215,24 @@ static TakeResult take_request(Server* server, Connection* conn, Request** out, 
         *status = 413;
         return TAKE_REJECT;
     }
-    const size_t total = head.head_length + (size_t)head.content_length;
-    if (conn->length < total) {
+
+    // Gövde tamamlandı mı? Parçalıysa çözücü söyler (her yeni baytta baştan
+    // ölçülür); değilse Content-Length kadar bayt beklenir.
+    size_t total, chunkedLength = 0;
+    int complete;
+    if (head.chunked) {
+        size_t consumed = 0;
+        const char* body = conn->data + head.head_length;
+        HttpParseResult r = http_parse_chunked(body, conn->length - head.head_length, MAX_BODY_BYTES, NULL,
+                                               &chunkedLength, &consumed, status);
+        if (r == HTTP_PARSE_ERROR) return TAKE_REJECT;
+        complete = r == HTTP_PARSE_OK;
+        total = head.head_length + consumed;
+    } else {
+        total = head.head_length + (size_t)head.content_length;
+        complete = conn->length >= total;
+    }
+    if (!complete) {
         if (!conn->continue_sent && expects_continue(&head)) {
             mr_socket_send_all(conn->fd, "HTTP/1.1 100 Continue\r\n\r\n", 25, SEND_TIMEOUT_SECONDS);
             conn->continue_sent = 1;
@@ -224,6 +242,13 @@ static TakeResult take_request(Server* server, Connection* conn, Request** out, 
 
     Request* request = calloc(1, sizeof *request);
     if (!request) marlin_rt_panic("http: bellek yetersiz");
+    if (head.chunked) {
+        size_t consumed = 0;
+        request->body = malloc(chunkedLength ? chunkedLength : 1);
+        if (!request->body) marlin_rt_panic("http: bellek yetersiz");
+        http_parse_chunked(conn->data + head.head_length, conn->length - head.head_length, MAX_BODY_BYTES,
+                           request->body, &request->body_length, &consumed, status);
+    }
     request->server = server;
     request->conn = conn;
     request->head = head; // (bağlantı istek yanıtlanana kadar okunmaz: tampon yerinde kalır)
@@ -437,6 +462,7 @@ int64_t marlin_http_query(int64_t r)  { return slice_string(request_of(r, "query
 
 int64_t marlin_http_body(int64_t r) {
     Request* request = request_of(r, "body");
+    if (request->body) return marlin_rt_str_new(request->body, (int64_t)request->body_length);
     return marlin_rt_str_new(request->conn->data + request->head.head_length, request->head.content_length);
 }
 
@@ -539,6 +565,7 @@ void marlin_http_respond(int64_t r, int32_t status, int64_t body) {
         sent = mr_socket_send_all(conn->fd, marlin_rt_str_data(body), body_length, SEND_TIMEOUT_SECONDS);
     free(head);
     free(request->headers);
+    free(request->body);
     const size_t total = request->total;
     free(request);
 
