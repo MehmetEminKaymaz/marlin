@@ -252,6 +252,7 @@ add_library(marlinrt STATIC
         runtime/http_parser.h
         runtime/marlin_task.c
         runtime/marlin_map.c
+        runtime/marlin_gpu.c
         runtime/std_json.c
         runtime/json_parser.c
         runtime/json_parser.h)

@@ -96,6 +96,7 @@ void MLIRGenerator::declareFunctionSignature(FunctionDecl* node) {
     funcOp->setAttr(kGpuFunctionAttr, ctx.builder.getUnitAttr());
     if (node->hasMatrixSignature())
         ctx.builder.create<mlir::func::FuncOp>(locOf(node), hostEntryName(node->name), funcType);
+    ctx.builder.create<mlir::func::FuncOp>(locOf(node), cpuTwinName(node->name), funcType);
 }
 
 void MLIRGenerator::visit(FunctionDecl* node) {
@@ -114,6 +115,23 @@ void MLIRGenerator::visit(FunctionDecl* node) {
 
     if (targetsGpu(node) && node->hasMatrixSignature())
         emitHostEntry(node);
+    if (targetsGpu(node)) emitCpuTwin(node);
+}
+
+// CPU İKİZİ
+//
+// Her @GPU fonksiyonun aynı gövdeden bir de CPU sürümü üretilir (`ad.cpu`):
+// --gpu=off ile üretilecek olanın aynısı (matrisler CPU belleğinde, paralel
+// döngüler iş parçacıklarında). CPU kodundan @GPU fonksiyona yapılan çağrı,
+// program çalışırken GPU kullanılabiliyorsa GPU sürümünü (matris imzalıysa
+// `ad.host` girişini), değilse ikizi çağırır (bkz. emitCallOp). Böylece aynı
+// program GPU'su olmayan makinede de çalışır. İkizin içindeki @GPU
+// çağrıları da ikizlere gider.
+void MLIRGenerator::emitCpuTwin(FunctionDecl* node) {
+    auto twin = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(cpuTwinName(node->name));
+    ctx.cpuTwin = true;
+    emitFunctionBody(twin, node->fnType, node->params, locOf(node), [&] { node->body->accept(*this); });
+    ctx.cpuTwin = false;
 }
 
 // @GPU fonksiyonun CPU'dan çağrılan girişi. CPU ile GPU arasındaki bütün veri

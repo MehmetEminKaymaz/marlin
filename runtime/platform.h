@@ -45,6 +45,16 @@ char* mr_getenv(const char* name);
 _Noreturn void mr_exit_now(int code);
 
 // ---------------------------------------------------------------------------
+// Paylaşımlı kütüphaneyi çalışırken yükleme (dlopen / LoadLibrary)
+// ---------------------------------------------------------------------------
+
+// Kütüphaneyi yükler; bulunamazsa NULL (programı durdurmaz). Ad, sistemin
+// arama yollarında aranır ("libcuda.so.1", "nvcuda.dll").
+void* mr_library_open(const char* name);
+// Kütüphanedeki sembolün adresi; yoksa NULL.
+void* mr_library_symbol(void* library, const char* name);
+
+// ---------------------------------------------------------------------------
 // Standart akışlar
 // ---------------------------------------------------------------------------
 

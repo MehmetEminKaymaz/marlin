@@ -218,7 +218,10 @@ private:
     bool targetsGpu(const FunctionDecl* node) const { return node->isGpu && ctx.gpuEnabled; }
     /// @GPU fonksiyonun CPU'dan çağrılan giriş fonksiyonunun adı.
     static std::string hostEntryName(const std::string& name) { return name + ".host"; }
+    /// @GPU fonksiyonun CPU ikizinin adı (bkz. MLIRGenerator.cpp, "CPU ikizi").
+    static std::string cpuTwinName(const std::string& name) { return name + ".cpu"; }
     void emitHostEntry(FunctionDecl* node);
+    void emitCpuTwin(FunctionDecl* node);
     void emitGlobalVariable(VariableDecl* node);
     /// Sıfırla başlayan tek değerlik global (struct yaprağı, string).
     void emitZeroGlobal(const std::string& name, const SemType& type, mlir::Location loc);

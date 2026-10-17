@@ -12,6 +12,7 @@
 
 #include "platform.h"
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -39,6 +40,9 @@ __attribute__((constructor)) static void save_arguments(int argc, char** argv) {
 }
 
 _Noreturn void mr_exit_now(int code) { _Exit(code); }
+
+void* mr_library_open(const char* name) { return dlopen(name, RTLD_NOW | RTLD_LOCAL); }
+void* mr_library_symbol(void* library, const char* name) { return dlsym(library, name); }
 
 int mr_arg_count(void) { return saved_argc; }
 const char* mr_arg(int index) { return saved_argv[index]; }

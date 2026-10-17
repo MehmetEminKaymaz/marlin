@@ -210,11 +210,12 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
     args.insert(args.end(), runPaths.begin(), runPaths.end());
 
     // Paralel döngüler ve görevler MLIR'in iş parçacığı havuzunu kullanır.
-    // GPU'da çalışan kod, GPU ile MLIR'in CUDA sarmalayıcısı üzerinden konuşur
-    // (bellek ayırma, kopyalama, çekirdek başlatma); o da sistemdeki NVIDIA
-    // sürücüsünü (libcuda) kullanır.
+    // GPU'da çalışan kod ayrıca bir kütüphaneye bağlanmaz: GPU katmanı
+    // çalışma zamanı kütüphanesindedir ve NVIDIA sürücüsünü program açıkken
+    // kendisi yükler (bkz. runtime/marlin_gpu.c). Böylece program GPU'su
+    // olmayan makinede de açılır.
+    (void)needsGpu;
     if (needsThreads && !addMlirRuntime(triple, "mlir_async_runtime", exePath, args, error)) return false;
-    if (needsGpu && !addMlirRuntime(triple, "mlir_cuda_runtime", exePath, args, error)) return false;
 
     // Sistem kütüphaneleri en sonda (statik bağlanan dış kütüphaneler de kullanabilir):
     //   POSIX: libm (sin, pow, kayan noktalı % gibi işlemler); macOS'ta libSystem'in
@@ -231,6 +232,9 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
         args.push_back("-lmsvcrt");
     } else {
         args.push_back("-lm");
+        // dlopen (GPU sürücüsünü yüklemek için): glibc 2.34'ten önce ayrı
+        // kütüphanedeydi. macOS'ta libSystem'dedir.
+        if (triple.isOSLinux()) args.push_back("-ldl");
     }
 
     std::vector<llvm::StringRef> argRefs(args.begin(), args.end());

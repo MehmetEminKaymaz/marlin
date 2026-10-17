@@ -36,9 +36,9 @@
 #
 # Çalıştırılan her test hem -O0 hem -O2 ile derlenir.
 #
-# @GPU fonksiyon içeren testler iki kez çalıştırılır: GPU'da ve --gpu=off ile
-# tümüyle CPU'da; ikisi de aynı çıktıyı vermelidir. Makinede kullanılabilir bir
-# NVIDIA GPU yoksa yalnızca --gpu=off ile çalıştırılırlar.
+# @GPU fonksiyon içeren testler iki kez çalıştırılır: olduğu gibi (GPU varsa
+# GPU'da) ve MARLIN_GPU=cpu ile (@GPU fonksiyonların CPU ikizleriyle); ikisi de
+# aynı çıktıyı vermelidir. GPU'su olmayan makinede ikisi de CPU'da çalışır.
 #
 # Kullanım: tests/run.sh [marlin_lang yolu]
 
@@ -61,8 +61,7 @@ if command -v timeout > /dev/null 2>&1; then TIMEOUT="timeout -k 5 60"
 elif command -v gtimeout > /dev/null 2>&1; then TIMEOUT="gtimeout -k 5 60"; fi
 PROG="$TMP/prog$EXE"
 
-has_gpu=0
-if nvidia-smi > /dev/null 2>&1; then has_gpu=1; else echo "  (GPU bulunamadi: @GPU testleri yalnizca --gpu=off ile calisacak)"; fi
+if ! nvidia-smi > /dev/null 2>&1; then echo "  (GPU bulunamadi: @GPU testleri CPU ikizleriyle calisacak)"; fi
 
 pass=0; fail=0; skipped=0
 ok()  { echo "  GECTI  $1"; pass=$((pass + 1)); }
@@ -93,13 +92,16 @@ for src in *.marl; do
 
     configs=("-O0" "-O2")
     if grep -q '^@GPU' "$src"; then
-        configs=("-O0 --gpu=off" "-O2 --gpu=off")
-        [ "$has_gpu" = 1 ] && configs+=("-O0" "-O2")
+        configs=("-O0" "-O2" "-O0 @cpu" "-O2 @cpu")
     fi
 
     for opt in "${configs[@]}"; do
+        # "@cpu": program MARLIN_GPU=cpu ile çalıştırılır (GPU olsa da CPU ikizleri)
+        gpu_env=""
+        copt="$opt" # derleyicinin seçenekleri ($opt raporlarda etiket olarak kalır)
+        case "$opt" in *" @cpu") gpu_env="cpu"; copt="${opt% @cpu}" ;; esac
         # ($opt bilerek tırnaksız: birden çok seçenek içerebilir)
-        $TIMEOUT "$COMPILER" "$src" $opt -o "$PROG" > "$TMP/err" 2>&1
+        $TIMEOUT "$COMPILER" "$src" $copt -o "$PROG" > "$TMP/err" 2>&1
         rc=$?
         if [ -n "$TIMEOUT" ] && [ "$rc" = 124 ]; then
             bad "$src $opt" "zaman asimi (60 sn): derleyici takildi"; continue
@@ -112,7 +114,7 @@ for src in *.marl; do
         fi
         : > "$TMP/replies"
         if [ -n "$port" ]; then
-            MARLIN_STRING_CHECK=1 $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr" &
+            MARLIN_STRING_CHECK=1 MARLIN_GPU="$gpu_env" $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr" &
             server=$!
             while IFS= read -r request; do
                 $PY http_gonder.py "$port" "$request" >> "$TMP/replies" 2>&1
@@ -120,7 +122,7 @@ for src in *.marl; do
             wait "$server"
             code=$?
         else
-            MARLIN_STRING_CHECK=1 $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr"
+            MARLIN_STRING_CHECK=1 MARLIN_GPU="$gpu_env" $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr"
             code=$?
         fi
         if [ -n "$TIMEOUT" ] && [ "$code" = 124 ]; then

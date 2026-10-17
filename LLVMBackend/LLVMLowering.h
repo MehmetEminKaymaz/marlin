@@ -2,6 +2,7 @@
 #define LLVMLOWERING_H
 
 #include <memory>
+#include <string>
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -27,12 +28,24 @@ namespace marlin {
 /// oluşturulmadan önce çağrılmalıdır.
 void registerLoweringInterfaces(mlir::DialectRegistry& registry);
 
+/// GPU çekirdeklerini derleyecek araçlar (NVIDIA: CUDA araç takımının
+/// libdevice'ı; varsa ptxas). Derleyicinin çalıştığı makinede aranır:
+/// CUDA_ROOT / CUDA_HOME / CUDA_PATH ya da MLIR derlenirken bulunan yol.
+struct GpuToolchain {
+    bool available = false;
+    std::string toolkit;   // CUDA araç takımının dizini
+    std::string format;    // "fatbin" (ptxas varsa) ya da "isa" (PTX; sürücü derler)
+    std::string missing;   // bulunamadıysa sebebi
+};
+GpuToolchain findGpuToolchain();
+
 /// Modüldeki bütün dialect'leri llvm dialect'ine indirir. Sıra önemlidir:
 /// önce yapısal akış (scf) bloklara açılır, sonra kalan her şey çevrilir.
 /// Hata durumunda false döner (ayrıntı MLIR tanılama çıktısındadır).
-/// `usesGpu`: modülde GPU için üretilmiş fonksiyon var; GPU adımları eklenir.
+/// `gpu`: modülde GPU için üretilmiş fonksiyon varsa GPU adımları eklenir;
+/// çekirdekler bu araçlarla derlenir (yoksa nullptr).
 /// `stopAfterGpuSplit`: GPU çekirdekleri ayrıldıktan sonra dur (incelemek için).
-bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSplit = false);
+bool lowerToLLVMDialect(mlir::ModuleOp module, const GpuToolchain* gpu, bool stopAfterGpuSplit = false);
 
 /// llvm dialect'indeki modülü LLVM IR'a çevirir ve programın giriş noktasını
 /// C çalışma zamanının beklediği `i32 main()` biçimine getirir. Başarısızsa

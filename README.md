@@ -142,7 +142,9 @@ marlin_lang [kaynak.marl] [secenekler]
 | `--emit=...` | Derlemeyi hangi aşamada durduracağını seçer (aşağıya bak) |
 | `-I dizin` | `import` edilen modüllerin aranacağı ek dizin (birden çok kez verilebilir) |
 | `--print-ast` | Programın ağaç yapısını (AST) ekrana yazar |
-| `--gpu=off` | `@GPU` fonksiyonları da CPU için derler. Ekran kartı olmayan makinede çalıştırmak ya da CPU ile GPU'yu karşılaştırmak için. |
+| `--gpu=auto` | (Varsayılan) `@GPU` fonksiyonlar GPU için de derlenir; program çalışırken GPU varsa onu, yoksa aynı fonksiyonun CPU kopyasını kullanır. Derleme makinesinde CUDA araç takımı yoksa yalnızca CPU için derlenir. |
+| `--gpu=on` | `auto` gibi, ama CUDA araç takımı bulunamazsa hata verir. |
+| `--gpu=off` | `@GPU` fonksiyonları yalnızca CPU için derler. |
 | `--help` | Kısa yardım |
 
 ### Ara aşamaları görmek: `--emit`
@@ -277,7 +279,7 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 
 `tests/moduller/` dizinindeki dosyalar test değil, bu testlerin import ettiği modüllerdir (`run.sh` yalnızca `tests/` içindeki `.marl` dosyalarını çalıştırır).
 
-`@GPU` içeren testler iki kez çalıştırılır: ekran kartında ve `--gpu=off` ile tümüyle CPU'da. İkisi de aynı çıktıyı vermelidir. Makinede NVIDIA ekran kartı yoksa yalnızca `--gpu=off` ile çalışırlar.
+`@GPU` içeren testler iki kez çalıştırılır: olduğu gibi (ekran kartı varsa onda) ve `MARLIN_GPU=cpu` ile (`@GPU` fonksiyonların CPU kopyalarıyla). İkisi de aynı çıktıyı vermelidir. Ekran kartı olmayan makinede ikisi de CPU'da çalışır.
 
 ---
 
@@ -1106,10 +1108,12 @@ Kurallar (derleyici denetler):
 
 Bilinmesi gerekenler:
 
-- **GPU'da çalışan `parallel for` içinde indeks sınırı denetlenmez.** CPU'da sınır dışı indeks programı mesajla durdurur; GPU'da durdurmaz, sonuç tanımsızdır. Emin olmak için programı önce `--gpu=off` ile dene: orada denetim vardır.
+- **GPU'su olmayan makinede de çalışır.** Derleyici her `@GPU` fonksiyonun bir de CPU kopyasını üretir. Program açılırken NVIDIA sürücüsünü arar: bulursa GPU'yu, bulamazsa (Mac, NVIDIA'sız Windows / Linux, sürücüsüz sunucu) CPU kopyalarını kullanır; sonuç aynıdır. `MARLIN_GPU=cpu` ortam değişkeni GPU olsa da CPU'yu kullandırır (karşılaştırmak ve hata ayıklamak için).
+- **GPU çekirdeklerini derlemek için derleme makinesinde CUDA araç takımı gerekir** (libdevice; `CUDA_PATH` / `CUDA_HOME` / `CUDA_ROOT`). Yoksa `@GPU` fonksiyonlar yalnızca CPU için derlenir (`--gpu=on` ise hata verir). Programı çalıştıracak makinede araç takımı gerekmez, yalnızca NVIDIA sürücüsü (o da yoksa CPU kullanılır).
+- **GPU'da çalışan `parallel for` içinde indeks sınırı denetlenmez.** CPU'da sınır dışı indeks programı mesajla durdurur; GPU'da durdurmaz, sonuç tanımsızdır. Emin olmak için programı önce `MARLIN_GPU=cpu` ile çalıştır: orada denetim vardır.
 - **Kayan noktalı toplamlar son basamaklarda farklı çıkabilir.** `sum` GPU'da elemanları CPU'dakinden farklı sırayla toplar. Özellikle `float` (32 bit) ile milyonlarca eleman toplanınca fark belirginleşir. GPU'da `a * b + c` ayrıca tek komutla (FMA, ara yuvarlama yapmadan) hesaplanabilir; CUDA derleyicisinin de varsayılanı budur.
 - **GPU her işte hızlı değildir.** Program GPU'yu ilk kullandığında yarım saniye kadar bir başlatma süresi vardır ve her kopyalamanın bir maliyeti olur. Küçük işlerde CPU daha hızlıdır; kazanç büyük matrislerde ve veri GPU'da kalırken yapılan çok sayıda işlemde gelir.
-- Aynı program `--gpu=off` ile derlenirse tümüyle CPU'da çalışır ve aynı sonucu verir (yukarıdaki toplama farkı dışında).
+- Aynı program CPU'da (`MARLIN_GPU=cpu` ile ya da GPU'suz makinede) aynı sonucu verir (yukarıdaki toplama farkı dışında).
 - `--emit=gpu-mlir` ile hangi kısımların GPU çekirdeği olduğunu görebilirsin.
 
 **Yerleşik fonksiyonlar:**
@@ -1159,8 +1163,8 @@ print("sure:", time() - once, "saniye");
 | `run.sh: $'\r': command not found` | Dosya Windows satır sonlarıyla kaydedilmiş. Düzelt: `sed -i 's/\r$//' tests/run.sh` |
 | `Calisma zamani kutuphanesi (libmarlinrt.a) bulunamadi` | Derleyiciyi `cmake-build-debug` dışına kopyaladıysan kütüphaneyi bulamaz. Yolunu ver: `export MARLIN_RUNTIME=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/cmake-build-debug/libmarlinrt.a` |
 | `error while loading shared libraries: libmlir_async_runtime.so` | `parallel for` içeren programlar LLVM derlemendeki bir kütüphaneyi kullanır ve yolunu içlerinde taşır. LLVM dizinini taşıdıysan ya da programı başka bir makineye kopyaladıysan bulunamaz; derleyiciyi yeniden derleyip programı yeniden üret. |
-| `error while loading shared libraries: libmlir_cuda_runtime.so` | `@GPU` içeren programlar için aynı durum: kütüphane LLVM derlemendedir (`build-gpu/lib`). |
-| Program çalışırken `... failed with 'CUDA_ERROR_...'` yazıyor | GPU'ya ulaşılamıyor ya da GPU'da hata oldu. `nvidia-smi` ekran kartını gösteriyor mu bak. GPU belleği yetmiyor olabilir; ya da `parallel for` içinde sınır dışı indeks vardır. `--gpu=off` ile derleyip dene. |
+| Program çalışırken `... failed with 'CUDA_ERROR_...'` yazıyor | GPU'da hata oldu. GPU belleği yetmiyor olabilir; ya da `parallel for` içinde sınır dışı indeks vardır. `MARLIN_GPU=cpu` ile çalıştırıp dene. |
+| `@GPU` program GPU'yu kullanmıyor (CPU kadar yavaş) | Derleme makinesinde CUDA araç takımı bulunamamış olabilir (`--gpu=on` ile derle: sebebi yazar) ya da çalışan makinede NVIDIA sürücüsü yoktur (`nvidia-smi`). |
 | `@GPU` programı derlenirken `ptxas` bulunamadı hatası | CUDA araç takımı bulunamıyor. `export PATH=/usr/local/cuda-12.9/bin:$PATH` |
 | `... hata: sozdizimi hatasi: ...` | Yazım hatası. Mesajın başında dosya, satır ve sütun yazar (`deneme.marl:3:6`); açıklaması ANTLR'dan geldiği için İngilizcedir. |
 | `'std.x' adinda bir standart modul yok` | Modül adı yanlış ya da derleyici `std/` dizinini bulamıyor. Derleyiciyi başka yere kopyaladıysan yolunu ver: `export MARLIN_STD=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/std` |

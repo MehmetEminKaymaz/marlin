@@ -71,6 +71,22 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
 
+      # Linux: CUDA derleme araçları (libdevice, ptxas). Makinede GPU yoktur;
+      # ama @GPU kodu GPU için de derlenir ve program çalışırken CPU
+      # kopyasına geçer: GPU'ya geri dönüş mekanizmasının kendisi sınanır.
+      - name: CUDA derleme araçları
+        if: runner.os == 'Linux'
+        run: |
+          micromamba install -y -n marlin -c conda-forge cuda-nvcc cuda-nvvm-tools || true
+          libdevice=$(find "$CONDA_PREFIX" -name libdevice.10.bc 2>/dev/null | head -1)
+          if [ -n "$libdevice" ]; then
+            root=$(dirname "$(dirname "$(dirname "$libdevice")")")
+            echo "CUDA_ROOT=$root" >> "$GITHUB_ENV"
+            echo "libdevice: $libdevice (CUDA_ROOT=$root)"
+          else
+            echo "::notice::libdevice bulunamadi; @GPU kodu yalnizca CPU icin derlenecek"
+          fi
+
       - name: Derleme ayarları
         run: |
           if [ "$RUNNER_OS" = Windows ]; then

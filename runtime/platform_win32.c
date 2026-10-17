@@ -100,6 +100,20 @@ _Noreturn void mr_exit_now(int code) {
     _Exit(code); // (TerminateProcess kendi sürecinde dönmez)
 }
 
+void* mr_library_open(const char* name) {
+    wchar_t* wide = utf8_to_wide(name);
+    if (!wide) return NULL;
+    // (Yalnızca sistem dizinlerinde ve programın yanında aranır; çalışma
+    // dizinindeki aynı adlı bir DLL yüklenmez.)
+    HMODULE module = LoadLibraryExW(wide, NULL, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    free(wide);
+    return (void*)module;
+}
+
+void* mr_library_symbol(void* library, const char* name) {
+    return (void*)GetProcAddress((HMODULE)library, name);
+}
+
 int mr_arg_count(void) { return saved_argc; }
 const char* mr_arg(int index) { return saved_argv[index]; }
 

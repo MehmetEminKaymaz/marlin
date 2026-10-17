@@ -311,13 +311,40 @@ MLIRGenerator::Values MLIRGenerator::emitCallOp(FunctionCallExpr* node, mlir::Va
                 auto await = ctx.builder.create<mlir::async::AwaitOp>(loc, result);
                 if (await.getResult()) callResults.push_back(await.getResult());
             }
+        } else if (decl->isGpu && ctx.gpuEnabled && !ctx.onDevice) {
+            // CPU'dan bir @GPU fonksiyona çağrı. Bir CPU ikizinin içindeysek
+            // (GPU yok) doğrudan ikize; değilse çalışırken karar verilir: GPU
+            // varsa GPU sürümüne (matris alan/döndüren fonksiyonda veriyi
+            // GPU'ya ve geri kopyalayan giriş fonksiyonuna), yoksa CPU ikizine
+            // (bkz. MLIRGenerator.cpp, "CPU ikizi").
+            auto twin = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(cpuTwinName(ident->name));
+            if (ctx.cpuTwin) {
+                auto call = ctx.builder.create<mlir::func::CallOp>(loc, twin, mlir::ValueRange(args));
+                callResults.append(call.getResults().begin(), call.getResults().end());
+            } else {
+                auto onGpu = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(
+                    decl->hasMatrixSignature() ? hostEntryName(ident->name) : ident->name);
+                mlir::Value available = runtime.callValue("marlin_gpu_available", {},
+                                                          ctx.builder.getI32Type(), loc);
+                mlir::Value zero = arithManager.buildIntConstant(0, ctx.builder.getI32Type(), loc);
+                mlir::Value useGpu = ctx.builder.create<mlir::arith::CmpIOp>(
+                    loc, mlir::arith::CmpIPredicate::ne, available, zero);
+                // (Bloklar sonlandırıcısız oluşturulur; yield aşağıda eklenir.)
+                auto branch = ctx.builder.create<mlir::scf::IfOp>(
+                    loc, onGpu.getFunctionType().getResults(), useGpu,
+                    /*addThenBlock=*/true, /*addElseBlock=*/true);
+                auto emitCallIn = [&](mlir::Block& block, mlir::func::FuncOp callee) {
+                    mlir::OpBuilder::InsertionGuard guard(ctx.builder);
+                    ctx.builder.setInsertionPointToEnd(&block);
+                    auto call = ctx.builder.create<mlir::func::CallOp>(loc, callee, mlir::ValueRange(args));
+                    ctx.builder.create<mlir::scf::YieldOp>(loc, call.getResults());
+                };
+                emitCallIn(branch.getThenRegion().front(), onGpu);
+                emitCallIn(branch.getElseRegion().front(), twin);
+                callResults.append(branch.getResults().begin(), branch.getResults().end());
+            }
         } else {
-            // CPU'dan, matris alan/döndüren bir @GPU fonksiyona çağrı: veriyi
-            // GPU'ya (ve sonucu geri) kopyalayan giriş fonksiyonu çağrılır.
-            const bool crossesToGpu = decl->isGpu && ctx.gpuEnabled && !ctx.onDevice &&
-                                      decl->hasMatrixSignature();
-            auto callee = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(
-                crossesToGpu ? hostEntryName(ident->name) : ident->name);
+            auto callee = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(ident->name);
             auto call = ctx.builder.create<mlir::func::CallOp>(loc, callee, mlir::ValueRange(args));
             callResults.append(call.getResults().begin(), call.getResults().end());
         }

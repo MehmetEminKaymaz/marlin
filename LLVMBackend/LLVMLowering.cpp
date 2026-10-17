@@ -41,6 +41,9 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVM/NVVM/Target.h"
+#include "mlir/Target/LLVM/NVVM/Utils.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -170,10 +173,38 @@ static void bindTaskBridges(mlir::ModuleOp module) {
 //   G4  convert-gpu-to-nvvm    gpu.module'ün içi → NVIDIA'ya özgü llvm
 //                              dialect'i (matematik → libdevice çağrıları)
 //   G5  gpu-to-llvm            CPU tarafındaki gpu işlemleri → GPU çalışma
-//                              zamanı çağrıları (libmlir_cuda_runtime.so)
+//                              zamanı çağrıları (mgpu*; bkz. runtime/marlin_gpu.c)
 //   G6  gpu-module-to-binary   gpu.module → derlenmiş çekirdek (NVPTX kod
-//                              üretici + ptxas); programın içine gömülür.
-bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSplit) {
+//                              üretici + ptxas, ya da PTX metni; bkz.
+//                              findGpuToolchain); programın içine gömülür.
+// Çekirdeklerin matematik fonksiyonları (sin, exp ...) CUDA araç takımındaki
+// libdevice'tan gelir: o yoksa çekirdek derlenemez. ptxas da varsa çekirdek
+// makine koduna (fatbin) derlenir; yoksa PTX metni olarak gömülür ve sürücü
+// program açılırken derler.
+GpuToolchain findGpuToolchain() {
+    GpuToolchain result;
+    const std::string toolkit = mlir::NVVM::getCUDAToolkitPath().str();
+    if (toolkit.empty()) {
+        result.missing = "CUDA arac takimi bulunamadi (CUDA_PATH, CUDA_HOME ya da CUDA_ROOT tanimli degil)";
+        return result;
+    }
+    llvm::SmallString<256> libdevice(toolkit);
+    llvm::sys::path::append(libdevice, "nvvm", "libdevice", "libdevice.10.bc");
+    if (!llvm::sys::fs::is_regular_file(libdevice)) {
+        result.missing = "CUDA arac takiminda libdevice yok (" + std::string(libdevice) + ")";
+        return result;
+    }
+    llvm::SmallString<256> ptxas(toolkit);
+    llvm::sys::path::append(ptxas, "bin", "ptxas");
+    const bool hasPtxas = llvm::sys::fs::exists(ptxas) || llvm::sys::fs::exists(std::string(ptxas) + ".exe");
+    result.available = true;
+    result.toolkit = toolkit;
+    result.format = hasPtxas ? "fatbin" : "isa";
+    return result;
+}
+
+bool lowerToLLVMDialect(mlir::ModuleOp module, const GpuToolchain* gpu, bool stopAfterGpuSplit) {
+    const bool usesGpu = gpu != nullptr;
     mlir::PassManager pm(module->getName());
     // Derleyicinin kendisinde hata ayıklamak için: MARLIN_DEBUG_IR tanımlıysa
     // başarısız olan pass'ten sonraki IR stderr'e yazılır.
@@ -303,7 +334,10 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, bool usesGpu, bool stopAfterGpuSp
 
     if (usesGpu) {
         pm.addPass(mlir::createGpuToLLVMConversionPass()); // G5
-        pm.addPass(mlir::createGpuModuleToBinaryPass());   // G6
+        mlir::GpuModuleToBinaryPassOptions binary;          // G6
+        binary.toolkitPath = gpu->toolkit;
+        binary.compilationTarget = gpu->format;
+        pm.addPass(mlir::createGpuModuleToBinaryPass(binary));
     }
     if (mlir::failed(pm.run(module))) return false;
 

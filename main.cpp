@@ -109,8 +109,11 @@ static const char* const kUsage =
     "                   obj        nesne dosyasi (.o)\n"
     "                   exe        calistirilabilir dosya (varsayilan)\n"
     "  -O0 .. -O3     LLVM optimizasyon seviyesi (varsayilan: -O0)\n"
-    "  --gpu=off      @GPU fonksiyonlari da CPU icin derler (GPU'suz makinede\n"
-    "                 calistirmak ya da CPU ile karsilastirmak icin)\n"
+    "  --gpu=auto     (varsayilan) @GPU fonksiyonlar GPU icin de derlenir; program\n"
+    "                 calisirken GPU varsa onu, yoksa CPU kopyasini kullanir.\n"
+    "                 Derleme makinesinde CUDA arac takimi yoksa yalnizca CPU icin.\n"
+    "  --gpu=on       auto gibi, ama CUDA arac takimi yoksa hata verir\n"
+    "  --gpu=off      @GPU fonksiyonlari yalnizca CPU icin derler\n"
     "  --print-ast    semantik analizden gecmis AST'yi yazdirir\n"
     "  --lsp          dil sunucusu olarak calisir (editor eklentisi icin; tek basina kullanilir)\n";
 
@@ -147,15 +150,16 @@ int main(int argc, char** argv) {
     EmitKind emit = EmitKind::Executable;
     unsigned optLevel = 0;
     bool printAst = false;
-    bool gpuEnabled = true;
+    enum class GpuMode { Auto, On, Off } gpuMode = GpuMode::Auto;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-o" && i + 1 < argc) outputPath = argv[++i];
         else if (arg == "-I" && i + 1 < argc) importDirs.push_back(argv[++i]);
         else if (arg == "--print-ast") printAst = true;
-        else if (arg == "--gpu=off") gpuEnabled = false;
-        else if (arg == "--gpu=on") gpuEnabled = true;
+        else if (arg == "--gpu=off") gpuMode = GpuMode::Off;
+        else if (arg == "--gpu=on") gpuMode = GpuMode::On;
+        else if (arg == "--gpu=auto") gpuMode = GpuMode::Auto;
         else if (arg == "-O0" || arg == "-O1" || arg == "-O2" || arg == "-O3") optLevel = arg[2] - '0';
         else if (arg == "--emit=mlir") emit = EmitKind::MLIR;
         else if (arg == "--emit=gpu-mlir") emit = EmitKind::GpuMLIR;
@@ -266,8 +270,19 @@ int main(int argc, char** argv) {
     mlir::OpBuilder mlirBuilder(&mlirCtx);
     mlir::ModuleOp moduleOp = mlir::ModuleOp::create(mlirBuilder.getUnknownLoc());
 
+    // GPU çekirdekleri ancak derleme makinesinde araçları (CUDA araç takımı)
+    // varsa derlenebilir. Yoksa @GPU fonksiyonlar yalnızca CPU için derlenir
+    // (--gpu=on'da hata). Derlenen program her durumda her makinede çalışır:
+    // GPU yoksa CPU kopyasını kullanır.
+    const marlin::GpuToolchain gpuToolchain =
+        gpuMode == GpuMode::Off ? marlin::GpuToolchain{} : marlin::findGpuToolchain();
+    if (gpuMode == GpuMode::On && !gpuToolchain.available) {
+        std::cerr << "--gpu=on: GPU cekirdekleri derlenemiyor: " << gpuToolchain.missing << "\n";
+        return 1;
+    }
+
     MLIRGenerator generator(mlirCtx, mlirBuilder, moduleOp);
-    generator.setGpuEnabled(gpuEnabled);
+    generator.setGpuEnabled(gpuToolchain.available);
     astRoot->accept(generator);
 
     // Üretilen modülü doğrula: kod üretimindeki hatalar (eksik terminator, tip
@@ -283,7 +298,7 @@ int main(int argc, char** argv) {
         return writeText(outputPath, [&](llvm::raw_ostream& os) { moduleOp->print(os); }) ? 0 : 1;
 
     // --- MLIR → llvm dialect'i ---
-    if (!marlin::lowerToLLVMDialect(moduleOp, generator.usesGpuCode(),
+    if (!marlin::lowerToLLVMDialect(moduleOp, generator.usesGpuCode() ? &gpuToolchain : nullptr,
                                    /*stopAfterGpuSplit=*/emit == EmitKind::GpuMLIR)) {
         llvm::errs() << "MLIR, LLVM dialect'ine indirilemedi!\n";
         return 1;

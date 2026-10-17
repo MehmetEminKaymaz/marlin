@@ -33,6 +33,9 @@ struct CodegenContext {
     bool gpuEnabled = true;
     // Üretilmekte olan fonksiyon @GPU: matrisleri GPU belleğinde yaşar.
     bool onDevice = false;
+    // Üretilmekte olan fonksiyon bir @GPU fonksiyonun CPU ikizi (GPU yokken
+    // çalışan kopyası): içindeki @GPU çağrıları da ikizlere gider.
+    bool cpuTwin = false;
     // Üretilmekte olan kod GPU'da çalışacak (bir `parallel for` gövdesi):
     // çalışma zamanı kütüphanesi çağrılamaz.
     bool inKernel = false;
