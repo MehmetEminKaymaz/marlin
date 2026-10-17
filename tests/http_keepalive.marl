@@ -1,0 +1,149 @@
+// std.http keep-alive: aynı bağlantıda art arda istekler, pipelining,
+// Connection: close, HTTP/1.0, gövdeli istekten sonra istek, boştaki
+// bağlantının zaman aşımı, geçersiz istekten sonra kapanma. Program 13 geçerli
+// isteği işleyip biter. (Her "send" yeni bir bağlantıdır; "|||" aynı
+// bağlantıda sıradaki adımdır; bkz. http_gonder.py.)
+// leaks: 0
+// output: hazir
+// output: bitti
+// http: 18475
+//
+// Aynı bağlantıda üç istek, sırayla
+// send: GET /a HTTP/1.1\r\nHost: a\r\n\r\n|||GET /b HTTP/1.1\r\nHost: a\r\n\r\n|||GET /c HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 7
+// reply: Connection: keep-alive
+// reply:
+// reply: GET /a
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 7
+// reply: Connection: keep-alive
+// reply:
+// reply: GET /b
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 7
+// reply: Connection: keep-alive
+// reply:
+// reply: GET /c
+//
+// Pipelining: iki istek tek seferde; yanıtlar sırayla
+// send: GET /p1 HTTP/1.1\r\nHost: a\r\n\r\nGET /p2 HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 8
+// reply: Connection: keep-alive
+// reply:
+// reply: GET /p1
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 8
+// reply: Connection: keep-alive
+// reply:
+// reply: GET /p2
+//
+// İstemci "Connection: close" derse yanıttan sonra kapanır
+// send: GET /kapat HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n|||@kapandi-mi
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 11
+// reply: Connection: close
+// reply:
+// reply: GET /kapat
+// reply: [kapandi]
+//
+// HTTP/1.0: yalnızca keep-alive istenirse açık kalır
+// send: GET /eski1 HTTP/1.0\r\nConnection: keep-alive\r\n\r\n|||GET /eski2 HTTP/1.0\r\n\r\n|||@kapandi-mi
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 11
+// reply: Connection: keep-alive
+// reply:
+// reply: GET /eski1
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 11
+// reply: Connection: close
+// reply:
+// reply: GET /eski2
+// reply: [kapandi]
+//
+// Gövdeli istekten sonra aynı bağlantıda yeni istek (gövde sınırı doğru)
+// send: POST /yaz HTTP/1.1\r\nHost: a\r\nContent-Length: 3\r\n\r\nabcGET /sonra HTTP/1.1\r\nHost: a\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 16
+// reply: Connection: keep-alive
+// reply:
+// reply: POST /yaz [abc]
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 11
+// reply: Connection: keep-alive
+// reply:
+// reply: GET /sonra
+//
+// Boştaki bağlantı 5 saniye sonra kapanır
+// send: GET /bekle HTTP/1.1\r\nHost: a\r\n\r\n|||@bekle 6|||@kapandi-mi
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 11
+// reply: Connection: keep-alive
+// reply:
+// reply: GET /bekle
+// reply: [kapandi]
+//
+// Geçerli istekten sonra geçersiz istek: 400 ve kapanma
+// send: GET /gecerli HTTP/1.1\r\nHost: a\r\n\r\n|||BOZUK\r\n\r\n|||@kapandi-mi
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 13
+// reply: Connection: keep-alive
+// reply:
+// reply: GET /gecerli
+// reply: HTTP/1.1 400 Bad Request
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 12
+// reply: Connection: close
+// reply:
+// reply: Bad Request
+// reply: [kapandi]
+//
+// Son istek (program bundan sonra biter; önceki adımlar program açıkken denendi)
+// send: GET /son HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n
+// reply: HTTP/1.1 200 OK
+// reply: Content-Type: text/plain; charset=utf-8
+// reply: Content-Length: 9
+// reply: Connection: close
+// reply:
+// reply: GET /son
+
+import std.http as http;
+
+func yanki(http.Request req) -> http.Response {
+    string govde = "";
+    if len(req.body) > 0 {
+        govde = " [" + req.body + "]";
+    }
+    return http.text(200, req.method + " " + req.path + govde + "\n");
+}
+
+func main() -> void {
+    list<http.Route> rotalar = [];
+    push(rotalar, http.route("", "/*", yanki));
+
+    http.Server s = http.listen(18475);
+    if !s.ok {
+        print(s.error);
+        return;
+    }
+    print("hazir");
+    for i in 0 .. 13 {
+        http.handle(s, rotalar);
+    }
+    http.close(s);
+    free(rotalar);
+    print("bitti");
+}

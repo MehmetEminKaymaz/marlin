@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -154,16 +155,59 @@ mr_socket mr_tcp_accept(mr_socket server, int* transient) {
     int fd = accept((int)server, NULL, NULL);
 #endif
     if (fd < 0) {
-        *transient = errno == EINTR || errno == ECONNABORTED || errno == EMFILE || errno == ENFILE ||
-                     errno == ENOBUFS || errno == ENOMEM;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR || errno == ECONNABORTED)
+            *transient = MR_ACCEPT_NONE;
+        else if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS || errno == ENOMEM)
+            *transient = MR_ACCEPT_EXHAUSTED;
+        else
+            *transient = MR_ACCEPT_FATAL;
         return MR_NO_SOCKET;
     }
 #if !defined(__linux__)
     fcntl(fd, F_SETFD, FD_CLOEXEC);
 #endif
     prepare_socket(fd);
-    *transient = 0;
+    *transient = MR_ACCEPT_FATAL;
     return fd;
+}
+
+void mr_socket_set_nonblocking(mr_socket s) {
+    const int flags = fcntl((int)s, F_GETFL, 0);
+    fcntl((int)s, F_SETFL, flags | O_NONBLOCK);
+}
+
+static int is_nonblocking(int fd) { return (fcntl(fd, F_GETFL, 0) & O_NONBLOCK) != 0; }
+
+int mr_socket_pair(mr_socket pair[2]) {
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) return 0;
+    for (int i = 0; i < 2; ++i) {
+        fcntl(fds[i], F_SETFD, FD_CLOEXEC);
+        prepare_socket(fds[i]);
+        pair[i] = fds[i];
+    }
+    return 1;
+}
+
+int mr_poll(mr_pollfd* fds, size_t count, int timeout_ms) {
+    struct pollfd small[64];
+    struct pollfd* p = count <= 64 ? small : malloc(count * sizeof *p);
+    if (!p) return -1;
+    for (size_t i = 0; i < count; ++i) {
+        p[i].fd = (int)fds[i].fd;
+        p[i].events = (short)(((fds[i].events & MR_POLL_IN) ? POLLIN : 0) |
+                              ((fds[i].events & MR_POLL_OUT) ? POLLOUT : 0));
+        p[i].revents = 0;
+    }
+    int n = poll(p, (nfds_t)count, timeout_ms);
+    if (n < 0 && errno == EINTR) n = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const short r = p[i].revents;
+        fds[i].revents = (short)(((r & POLLIN) ? MR_POLL_IN : 0) | ((r & POLLOUT) ? MR_POLL_OUT : 0) |
+                                 ((r & (POLLERR | POLLHUP | POLLNVAL)) ? MR_POLL_ERR : 0));
+    }
+    if (p != small) free(p);
+    return n;
 }
 
 void mr_socket_set_timeout(mr_socket s, int seconds) {
@@ -172,12 +216,19 @@ void mr_socket_set_timeout(mr_socket s, int seconds) {
     setsockopt((int)s, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
 }
 
-int mr_socket_send_all(mr_socket s, const char* data, size_t length) {
+int mr_socket_send_all(mr_socket s, const char* data, size_t length, int timeout_seconds) {
+    const double deadline = mr_monotonic_seconds() + timeout_seconds;
     while (length > 0) {
         ssize_t n = send((int)s, data, length, SEND_FLAGS);
         if (n < 0) {
             if (errno == EINTR) continue;
-            return 0;
+            if (errno != EAGAIN && errno != EWOULDBLOCK) return 0;
+            // Gönderim tamponu dolu: yazılabilir olana kadar bekle.
+            const double left = deadline - mr_monotonic_seconds();
+            if (left <= 0) return 0;
+            mr_pollfd p = {s, MR_POLL_OUT, 0};
+            if (mr_poll(&p, 1, (int)(left * 1000) + 1) < 0) return 0;
+            continue;
         }
         data += n;
         length -= (size_t)n;
@@ -190,7 +241,9 @@ int64_t mr_socket_recv(mr_socket s, char* buffer, size_t capacity) {
         ssize_t n = recv((int)s, buffer, capacity, 0);
         if (n >= 0) return n;
         if (errno == EINTR) continue;
-        return errno == EAGAIN || errno == EWOULDBLOCK ? MR_RECV_TIMEOUT : MR_RECV_ERROR;
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return is_nonblocking((int)s) ? MR_RECV_WOULD_BLOCK : MR_RECV_TIMEOUT;
+        return MR_RECV_ERROR;
     }
 }
 

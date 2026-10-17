@@ -49,12 +49,22 @@
 // görevde (marl) işler; işleyiciler görev kurallarına uymalıdır (global
 // değişkene yazmamalı, paralel döngü içermemeli).
 //
-// SINIRLAR (şimdilik)
+// BAĞLANTILAR
 //
-//   * Her yanıttan sonra bağlantı kapanır (keep-alive yok).
+// Bir bağlantı üzerinden art arda birçok istek gelebilir (keep-alive):
+// HTTP/1.1'de bağlantı yanıttan sonra açık kalır, istemci "Connection: close"
+// derse kapanır (HTTP/1.0'da yalnızca "Connection: keep-alive" isterse açık
+// kalır). İstemci yanıtı beklemeden sıradaki isteği de gönderebilir
+// (pipelining). Sunucu bütün bağlantıları aynı anda bekler (poll): yavaş ya da
+// boşta bekleyen bir istemci diğerlerini bekletmez.
+//
+// SINIRLAR
+//
 //   * Başlık en fazla 64 KB, gövde en fazla 8 MB; parçalı (chunked) istek
-//     gövdesi desteklenmez (501).
-//   * Yavaş istemci en fazla 10 saniye beklenir.
+//     gövdesi henüz desteklenmez (501).
+//   * Yarım kalan istek 10 saniye beklenir (sonra 408); boştaki bağlantı 5
+//     saniye sonra kapanır; bir bağlantıda en fazla 1000 istek; aynı anda en
+//     fazla 1000 bağlantı.
 //   * HTTPS yok: gerekirse sunucunun önüne nginx / caddy gibi bir ters vekil
 //     konur.
 
@@ -135,8 +145,8 @@ public func next(Server s) -> Request {
     return Request(c_method(handle), c_path(handle), c_query(handle), headers, c_body(handle), handle);
 }
 
-// Yanıtı gönderir ve bağlantıyı kapatır. Yanıt gönderilince biter: başlık
-// listesi bırakılır. İsteğin başlık listesi ise isteği alanındır (next'i
+// Yanıtı gönderir (bağlantı açık kalacaksa sunucuya geri verilir, değilse
+// kapanır). Yanıt gönderilince biter: başlık listesi bırakılır. İsteğin başlık listesi ise isteği alanındır (next'i
 // çağıranın): işi bitince free(req.headers) ile bırakır.
 public func respond(Request req, Response res) -> void {
     for i in 0 .. len(res.headers) {

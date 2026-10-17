@@ -241,12 +241,75 @@ mr_socket mr_tcp_accept(mr_socket server, int* transient) {
     SOCKET s = accept((SOCKET)server, NULL, NULL);
     if (s == INVALID_SOCKET) {
         const int code = WSAGetLastError();
-        *transient = code == WSAECONNRESET || code == WSAEINTR || code == WSAEMFILE || code == WSAENOBUFS;
+        if (code == WSAEWOULDBLOCK || code == WSAECONNRESET || code == WSAEINTR)
+            *transient = MR_ACCEPT_NONE;
+        else if (code == WSAEMFILE || code == WSAENOBUFS)
+            *transient = MR_ACCEPT_EXHAUSTED;
+        else
+            *transient = MR_ACCEPT_FATAL;
         return MR_NO_SOCKET;
     }
     SetHandleInformation((HANDLE)s, HANDLE_FLAG_INHERIT, 0);
-    *transient = 0;
+    *transient = MR_ACCEPT_FATAL;
     return (mr_socket)s;
+}
+
+void mr_socket_set_nonblocking(mr_socket s) {
+    u_long yes = 1;
+    ioctlsocket((SOCKET)s, FIONBIO, &yes);
+}
+
+// Windows'ta socketpair yok: 127.0.0.1 üzerinde geçici bir dinleyiciyle
+// birbirine bağlanan iki TCP soketi.
+int mr_socket_pair(mr_socket pair[2]) {
+    if (!ensure_winsock()) return 0;
+    SOCKET listener = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+    SOCKET a = INVALID_SOCKET, b = INVALID_SOCKET;
+    if (listener == INVALID_SOCKET) return 0;
+    struct sockaddr_in address;
+    int size = sizeof address;
+    memset(&address, 0, sizeof address);
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(listener, (struct sockaddr*)&address, sizeof address) == SOCKET_ERROR ||
+        getsockname(listener, (struct sockaddr*)&address, &size) == SOCKET_ERROR ||
+        listen(listener, 1) == SOCKET_ERROR)
+        goto fail;
+    a = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+    if (a == INVALID_SOCKET || connect(a, (struct sockaddr*)&address, sizeof address) == SOCKET_ERROR) goto fail;
+    b = accept(listener, NULL, NULL);
+    if (b == INVALID_SOCKET) goto fail;
+    SetHandleInformation((HANDLE)b, HANDLE_FLAG_INHERIT, 0);
+    closesocket(listener);
+    pair[0] = (mr_socket)a;
+    pair[1] = (mr_socket)b;
+    return 1;
+fail:
+    if (a != INVALID_SOCKET) closesocket(a);
+    closesocket(listener);
+    return 0;
+}
+
+int mr_poll(mr_pollfd* fds, size_t count, int timeout_ms) {
+    WSAPOLLFD small[64];
+    WSAPOLLFD* p = count <= 64 ? small : malloc(count * sizeof *p);
+    if (!p) return -1;
+    for (size_t i = 0; i < count; ++i) {
+        p[i].fd = (SOCKET)fds[i].fd;
+        p[i].events = (SHORT)(((fds[i].events & MR_POLL_IN) ? POLLRDNORM : 0) |
+                              ((fds[i].events & MR_POLL_OUT) ? POLLWRNORM : 0));
+        p[i].revents = 0;
+    }
+    int n = WSAPoll(p, (ULONG)count, timeout_ms);
+    for (size_t i = 0; i < count; ++i) {
+        const SHORT r = p[i].revents;
+        fds[i].revents = (short)(((r & (POLLRDNORM | POLLRDBAND)) ? MR_POLL_IN : 0) |
+                                 ((r & POLLWRNORM) ? MR_POLL_OUT : 0) |
+                                 ((r & (POLLERR | POLLHUP | POLLNVAL)) ? MR_POLL_ERR : 0));
+    }
+    if (p != small) free(p);
+    return n == SOCKET_ERROR ? -1 : n;
 }
 
 void mr_socket_set_timeout(mr_socket s, int seconds) {
@@ -255,13 +318,21 @@ void mr_socket_set_timeout(mr_socket s, int seconds) {
     setsockopt((SOCKET)s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&ms, sizeof ms);
 }
 
-int mr_socket_send_all(mr_socket s, const char* data, size_t length) {
+int mr_socket_send_all(mr_socket s, const char* data, size_t length, int timeout_seconds) {
+    const double deadline = mr_monotonic_seconds() + timeout_seconds;
     while (length > 0) {
         const int chunk = length > INT_MAX ? INT_MAX : (int)length;
         const int n = send((SOCKET)s, data, chunk, 0);
         if (n == SOCKET_ERROR) {
-            if (WSAGetLastError() == WSAEINTR) continue;
-            return 0;
+            const int code = WSAGetLastError();
+            if (code == WSAEINTR) continue;
+            if (code != WSAEWOULDBLOCK) return 0;
+            // Gönderim tamponu dolu: yazılabilir olana kadar bekle.
+            const double left = deadline - mr_monotonic_seconds();
+            if (left <= 0) return 0;
+            mr_pollfd p = {s, MR_POLL_OUT, 0};
+            if (mr_poll(&p, 1, (int)(left * 1000) + 1) < 0) return 0;
+            continue;
         }
         data += n;
         length -= (size_t)n;
@@ -276,6 +347,7 @@ int64_t mr_socket_recv(mr_socket s, char* buffer, size_t capacity) {
         if (n >= 0) return n;
         const int code = WSAGetLastError();
         if (code == WSAEINTR) continue;
+        if (code == WSAEWOULDBLOCK) return MR_RECV_WOULD_BLOCK;
         return code == WSAETIMEDOUT ? MR_RECV_TIMEOUT : MR_RECV_ERROR;
     }
 }

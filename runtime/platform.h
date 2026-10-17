@@ -97,27 +97,62 @@ typedef int64_t mr_socket;
 #define MR_NO_SOCKET ((mr_socket)-1)
 
 // mr_socket_recv'in hata sonuçları
-#define MR_RECV_ERROR   (-1)
-#define MR_RECV_TIMEOUT (-2)
+#define MR_RECV_ERROR       (-1)
+#define MR_RECV_TIMEOUT     (-2)  // engelleyen kipte zaman aşımı
+#define MR_RECV_WOULD_BLOCK (-3)  // engellemeyen kipte: şu an okunacak bir şey yok
 
 // Bütün ağ arayüzlerinde `port`u dinleyen soket. Başarısızsa MR_NO_SOCKET;
 // sebebi `error`a yazılır.
 mr_socket mr_tcp_listen(int port, int backlog, char* error, size_t error_size);
 
-// Sıradaki bağlantıyı kabul eder. Başarısızsa MR_NO_SOCKET döner;
-// `*transient` doğruysa hata geçicidir (bağlantı kabul edilmeden koptu, tanıtıcı
-// ya da bellek bir an için tükendi) ve tekrar denenmelidir.
+// Sıradaki bağlantıyı kabul eder. Başarısızsa MR_NO_SOCKET döner ve
+// `*transient` sebebi söyler:
+//   MR_ACCEPT_FATAL      kalıcı hata
+//   MR_ACCEPT_NONE       bekleyen bağlantı yok (engellemeyen dinleyici) ya da
+//                        bağlantı kabul edilmeden koptu: şimdilik yapacak bir şey yok
+//   MR_ACCEPT_EXHAUSTED  tanıtıcı ya da bellek bir an için tükendi: biraz sonra
+//                        yeniden denenmeli
+#define MR_ACCEPT_FATAL     0
+#define MR_ACCEPT_NONE      1
+#define MR_ACCEPT_EXHAUSTED 2
 mr_socket mr_tcp_accept(mr_socket server, int* transient);
 
-// Okuma ve yazma için zaman aşımı (saniye).
+// Okuma ve yazma için zaman aşımı (saniye; engelleyen kipte).
 void mr_socket_set_timeout(mr_socket s, int seconds);
 
-// Bütün baytları gönderir; karşı taraf kapattıysa ya da hata olduysa 0.
-int mr_socket_send_all(mr_socket s, const char* data, size_t length);
+// Engellemeyen kip: okuma / yazma beklemez, yapılamıyorsa hemen döner.
+void mr_socket_set_nonblocking(mr_socket s);
+
+// Bütün baytları gönderir; karşı taraf kapattıysa, hata olduysa ya da
+// `timeout_seconds` içinde gönderilemediyse 0. Engellemeyen sokette de çalışır
+// (yazılabilir olmasını bekler).
+int mr_socket_send_all(mr_socket s, const char* data, size_t length, int timeout_seconds);
 
 // En fazla `capacity` bayt okur: okunan bayt sayısı, karşı taraf kapattıysa 0,
-// zaman aşımında MR_RECV_TIMEOUT, başka bir hatada MR_RECV_ERROR.
+// zaman aşımında MR_RECV_TIMEOUT, engellemeyen kipte okunacak bir şey yoksa
+// MR_RECV_WOULD_BLOCK, başka bir hatada MR_RECV_ERROR.
 int64_t mr_socket_recv(mr_socket s, char* buffer, size_t capacity);
+
+// Birbirine bağlı iki soket (aynı süreçte): birine yazılan diğerinden okunur.
+// poll'da bekleyen bir iş parçacığını başka bir iş parçacığından uyandırmak
+// için. Başarılıysa 1.
+int mr_socket_pair(mr_socket pair[2]);
+
+// --- Birden çok soketi aynı anda bekleme: poll (POSIX) / WSAPoll (Windows) ---
+
+#define MR_POLL_IN  1   // okunacak veri var (ya da bağlantı geldi / kapandı)
+#define MR_POLL_OUT 2   // yazılabilir
+#define MR_POLL_ERR 4   // hata ya da karşı taraf kapattı (yalnızca revents)
+
+typedef struct {
+    mr_socket fd;
+    short events;   // beklenenler: MR_POLL_IN | MR_POLL_OUT
+    short revents;  // olanlar
+} mr_pollfd;
+
+// En fazla `timeout_ms` milisaniye (-1: sonsuz) bekler. Hazır soket sayısı;
+// sinyalle bölündüyse 0, hatada -1.
+int mr_poll(mr_pollfd* fds, size_t count, int timeout_ms);
 
 // Yazma yönünü kapatıp (karşı taraf yanıtın bittiğini anlar) soketi bırakır.
 void mr_socket_close(mr_socket s);

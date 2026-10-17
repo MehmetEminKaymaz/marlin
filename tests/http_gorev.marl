@@ -8,21 +8,21 @@
 // reply: HTTP/1.1 200 OK
 // reply: Content-Type: text/plain; charset=utf-8
 // reply: Content-Length: 4
-// reply: Connection: close
+// reply: Connection: keep-alive
 // reply:
 // reply: 144
 // send: GET /selam HTTP/1.1\r\nHost: a\r\nX-Ad: Ayse\r\n\r\n
 // reply: HTTP/1.1 200 OK
 // reply: Content-Type: text/plain; charset=utf-8
 // reply: Content-Length: 13
-// reply: Connection: close
+// reply: Connection: keep-alive
 // reply:
 // reply: merhaba Ayse
 // send: GET /yok HTTP/1.1\r\nHost: a\r\n\r\n
 // reply: HTTP/1.1 404 Not Found
 // reply: Content-Type: text/plain; charset=utf-8
 // reply: Content-Length: 10
-// reply: Connection: close
+// reply: Connection: keep-alive
 // reply:
 // reply: Not Found
 

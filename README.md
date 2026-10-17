@@ -264,6 +264,7 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `map.marl` | `map<K, V>`: ekleme, okuma, `has`, `remove`, `keys`, eklenme sırası, büyüme, struct değer ve alan, struct alanı olarak map, başvuru davranışı |
 | `map_anahtar_yok.marl` | Olmayan anahtarı okumak programı durdurur |
 | `hatalar_map.marl` | Map'lerin hatalı kullanımı: anahtar/değer tipleri, paralel döngüde yazma, göreve verme, global map |
+| `http_keepalive.marl` | `std.http` bağlantıları: aynı bağlantıda art arda istekler, pipelining, `Connection: close`, HTTP/1.0, boştaki bağlantının zaman aşımı, geçersiz istekten sonra kapanma |
 | `json.marl` | `std.json` elle okuma: iç içe değerler, `\u` kaçışları ve vekil çiftleri, olmayan değerler, yanlış tipte okuma, konumlu ayrıştırma hataları, `quote` |
 | `json_tipli.marl` | `from_json` / `to_json`: iç içe struct, liste, map, gidiş-dönüş, yolu ile tip hatası, aralık denetimi |
 | `hatalar_json.marl` | `from_json` / `to_json`'un hatalı kullanımı |
@@ -884,7 +885,8 @@ Tarayıcıdan `http://localhost:8080/` ya da `curl -i localhost:8080/selam?ad=Ay
       free(req.headers);
   }
   ```
-- **Şimdilik:** her yanıttan sonra bağlantı kapanır (keep-alive yok). Ağır bir işi hızlandırmak için işleyicinin içinde `parallel for` ya da `@GPU` fonksiyon kullanılabilir (sıralı `serve` ile). HTTPS yok; gerekirse sunucunun önüne nginx / caddy konur. HTTP istemcisi henüz yok.
+- **Bağlantılar (keep-alive):** bir bağlantıdan art arda birçok istek gelebilir; HTTP/1.1'de bağlantı yanıttan sonra açık kalır, istemci `Connection: close` derse kapanır (HTTP/1.0'da yalnızca `Connection: keep-alive` isterse açık kalır). Yanıtı beklemeden gönderilen istekler (pipelining) sırayla yanıtlanır. Sunucu bütün bağlantıları aynı anda bekler (`poll`; Windows'ta `WSAPoll`): yavaş ya da boşta bekleyen bir istemci diğerlerini bekletmez. Yarım istek 10 saniye beklenir (sonra 408), boştaki bağlantı 5 saniye sonra kapanır.
+- **Şimdilik:** Ağır bir işi hızlandırmak için işleyicinin içinde `parallel for` ya da `@GPU` fonksiyon kullanılabilir (sıralı `serve` ile). Parçalı (chunked) istek gövdesi yok (501). HTTPS yok; gerekirse sunucunun önüne nginx / caddy konur. HTTP istemcisi henüz yok.
 - Ayrıştırıcının kaynağı `runtime/http_parser.c`'dir: soket kullanmaz, her kuralın yanında ilgili RFC maddesi yazar.
 
 **JSON (`std.json`, `from_json`, `to_json`)**
