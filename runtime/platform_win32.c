@@ -56,6 +56,26 @@ static char* wide_to_utf8(const wchar_t* wide) {
 }
 
 // ---------------------------------------------------------------------------
+// aligned_alloc
+// ---------------------------------------------------------------------------
+
+// MLIR'in görev ve paralel döngü indirmesi coroutine çerçevelerini C11'in
+// aligned_alloc'u ile ayırır ve düz free ile bırakır (AsyncToLLVM). Windows'un
+// C kütüphanesinde aligned_alloc yoktur; _aligned_malloc ise _aligned_free
+// ister. malloc Windows x64 ve ARM64'te 16 bayta hizalı adres verir; çerçeve
+// hizalaması da en fazla budur (askıya alma noktasında vektör değeri
+// yaşamaz). Daha büyüğü istenirse free ile uyumlu verilemez: program durur.
+void* aligned_alloc(size_t alignment, size_t size) {
+    if (alignment > 16) {
+        fprintf(stderr, "calisma zamani hatasi: aligned_alloc: %zu baytlik hizalama Windows'ta "
+                        "desteklenmiyor (en fazla 16)\n", alignment);
+        fflush(stderr);
+        _Exit(1);
+    }
+    return malloc(size);
+}
+
+// ---------------------------------------------------------------------------
 // Program
 // ---------------------------------------------------------------------------
 

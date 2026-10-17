@@ -11,7 +11,9 @@
 import std.file as file;
 
 func main() -> void {
-    string yol = "/tmp/marlin_std_file_test.txt";
+    // Göreli yol (testler tests/ dizininde çalışır; /tmp her platformda yok).
+    // Türkçe harfler: Windows'ta yol UTF-16'ya çevrilerek açılmalı.
+    string yol = "marlin_std_file_deneme_ğüşçö.txt";
     file.remove(yol);
     print(file.exists(yol));
 
@@ -31,7 +33,7 @@ func main() -> void {
     file.close(f);
 
     // Açılamayan dosya programı durdurmaz; ok alanı söyler.
-    file.File yok = file.open("/tmp/marlin_boyle_bir_dizin_yok/a.txt", "r");
+    file.File yok = file.open("marlin_boyle_bir_dizin_yok/a.txt", "r");
     print(yok.ok);
 
     // Yazma
