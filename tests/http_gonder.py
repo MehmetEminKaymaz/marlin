@@ -50,7 +50,9 @@ def main():
     reply = b"".join(chunks).decode("utf-8", "replace").replace("\r\n", "\n")
     if not reply.endswith("\n"):
         reply += "\n"
-    sys.stdout.write(reply)
+    # Bayt olarak UTF-8: Windows'ta metin akışı konsolun kod sayfasıyla
+    # (cp1252) yazar ve Türkçe harflerde hata verir.
+    sys.stdout.buffer.write(reply.encode("utf-8"))
 
 
 if __name__ == "__main__":
