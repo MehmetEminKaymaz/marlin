@@ -97,9 +97,11 @@ for src in *.marl; do
 
     for opt in "${configs[@]}"; do
         # ($opt bilerek tırnaksız: birden çok seçenek içerebilir)
-        "$COMPILER" "$src" $opt -o "$PROG" > "$TMP/err" 2>&1
+        $TIMEOUT "$COMPILER" "$src" $opt -o "$PROG" > "$TMP/err" 2>&1
         rc=$?
-        if [ "$rc" != 0 ]; then
+        if [ -n "$TIMEOUT" ] && [ "$rc" = 124 ]; then
+            bad "$src $opt" "zaman asimi (60 sn): derleyici takildi"; continue
+        elif [ "$rc" != 0 ]; then
             # (128'den büyük kod: derleyici bir sinyalle çöktü; sinyal = kod - 128)
             bad "$src $opt" "derlenemedi (cikis kodu $rc): $(head -3 "$TMP/err")"; continue
         fi
@@ -113,8 +115,11 @@ for src in *.marl; do
             wait "$server"
             code=$?
         else
-            MARLIN_STRING_CHECK=1 "$PROG" > "$TMP/actual" 2> "$TMP/stderr"
+            MARLIN_STRING_CHECK=1 $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr"
             code=$?
+        fi
+        if [ -n "$TIMEOUT" ] && [ "$code" = 124 ]; then
+            bad "$src $opt" "zaman asimi (60 sn): program takildi"; continue
         fi
         if [ -n "$EXE" ]; then
             tr -d '\r' < "$TMP/actual" > "$TMP/actual.lf" && mv "$TMP/actual.lf" "$TMP/actual"

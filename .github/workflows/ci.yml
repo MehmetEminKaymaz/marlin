@@ -15,10 +15,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Aynı dala yeni bir push gelince eski çalışma iptal edilir.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -97,6 +103,7 @@ jobs:
       - name: Teşhis
         if: failure()
         run: |
+          set +e   # bir adım kalsa da hepsini göster
           cd tests
           c="../build/marlin_lang$MARLIN_EXE"
           for emit in mlir llvm-mlir llvm-ir obj exe; do

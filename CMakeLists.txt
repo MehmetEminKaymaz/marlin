@@ -41,6 +41,14 @@ if(MARLIN_ANTLR_FROM_SOURCE)
             URL https://www.antlr.org/download/antlr4-cpp-runtime-${MARLIN_ANTLR_VERSION}-source.zip
             DOWNLOAD_EXTRACT_TIMESTAMP ON)
     FetchContent_MakeAvailable(antlr4_runtime)
+    # Başkasının kodu: uyarıları bizim derleme çıktımızı boğmasın.
+    # ANTLR 4.13.2'de ProfilingATNSimulator.cpp <chrono>'yu içermeyi unutur;
+    # GCC/Clang'ın standart kütüphanesinde başka başlıktan gelir, MSVC'ninkinde gelmez.
+    if(MSVC)
+        target_compile_options(antlr4_static PRIVATE /w /FIchrono)
+    else()
+        target_compile_options(antlr4_static PRIVATE -w)
+    endif()
     set(ANTLR4_INCLUDE_DIR ${antlr4_runtime_SOURCE_DIR}/runtime/src)
     set(ANTLR4_LIBRARY antlr4_static)
 
@@ -179,8 +187,21 @@ add_custom_command(
 
 include_directories(${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
 
-# "native": derleyicinin çalıştığı makinenin hedefi (kod üretici, asm yazıcı ...)
-llvm_map_components_to_libnames(LLVM_NATIVE_LIBS native passes target mc)
+# LLVM'in kendisi. İki biçimde kurulmuş olabilir:
+#   * bileşen bileşen statik kütüphaneler (kendi derlememiz): gerekenler adıyla
+#     bağlanır; "native" derleyicinin çalıştığı makinenin hedefidir (kod
+#     üretici, asm yazıcı ...);
+#   * tek paylaşımlı kütüphane, libLLVM (LLVM_LINK_LLVM_DYLIB; ör. conda-forge):
+#     MLIR kütüphaneleri de ona bağlıdır. Yanına statik bileşen bağlanırsa
+#     programda LLVM'in iki kopyası olur (kayıt tabloları ikiye bölünür,
+#     derleyici çöker); bu yüzden yalnızca o bağlanır.
+if(LLVM_LINK_LLVM_DYLIB)
+    set(MARLIN_LLVM_LIBS LLVM)
+else()
+    llvm_map_components_to_libnames(LLVM_NATIVE_LIBS native passes target mc)
+    set(MARLIN_LLVM_LIBS LLVMCore LLVMSupport LLVMAsmParser LLVMIRReader LLVMTransformUtils ${LLVM_NATIVE_LIBS})
+endif()
+message(STATUS "LLVM kutuphaneleri: ${MARLIN_LLVM_LIBS}")
 add_definitions(${LLVM_DEFINITIONS})
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -282,11 +303,7 @@ target_link_libraries(marlin_lang PRIVATE
         MLIRSupport
         MLIRDialect
 
-        LLVMCore
-        LLVMSupport
-        LLVMAsmParser
-        LLVMIRReader
-        LLVMTransformUtils
+        ${MARLIN_LLVM_LIBS}
 
         MLIRFuncDialect
         MLIRArithDialect
@@ -344,9 +361,6 @@ target_link_libraries(marlin_lang PRIVATE
         MLIRUBToLLVM
         MLIRIndexToLLVM
         MLIRComplexToLLVM
-
-        # LLVM IR -> makine kodu: yerel hedef (X86) + optimizasyon hattı
-        ${LLVM_NATIVE_LIBS}
 
         MLIRPass
         MLIRTransforms
