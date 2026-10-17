@@ -97,8 +97,11 @@ for src in *.marl; do
 
     for opt in "${configs[@]}"; do
         # ($opt bilerek tırnaksız: birden çok seçenek içerebilir)
-        if ! "$COMPILER" "$src" $opt -o "$PROG" 2> "$TMP/err"; then
-            bad "$src $opt" "derlenemedi: $(head -3 "$TMP/err")"; continue
+        "$COMPILER" "$src" $opt -o "$PROG" > "$TMP/err" 2>&1
+        rc=$?
+        if [ "$rc" != 0 ]; then
+            # (128'den büyük kod: derleyici bir sinyalle çöktü; sinyal = kod - 128)
+            bad "$src $opt" "derlenemedi (cikis kodu $rc): $(head -3 "$TMP/err")"; continue
         fi
         : > "$TMP/replies"
         if [ -n "$port" ]; then

@@ -43,6 +43,9 @@ jobs:
           create-args: >-
             mlir=19.1.7
             llvmdev=19.1.7
+            zlib
+            zstd
+            libxml2
             libpq
             sqlite
             cmake
@@ -88,3 +91,19 @@ jobs:
 
       - name: Testler
         run: bash tests/run.sh "../build/marlin_lang$MARLIN_EXE"
+
+      # Testler kalırsa: küçük bir programı adım adım derleyip hangi aşamada
+      # bozulduğunu gösterir.
+      - name: Teşhis
+        if: failure()
+        run: |
+          cd tests
+          c="../build/marlin_lang$MARLIN_EXE"
+          for emit in mlir llvm-mlir llvm-ir obj exe; do
+            echo "=== --emit=$emit"
+            "$c" print.marl --emit=$emit -o "out.$emit" > log.txt 2>&1
+            echo "cikis kodu: $?"
+            head -40 log.txt
+          done
+          ls -la out.* || true
+          [ -f out.exe ] && { ./out.exe; echo "program cikis kodu: $?"; } || true
