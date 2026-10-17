@@ -23,14 +23,14 @@
 // Program devam edemeyecek bir hata yaptığında (sınır dışı indeks gibi) mesaj
 // yazıp 1 koduyla çıkar. Önce stdout boşaltılır ki o ana kadarki çıktı kaybolmasın.
 
-// Çıkış _Exit iledir (exit değil): exit, program kapanırken çalışan temizlik
-// kodlarını çağırır; paralel döngülerin iş parçacığı havuzu orada bütün iş
-// parçacıklarının bitmesini bekler ve hata yapan iş parçacığı hiç bitmeyeceği
-// için program kilitlenebilir.
+// Çıkış mr_exit_now iledir (exit değil): exit, program kapanırken çalışan
+// temizlik kodlarını çağırır; paralel döngülerin iş parçacığı havuzu orada
+// bütün iş parçacıklarının bitmesini bekler ve hata yapan iş parçacığı hiç
+// bitmeyeceği için program kilitlenebilir.
 static void fail(void) {
     fflush(stdout);
     fflush(stderr);
-    _Exit(1);
+    mr_exit_now(1);
 }
 
 // Her hata fonksiyonunun ilk işi. Paralel döngüde birden çok iş parçacığı aynı
@@ -243,7 +243,7 @@ void marlin_rt_exit(int32_t code) {
     report_live_strings();
     fflush(stdout);
     fflush(stderr);
-    _Exit(code);
+    mr_exit_now(code);
 }
 
 // `length` baytlık yeni bir string ayırır; içeriğini çağıran doldurur.

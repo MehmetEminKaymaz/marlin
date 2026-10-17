@@ -26,9 +26,9 @@ int64_t marlin_os_env(int64_t name) {
     return result;
 }
 
-// Programı hemen bitirir. (_Exit: bkz. marlin_rt.c, fail.)
+// Programı hemen bitirir (bkz. platform.h, mr_exit_now).
 void marlin_os_exit(int32_t code) {
     fflush(stdout);
     fflush(stderr);
-    _Exit(code);
+    mr_exit_now(code);
 }

@@ -36,6 +36,14 @@ const char* mr_arg(int index);
 // (free ile bırakılır).
 char* mr_getenv(const char* name);
 
+// Süreci HEMEN bitirir: kapanış kodları (atexit, kütüphanelerin yıkıcıları)
+// çalışmaz. Çalışan görevler beklenmez; MLIR'in iş parçacığı havuzunun
+// yıkıcısı bütün görevlerin bitmesini bekler ve bitmeyen bir görev (ör. HTTP
+// sunucusu) varsa sonsuza dek beklerdi. POSIX'te _Exit; Windows'ta _Exit bile
+// DLL'lerin kapanış kodunu çalıştırdığı için TerminateProcess. Açık akışları
+// çağıran boşaltmalıdır (fflush).
+_Noreturn void mr_exit_now(int code);
+
 // ---------------------------------------------------------------------------
 // Standart akışlar
 // ---------------------------------------------------------------------------

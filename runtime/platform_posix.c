@@ -38,6 +38,8 @@ __attribute__((constructor)) static void save_arguments(int argc, char** argv) {
     saved_argv = argv;
 }
 
+_Noreturn void mr_exit_now(int code) { _Exit(code); }
+
 int mr_arg_count(void) { return saved_argc; }
 const char* mr_arg(int index) { return saved_argv[index]; }
 

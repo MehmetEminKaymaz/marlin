@@ -54,9 +54,11 @@ EXE=""
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) EXE=".exe" ;; esac
 PY=python3
 command -v python3 > /dev/null 2>&1 && python3 -c '' 2> /dev/null || PY=python
+# (-k 5: 60 saniyede sinyalle kapanmayan program 5 saniye sonra zorla
+# öldürülür; Windows'taki yerel programlar kibar sinyali duymaz.)
 TIMEOUT=""
-if command -v timeout > /dev/null 2>&1; then TIMEOUT="timeout 60"
-elif command -v gtimeout > /dev/null 2>&1; then TIMEOUT="gtimeout 60"; fi
+if command -v timeout > /dev/null 2>&1; then TIMEOUT="timeout -k 5 60"
+elif command -v gtimeout > /dev/null 2>&1; then TIMEOUT="gtimeout -k 5 60"; fi
 PROG="$TMP/prog$EXE"
 
 has_gpu=0

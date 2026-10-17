@@ -70,7 +70,7 @@ void* aligned_alloc(size_t alignment, size_t size) {
         fprintf(stderr, "calisma zamani hatasi: aligned_alloc: %zu baytlik hizalama Windows'ta "
                         "desteklenmiyor (en fazla 16)\n", alignment);
         fflush(stderr);
-        _Exit(1);
+        mr_exit_now(1);
     }
     return malloc(size);
 }
@@ -93,6 +93,11 @@ __attribute__((constructor)) static void start_up(void) {
 
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
+}
+
+_Noreturn void mr_exit_now(int code) {
+    TerminateProcess(GetCurrentProcess(), (UINT)code);
+    _Exit(code); // (TerminateProcess kendi sürecinde dönmez)
 }
 
 int mr_arg_count(void) { return saved_argc; }
