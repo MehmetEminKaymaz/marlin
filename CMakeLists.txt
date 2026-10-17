@@ -250,7 +250,10 @@ add_library(marlinrt STATIC
         runtime/http_parser.c
         runtime/http_parser.h
         runtime/marlin_task.c
-        runtime/marlin_map.c)
+        runtime/marlin_map.c
+        runtime/std_json.c
+        runtime/json_parser.c
+        runtime/json_parser.h)
 add_dependencies(marlin_lang marlinrt)
 target_compile_definitions(marlin_lang PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE:marlinrt>")
 

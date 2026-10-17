@@ -1,0 +1,166 @@
+// std.json — JSON okuma.
+//
+//   import std.json as json;
+//
+//   json.Doc d = json.parse("{\"ad\": \"Ayse\", \"etiketler\": [\"a\", \"b\"]}");
+//   if !d.ok {
+//       print("gecersiz JSON: " + d.error);      // "satir 1, sutun 9: ..."
+//       return;
+//   }
+//   print(json.as_string(json.get(d.root, "ad")));
+//   json.Value etiketler = json.get(d.root, "etiketler");
+//   for i in 0 .. json.length(etiketler) {
+//       print(json.as_string(json.at(etiketler, i)));
+//   }
+//   json.free(d);
+//
+// BELGE VE DEĞERLER
+//
+// parse metni bir kez ayrıştırır ve bir belge (Doc) verir. Değerler (Value)
+// belgenin içini gösterir; belge free ile bırakılınca hepsi geçersiz olur.
+// Belge değişmezdir: görevler ve paralel döngüler onu aynı anda okuyabilir.
+//
+// GÜVENİLMEYEN GİRDİ
+//
+// JSON genellikle dışarıdan gelir (bir HTTP isteğinin gövdesi). Bu yüzden
+// hiçbir okuma programı durdurmaz:
+//
+//   * Geçersiz JSON: d.ok yanlıştır, d.error konumlu bir açıklamadır.
+//   * Olmayan anahtar / sınır dışı indeks: kind'ı "missing" olan bir değer
+//     döner; onun üzerinde de get / at yapılabilir (yine "missing").
+//   * Yanlış tipte okuma: as_int bir stringe uygulanırsa 0, as_string bir
+//     sayıya uygulanırsa "" verir. Tipi önceden kind ile denetlenebilir.
+//
+// Ayrıştırma katıdır (RFC 8259): sondaki virgül, yorum, tek tırnak, NaN yok;
+// UTF-8 doğrulanır; iç içelik en fazla 256 seviyedir.
+
+// C tarafı: runtime/std_json.c, runtime/json_parser.c
+extern func c_parse(string text) -> int64;
+@pure extern func c_ok(int64 doc) -> bool;
+@pure extern func c_error(int64 doc) -> string;
+extern func c_free(int64 doc) -> void;
+@pure extern func c_kind(int64 doc, int64 node) -> int;
+@pure extern func c_get(int64 doc, int64 node, string key) -> int64;
+@pure extern func c_at(int64 doc, int64 node, int64 index) -> int64;
+@pure extern func c_length(int64 doc, int64 node) -> int64;
+@pure extern func c_key_at(int64 doc, int64 node, int64 index) -> string;
+@pure extern func c_text(int64 doc, int64 node) -> string;
+@pure extern func c_is_integer(int64 doc, int64 node) -> bool;
+@pure extern func c_integer(int64 doc, int64 node) -> int64;
+@pure extern func c_number(int64 doc, int64 node) -> float64;
+@pure extern func c_bool(int64 doc, int64 node) -> bool;
+@pure extern func c_quote(string text) -> string;
+
+// Belgedeki bir değer. node -1: olmayan değer ("missing").
+public struct Value {
+    int64 doc;
+    int64 node;
+}
+
+// Ayrıştırılmış belge. `ok` yanlışsa `error` sebebi söyler ve `root`
+// "missing"tir.
+public struct Doc {
+    int64 handle;
+    bool ok;
+    string error;
+    Value root;
+}
+
+public func parse(string text) -> Doc {
+    int64 handle = c_parse(text);
+    bool ok = c_ok(handle);
+    int64 root = -1;
+    if ok {
+        root = 0;
+    }
+    return Doc(handle, ok, c_error(handle), Value(handle, root));
+}
+
+// Belgeyi ve bütün değerlerini bırakır.
+public func free(Doc d) -> void {
+    c_free(d.handle);
+}
+
+// "null", "bool", "number", "string", "array", "object" ya da "missing"
+public func kind(Value v) -> string {
+    int k = c_kind(v.doc, v.node);
+    if k == 1 { return "null"; }
+    if k == 2 { return "bool"; }
+    if k == 3 { return "number"; }
+    if k == 4 { return "string"; }
+    if k == 5 { return "array"; }
+    if k == 6 { return "object"; }
+    return "missing";
+}
+
+// Değer var mı? (Olmayan anahtar ya da sınır dışı indeks değilse.)
+public func exists(Value v) -> bool {
+    return c_kind(v.doc, v.node) != 0;
+}
+
+public func is_null(Value v) -> bool {
+    return c_kind(v.doc, v.node) == 1;
+}
+
+// Nesnenin `key` anahtarlı değeri; yoksa (ya da v nesne değilse) "missing".
+// Aynı anahtar birden çok kez geçiyorsa sonuncusu.
+public func get(Value v, string key) -> Value {
+    return Value(v.doc, c_get(v.doc, v.node, key));
+}
+
+public func has(Value v, string key) -> bool {
+    return c_get(v.doc, v.node, key) >= 0;
+}
+
+// Dizinin (ya da nesnenin, yazılış sırasıyla) i. elemanı; yoksa "missing".
+public func at(Value v, int64 i) -> Value {
+    return Value(v.doc, c_at(v.doc, v.node, i));
+}
+
+// Dizinin / nesnenin eleman sayısı; diğer değerlerde 0.
+public func length(Value v) -> int64 {
+    return c_length(v.doc, v.node);
+}
+
+// Nesnenin anahtarları, yazılış sırasıyla (yeni bir liste; free ile bırakılır).
+public func keys(Value v) -> list<string> {
+    list<string> result = [];
+    if c_kind(v.doc, v.node) != 6 {
+        return result;
+    }
+    for i in 0 .. c_length(v.doc, v.node) {
+        push(result, c_key_at(v.doc, v.node, i));
+    }
+    return result;
+}
+
+// String değilse "".
+public func as_string(Value v) -> string {
+    return c_text(v.doc, v.node);
+}
+
+// Sayı değilse 0; kesirli sayı sıfıra doğru kesilir (2.7 → 2).
+public func as_int(Value v) -> int64 {
+    return c_integer(v.doc, v.node);
+}
+
+// Sayı değilse 0.0.
+public func as_float(Value v) -> float64 {
+    return c_number(v.doc, v.node);
+}
+
+// Bool değilse false.
+public func as_bool(Value v) -> bool {
+    return c_bool(v.doc, v.node);
+}
+
+// Sayı kesirsiz ve int64'e sığıyor mu? (1 ve 1.0 ayrılır: 1.0 tamsayı değildir.)
+public func is_integer(Value v) -> bool {
+    return c_is_integer(v.doc, v.node);
+}
+
+// Metni JSON string literali olarak yazar: quote("a\"b") → "\"a\\\"b\"".
+// JSON'u elle oluştururken kullanıcıdan gelen metni güvenle eklemek için.
+public func quote(string s) -> string {
+    return c_quote(s);
+}

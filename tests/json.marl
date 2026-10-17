@@ -1,0 +1,82 @@
+// output: true object 4
+// output: Ayşe Nur 30 true
+// output: 3 a b ğ
+// output: 2.5 true false 2
+// output: missing missing false 0
+// output: 0 0.0  false
+// output: ad yas etiketler adres
+// output: Ankara 6
+// output: null true
+// output: 😀 é
+// output: false satir 1, sutun 8: ',' ya da '}' bekleniyordu, 'x' bulundu
+// output: false satir 2, sutun 1: degerden sonra fazladan karakter var
+// output: false satir 1, sutun 5: deger (true, false, null, sayi, string, dizi ya da nesne) bekleniyordu, ']' bulundu
+// output: false bos girdi
+// output: "a\"b\\c\n" 42 number
+// leaks: 0
+import std.json as json;
+import std.string as strs;
+
+func main() -> void {
+    string metin = "{\"ad\": \"Ay\\u015fe Nur\", \"yas\": 30, \"etiketler\": [\"a\", \"b\", \"\\u011f\"], " +
+                   "\"adres\": {\"sehir\": \"Ankara\", \"kod\": 6, \"bos\": null, \"aktif\": true}}";
+    json.Doc d = json.parse(metin);
+    print(d.ok, json.kind(d.root), json.length(d.root));
+
+    print(json.as_string(json.get(d.root, "ad")), json.as_int(json.get(d.root, "yas")),
+          json.has(d.root, "yas"));
+
+    json.Value etiketler = json.get(d.root, "etiketler");
+    print(json.length(etiketler), json.as_string(json.at(etiketler, 0)),
+          json.as_string(json.at(etiketler, 1)), json.as_string(json.at(etiketler, 2)));
+
+    // Sayılar: tamsayı / kesirli
+    json.Doc s = json.parse("[2.5, 7, 1.0]");
+    print(json.as_float(json.at(s.root, 0)), json.is_integer(json.at(s.root, 1)),
+          json.is_integer(json.at(s.root, 2)), json.as_int(json.at(s.root, 0)));
+
+    // Olmayan değerler program durdurmaz: "missing" zinciri
+    json.Value yok = json.get(json.get(d.root, "olmayan"), "derin");
+    print(json.kind(yok), json.kind(json.at(etiketler, 9)), json.exists(yok), json.length(yok));
+    // Yanlış tipte okuma: sıfır değeri
+    print(json.as_int(json.get(d.root, "ad")), json.as_float(etiketler),
+          json.as_string(json.get(d.root, "yas")), json.as_bool(json.get(d.root, "yas")));
+
+    // Anahtarlar yazılış sırasıyla
+    list<string> anahtarlar = json.keys(d.root);
+    print(strs.join(anahtarlar, " "));
+    free(anahtarlar);
+
+    json.Value adres = json.get(d.root, "adres");
+    print(json.as_string(json.get(adres, "sehir")), json.as_int(json.get(adres, "kod")));
+    print(json.kind(json.get(adres, "bos")), json.as_bool(json.get(adres, "aktif")));
+
+    // Vekil çifti (U+1F600) ve kaçışsız UTF-8
+    json.Doc u = json.parse("[\"\\ud83d\\ude00\", \"é\"]");
+    print(json.as_string(json.at(u.root, 0)), json.as_string(json.at(u.root, 1)));
+
+    // Geçersiz girdiler: konumlu hata, program durmaz
+    json.Doc h1 = json.parse("{\"a\": 1x}");
+    print(h1.ok, h1.error);
+    json.Doc h2 = json.parse("[1]\n1");
+    print(h2.ok, h2.error);
+    json.Doc h3 = json.parse("[1, ]");
+    print(h3.ok, h3.error);
+    json.Doc h4 = json.parse("   ");
+    print(h4.ok, strs.substr(h4.error, 18, 9));      // "satir 1, sutun 4: " sonrası
+
+    // quote: elle JSON oluşturma
+    string olusan = "{\"m\": " + json.quote("a\"b\\c\n") + ", \"n\": 42}";
+    json.Doc o = json.parse(olusan);
+    print(json.quote(json.as_string(json.get(o.root, "m"))), json.as_int(json.get(o.root, "n")),
+          json.kind(json.get(o.root, "n")));
+
+    json.free(d);
+    json.free(s);
+    json.free(u);
+    json.free(h1);
+    json.free(h2);
+    json.free(h3);
+    json.free(h4);
+    json.free(o);
+}
