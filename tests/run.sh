@@ -1,5 +1,5 @@
 #!/bin/bash
-# Testleri çalıştırır (WSL / Linux).
+# Testleri çalıştırır (Linux, macOS; Windows'ta Git Bash ile).
 #
 # Her .marl dosyası, başındaki yorum satırlarıyla ne beklediğini söyler:
 #
@@ -47,6 +47,18 @@ COMPILER="${1:-../cmake-build-debug/marlin_lang}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Platform farkları: Windows'ta çalıştırılabilir dosya .exe uzantılıdır ve
+# programın çıktısı \r\n satır sonludur; Python'ın adı python olabilir;
+# macOS'ta timeout yoktur (Homebrew coreutils: gtimeout).
+EXE=""
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) EXE=".exe" ;; esac
+PY=python3
+command -v python3 > /dev/null 2>&1 && python3 -c '' 2> /dev/null || PY=python
+TIMEOUT=""
+if command -v timeout > /dev/null 2>&1; then TIMEOUT="timeout 60"
+elif command -v gtimeout > /dev/null 2>&1; then TIMEOUT="gtimeout 60"; fi
+PROG="$TMP/prog$EXE"
+
 has_gpu=0
 if nvidia-smi > /dev/null 2>&1; then has_gpu=1; else echo "  (GPU bulunamadi: @GPU testleri yalnizca --gpu=off ile calisacak)"; fi
 
@@ -85,21 +97,25 @@ for src in *.marl; do
 
     for opt in "${configs[@]}"; do
         # ($opt bilerek tırnaksız: birden çok seçenek içerebilir)
-        if ! "$COMPILER" "$src" $opt -o "$TMP/prog" 2> "$TMP/err"; then
+        if ! "$COMPILER" "$src" $opt -o "$PROG" 2> "$TMP/err"; then
             bad "$src $opt" "derlenemedi: $(head -3 "$TMP/err")"; continue
         fi
         : > "$TMP/replies"
         if [ -n "$port" ]; then
-            MARLIN_STRING_CHECK=1 timeout 60 "$TMP/prog" > "$TMP/actual" 2> "$TMP/stderr" &
+            MARLIN_STRING_CHECK=1 $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr" &
             server=$!
             while IFS= read -r request; do
-                python3 http_gonder.py "$port" "$request" >> "$TMP/replies" 2>&1
+                $PY http_gonder.py "$port" "$request" >> "$TMP/replies" 2>&1
             done < <(sed -n 's|^// send: *||p' "$src")
             wait "$server"
             code=$?
         else
-            MARLIN_STRING_CHECK=1 "$TMP/prog" > "$TMP/actual" 2> "$TMP/stderr"
+            MARLIN_STRING_CHECK=1 "$PROG" > "$TMP/actual" 2> "$TMP/stderr"
             code=$?
+        fi
+        if [ -n "$EXE" ]; then
+            tr -d '\r' < "$TMP/actual" > "$TMP/actual.lf" && mv "$TMP/actual.lf" "$TMP/actual"
+            tr -d '\r' < "$TMP/replies" > "$TMP/replies.lf" && mv "$TMP/replies.lf" "$TMP/replies"
         fi
         missing=""
         while IFS= read -r msg; do
@@ -126,7 +142,7 @@ for src in *.marl; do
 done
 
 # Dil sunucusu (editör eklentisinin kullandığı marlin_lang --lsp)
-if python3 lsp_test.py "$COMPILER" > "$TMP/lsp" 2>&1; then
+if $PY lsp_test.py "$COMPILER" > "$TMP/lsp" 2>&1; then
     ok "dil sunucusu (lsp_test.py)"
 else
     bad "dil sunucusu (lsp_test.py)" "$(cat "$TMP/lsp")"

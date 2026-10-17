@@ -7,41 +7,37 @@
 //
 // Argümanlar bilerek en az 32 bit genişliğindedir: daha dar tamsayıların
 // çağrı sırasında nasıl genişletileceği platforma bağlıdır.
-
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE // getline, flockfile
-#endif
+//
+// İşletim sistemine dokunan her şey platform.h üzerinden gider.
 
 #include "marlin_rt.h"
+#include "platform.h"
 
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <time.h>
-#include <unistd.h>
 
 // --- Çalışma zamanı hataları ---
 // Program devam edemeyecek bir hata yaptığında (sınır dışı indeks gibi) mesaj
 // yazıp 1 koduyla çıkar. Önce stdout boşaltılır ki o ana kadarki çıktı kaybolmasın.
 
-// Çıkış _exit iledir (exit değil): exit, program kapanırken çalışan temizlik
+// Çıkış _Exit iledir (exit değil): exit, program kapanırken çalışan temizlik
 // kodlarını çağırır; paralel döngülerin iş parçacığı havuzu orada bütün iş
 // parçacıklarının bitmesini bekler ve hata yapan iş parçacığı hiç bitmeyeceği
 // için program kilitlenebilir.
 static void fail(void) {
     fflush(stdout);
     fflush(stderr);
-    _exit(1);
+    _Exit(1);
 }
 
 // Her hata fonksiyonunun ilk işi. Paralel döngüde birden çok iş parçacığı aynı
 // anda hata yapabilir: stderr kilitlenir ve bir daha bırakılmaz, böylece
 // yalnızca ilk hatanın mesajı yazılır (diğerleri program çıkana kadar bekler).
 static void begin_panic(void) {
-    flockfile(stderr);
+    mr_lock_stream(stderr);
     fflush(stdout);
 }
 
@@ -113,11 +109,7 @@ void marlin_panic_matmul(int32_t line) {
 // Saniye cinsinden zaman. Başlangıç anı belirsizdir (makinenin açılışı);
 // yalnızca iki çağrının farkı anlamlıdır. Saat geri gitmez (sistem saati
 // değiştirilse bile), bu yüzden süre ölçmeye uygundur.
-double marlin_time(void) {
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
-}
+double marlin_time(void) { return mr_monotonic_seconds(); }
 
 // --- print ---
 //
@@ -127,9 +119,9 @@ double marlin_time(void) {
 // stdout bu arada çağıran iş parçacığına kilitlidir. Böylece satırların sırası
 // belirsiz olsa da her satır bütün çıkar.
 
-void marlin_print_begin(void) { flockfile(stdout); }
+void marlin_print_begin(void) { mr_lock_stream(stdout); }
 
-void marlin_print_end(void) { funlockfile(stdout); }
+void marlin_print_end(void) { mr_unlock_stream(stdout); }
 
 void marlin_print_i64(int64_t value) { printf("%lld", (long long)value); }
 
@@ -225,7 +217,9 @@ static const char* str_data(int64_t handle) { return handle ? str_of(handle)->da
 static int64_t live_strings = 0;
 
 static void report_live_strings(void) {
-    if (!getenv("MARLIN_STRING_CHECK")) return;
+    char* check = mr_getenv("MARLIN_STRING_CHECK");
+    if (!check) return;
+    free(check);
     const int64_t live = __atomic_load_n(&live_strings, __ATOMIC_RELAXED);
     if (live != 0) fprintf(stderr, "string denetimi: %lld string birakilmadi\n", (long long)live);
 }
@@ -240,7 +234,7 @@ void marlin_rt_exit(int32_t code) {
     report_live_strings();
     fflush(stdout);
     fflush(stderr);
-    _exit(code);
+    _Exit(code);
 }
 
 // `length` baytlık yeni bir string ayırır; içeriğini çağıran doldurur.
@@ -425,14 +419,20 @@ void marlin_rt_panic(const char* format, ...) {
     fail();
 }
 
+// (getline POSIX'tir, Windows'ta yok; satır burada bayt bayt okunur.)
 int64_t marlin_rt_read_line(FILE* stream) {
-    char* line = NULL;
-    size_t capacity = 0;
-    ssize_t length = getline(&line, &capacity, stream);
-    if (length < 0) length = 0; // dosya sonu ya da okuma hatası: boş satır
-    if (length > 0 && line[length - 1] == '\n') --length;
+    size_t length = 0, capacity = 128;
+    char* line = malloc(capacity);
+    int c;
+    while ((c = getc(stream)) != EOF && c != '\n') { // dosya sonu ya da hata: satır biter
+        if (length + 1 == capacity) {
+            capacity *= 2;
+            line = realloc(line, capacity);
+        }
+        line[length++] = (char)c;
+    }
     if (length > 0 && line[length - 1] == '\r') --length;
-    const int64_t result = str_from_bytes(line ? line : "", (int64_t)length);
+    const int64_t result = str_from_bytes(line, (int64_t)length);
     free(line);
     return result;
 }

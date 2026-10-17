@@ -17,14 +17,14 @@
 
 #include "marlin_rt.h"
 
-#include <pthread.h>
+#include "platform.h"
 #include <sqlite3.h>
 #include <stdlib.h>
 #include <string.h>
 
 typedef struct {
     sqlite3* db;
-    pthread_mutex_t lock;
+    mr_mutex lock;
 } Conn;
 
 typedef struct {
@@ -69,7 +69,7 @@ int64_t marlin_sqlite_open(int64_t path) {
     }
     Conn* conn = malloc(sizeof *conn);
     conn->db = db;
-    pthread_mutex_init(&conn->lock, NULL);
+    mr_mutex_init(&conn->lock);
     return (int64_t)(intptr_t)conn;
 }
 
@@ -77,7 +77,7 @@ void marlin_sqlite_close(int64_t handle) {
     if (!handle) return;
     Conn* conn = (Conn*)(intptr_t)handle;
     sqlite3_close(conn->db);
-    pthread_mutex_destroy(&conn->lock);
+    mr_mutex_destroy(&conn->lock);
     free(conn);
 }
 
@@ -119,7 +119,7 @@ int64_t marlin_sqlite_query(int64_t handle, int64_t sql, int64_t paramsHandle) {
     Result* r = calloc(1, sizeof *r);
     r->ok = 1;
 
-    pthread_mutex_lock(&conn->lock);
+    mr_mutex_lock(&conn->lock);
     sqlite3_stmt* stmt = NULL;
     if (sqlite3_prepare_v2(conn->db, marlin_rt_str_data(sql), -1, &stmt, NULL) != SQLITE_OK) {
         fail_result(r, conn->db);
@@ -182,7 +182,7 @@ int64_t marlin_sqlite_query(int64_t handle, int64_t sql, int64_t paramsHandle) {
 
 done:
     sqlite3_finalize(stmt);
-    pthread_mutex_unlock(&conn->lock);
+    mr_mutex_unlock(&conn->lock);
     params_free(params);
     return (int64_t)(intptr_t)r;
 }

@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "llvm/IR/Module.h"
 #include "llvm/Target/TargetMachine.h"
@@ -35,9 +36,10 @@ public:
     /// Modülü nesne dosyası (.o) olarak yazar.
     bool emitObject(llvm::Module& module, const std::string& path, std::string& error);
 
-    /// Nesne dosyasını sistemin C derleyicisi (cc) ile bağlayıp çalıştırılabilir
-    /// dosya üretir; C çalışma zamanı ve libm böylece otomatik eklenir.
-    /// `runtimeLib`: marlin çalışma zamanı kütüphanesi (libmarlinrt.a).
+    /// Nesne dosyasını sistemin C derleyicisi (Linux/macOS'ta cc, Windows'ta
+    /// clang) ile bağlayıp çalıştırılabilir dosya üretir; C çalışma zamanı ve
+    /// platformun sistem kütüphaneleri böylece otomatik eklenir.
+    /// `runtimeLib`: marlin çalışma zamanı kütüphanesi (runtimeLibraryName()).
     /// `needsThreads`: program paralel döngü içeriyor; iş parçacığı çalışma
     /// zamanı da bağlanır.
     /// `needsGpu`: program GPU'da çalışan kod içeriyor; GPU çalışma zamanı da
@@ -48,10 +50,17 @@ public:
                      const std::string& exePath, bool needsThreads, bool needsGpu,
                      const std::vector<std::string>& extraLibs, std::string& error);
 
-    /// libmarlinrt.a'nın yolunu bulur: önce MARLIN_RUNTIME ortam değişkeni, sonra
-    /// derleyicinin yanındaki dosya, en son derleme sırasında gömülen yol.
-    /// Bulunamazsa boş döner.
+    /// Çalışma zamanı kütüphanesinin yolunu bulur: önce MARLIN_RUNTIME ortam
+    /// değişkeni, sonra derleyicinin yanındaki dosya, en son derleme sırasında
+    /// gömülen yol. Bulunamazsa boş döner.
     static std::string findRuntimeLibrary(const char* argv0);
+
+    /// Çalışma zamanı kütüphanesinin dosya adı: libmarlinrt.a (Linux, macOS,
+    /// MinGW), marlinrt.lib (Windows / MSVC).
+    static const char* runtimeLibraryName();
+
+    /// -o verilmezse üretilen dosyanın adı: a.out, Windows'ta a.exe.
+    static const char* defaultExecutableName();
 };
 
 } // namespace marlin

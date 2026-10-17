@@ -5,8 +5,10 @@ project(MLIRWorkspace)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# LLVM ve MLIR için dizinler
-list(APPEND CMAKE_PREFIX_PATH "/home/emin/llvm-project/build-gpu")
+# LLVM ve MLIR için dizinler. Başka bir makinede -DMARLIN_LLVM_BUILD=<dizin>
+# (ya da doğrudan -DMLIR_DIR=...) ile verilir.
+set(MARLIN_LLVM_BUILD "/home/emin/llvm-project/build-gpu" CACHE PATH "LLVM/MLIR derleme ya da kurulum dizini")
+list(APPEND CMAKE_PREFIX_PATH "${MARLIN_LLVM_BUILD}")
 
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
@@ -18,32 +20,69 @@ message(STATUS "MLIR Paketleri Başarıyla Bağlandı.")
 # ANTLR4: MANUEL KÜTÜPHANE ARAMA (pkg-config OLMADAN)
 # ==============================================================================
 
-# 1. ANTLR4 Başlık (.h) dosyalarının olduğu klasörü bul
-find_path(ANTLR4_INCLUDE_DIR NAMES antlr4-runtime.h
-        PATHS /usr/include/antlr4-runtime /usr/local/include/antlr4-runtime
-        DOC "ANTLR4 C++ Runtime header dizini")
+# İki yol var:
+#   * Sistemdeki runtime (Linux: apt libantlr4-runtime-dev, macOS: Homebrew)
+#     ve aynı sürümün jar dosyası (ANTLR_JAR).
+#   * -DMARLIN_ANTLR_FROM_SOURCE=ON: runtime antlr.org'dan indirilip projeyle
+#     birlikte statik derlenir, aynı sürümün jar'ı da indirilir. Paketi
+#     olmayan platformlar (Windows) ve CI böyle derler.
+# Üretici (jar) ile runtime aynı sürümden olmalıdır.
+option(MARLIN_ANTLR_FROM_SOURCE "ANTLR C++ runtime'ini kaynaktan derle" OFF)
+set(MARLIN_ANTLR_VERSION "4.13.2" CACHE STRING "Kaynaktan derlenen ANTLR surumu")
 
-if(NOT ANTLR4_INCLUDE_DIR)
-    message(FATAL_ERROR "antlr4-runtime.h bulunamadi! WSL'de 'sudo apt install libantlr4-runtime-dev' calistirdiginizdan emin olun.")
-endif()
+if(MARLIN_ANTLR_FROM_SOURCE)
+    include(FetchContent)
+    set(ANTLR_BUILD_CPP_TESTS OFF CACHE BOOL "" FORCE)
+    set(ANTLR_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(ANTLR_BUILD_STATIC ON CACHE BOOL "" FORCE)
+    # MSVC: C kütüphanesinin DLL hali (/MD); LLVM de öyle derlenmiştir.
+    set(WITH_STATIC_CRT OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(antlr4_runtime
+            URL https://www.antlr.org/download/antlr4-cpp-runtime-${MARLIN_ANTLR_VERSION}-source.zip
+            DOWNLOAD_EXTRACT_TIMESTAMP ON)
+    FetchContent_MakeAvailable(antlr4_runtime)
+    set(ANTLR4_INCLUDE_DIR ${antlr4_runtime_SOURCE_DIR}/runtime/src)
+    set(ANTLR4_LIBRARY antlr4_static)
 
-# 2. ANTLR4 Derlenmiş Kütüphane (.so veya .a) dosyasını bul
-find_library(ANTLR4_LIBRARY NAMES antlr4-runtime
-        PATHS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib
-        DOC "ANTLR4 C++ Runtime kütüphanesi")
+    set(ANTLR_JAR "${CMAKE_CURRENT_BINARY_DIR}/antlr-${MARLIN_ANTLR_VERSION}-complete.jar")
+    if(NOT EXISTS "${ANTLR_JAR}")
+        file(DOWNLOAD https://www.antlr.org/download/antlr-${MARLIN_ANTLR_VERSION}-complete.jar
+                "${ANTLR_JAR}" STATUS antlrJarStatus)
+        list(GET antlrJarStatus 0 antlrJarCode)
+        if(NOT antlrJarCode EQUAL 0)
+            message(FATAL_ERROR "ANTLR jar dosyasi indirilemedi: ${antlrJarStatus}")
+        endif()
+    endif()
+else()
+    # 1. ANTLR4 Başlık (.h) dosyalarının olduğu klasörü bul
+    find_path(ANTLR4_INCLUDE_DIR NAMES antlr4-runtime.h
+            PATH_SUFFIXES antlr4-runtime
+            PATHS /usr/include /usr/local/include /opt/homebrew/include
+            DOC "ANTLR4 C++ Runtime header dizini")
+    if(NOT ANTLR4_INCLUDE_DIR)
+        message(FATAL_ERROR "antlr4-runtime.h bulunamadi! 'sudo apt install libantlr4-runtime-dev' "
+                            "ya da -DMARLIN_ANTLR_FROM_SOURCE=ON")
+    endif()
 
-if(NOT ANTLR4_LIBRARY)
-    message(FATAL_ERROR "libantlr4-runtime.so bulunamadi!")
+    # 2. ANTLR4 Derlenmiş Kütüphane (.so veya .a) dosyasını bul
+    find_library(ANTLR4_LIBRARY NAMES antlr4-runtime
+            PATHS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib /opt/homebrew/lib
+            DOC "ANTLR4 C++ Runtime kütüphanesi")
+    if(NOT ANTLR4_LIBRARY)
+        message(FATAL_ERROR "libantlr4-runtime bulunamadi! (ya da -DMARLIN_ANTLR_FROM_SOURCE=ON)")
+    endif()
+
+    # 3. Runtime ile aynı sürümün jar dosyası
+    set(ANTLR_JAR "/home/emin/antlr-4.10-complete.jar" CACHE FILEPATH "ANTLR arac jar dosyasi")
+    if(NOT EXISTS "${ANTLR_JAR}")
+        message(FATAL_ERROR "ANTLR jar dosyasi bulunamadi (${ANTLR_JAR}); -DANTLR_JAR=<yol> ile verin "
+                            "(surumu runtime ile ayni olmali)")
+    endif()
 endif()
 
 message(STATUS "ANTLR4 Headers: ${ANTLR4_INCLUDE_DIR}")
 message(STATUS "ANTLR4 Library: ${ANTLR4_LIBRARY}")
-
-# 3. İndirdiğimiz resmi ANTLR 4.13.1 Jar dosyasının yolu
-set(ANTLR_JAR "/home/emin/antlr-4.10-complete.jar")
-if(NOT EXISTS "${ANTLR_JAR}")
-    message(FATAL_ERROR "ANTLR jar dosyasi bulunamadi! Terminalde calistirin: wget https://www.antlr.org/download/antlr-4.13.1-complete.jar -O /home/emin/antlr-4.13.1-complete.jar")
-endif()
+message(STATUS "ANTLR4 Jar: ${ANTLR_JAR}")
 
 # 4. Gramer dosyamızın yolu ve üretilecek kodların kaydedileceği klasör
 set(ANTLR_GRAMMAR ${CMAKE_CURRENT_SOURCE_DIR}/marlin.g4)
@@ -157,20 +196,26 @@ add_executable(marlin_lang
 # (mlir::Pass'ten türeyen sınıf) da öyle derlenmeli; aksi halde bağlayıcı
 # mlir::Pass'in tip bilgisini arar ve bulamaz. Projenin geri kalanı RTTI
 # kullanır (AST üzerinde dynamic_cast, ANTLR).
+set(MARLIN_NO_RTTI "$<IF:$<CXX_COMPILER_ID:MSVC>,/GR-,-fno-rtti>")
 set_source_files_properties(LLVMBackend/GpuOffload.cpp LLVMBackend/ParallelMatmul.cpp
-        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+        PROPERTIES COMPILE_OPTIONS "${MARLIN_NO_RTTI}")
 # Dil sunucusu da MLIR'in LSP kütüphanesinin sınıflarını (llvm::ErrorInfo ...)
 # kullanır; aynı sebeple RTTI'siz derlenir. AST'ye dokunan kısmı ayrı bir
 # dosyadadır (Lsp/MarlinCheck.cpp).
-set_source_files_properties(Lsp/MarlinLsp.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+set_source_files_properties(Lsp/MarlinLsp.cpp PROPERTIES COMPILE_OPTIONS "${MARLIN_NO_RTTI}")
 
 # Çalışma zamanı kütüphanesi: derlenen her marlin programına bağlanır (print vb.).
 # Derleyiciyle aynı dizine üretilir; marlin_lang onu yanında arar, bulamazsa
 # aşağıda gömülen yola bakar.
 # std_*.c: standart kütüphane modüllerinin (std/*.marl) C ile yazılmış kısmı.
+# platform_*.c: işletim sistemine dokunan her şey (platform.h); her dosya
+# yalnızca kendi platformunda derlenir (#ifdef), liste her yerde aynıdır.
 add_library(marlinrt STATIC
         runtime/marlin_rt.c
         runtime/marlin_rt.h
+        runtime/platform.h
+        runtime/platform_posix.c
+        runtime/platform_win32.c
         runtime/std_string.c
         runtime/std_file.c
         runtime/std_io.c
@@ -191,7 +236,7 @@ target_compile_definitions(marlin_lang PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE
 set(MARLIN_DEPS_DIR "$ENV{HOME}/marlin-deps/root/usr" CACHE PATH
     "Sisteme kurulmadan acilmis kutuphaneler (libpq, sqlite)")
 find_path(MARLIN_PQ_INCLUDE libpq-fe.h PATH_SUFFIXES postgresql PATHS ${MARLIN_DEPS_DIR}/include)
-find_library(MARLIN_PQ_LIB NAMES pq PATHS ${MARLIN_DEPS_DIR}/lib/x86_64-linux-gnu)
+find_library(MARLIN_PQ_LIB NAMES pq libpq PATHS ${MARLIN_DEPS_DIR}/lib/x86_64-linux-gnu)
 if(MARLIN_PQ_INCLUDE AND MARLIN_PQ_LIB)
     message(STATUS "std.postgres: libpq ${MARLIN_PQ_LIB}")
     target_sources(marlinrt PRIVATE runtime/std_postgres.c)
@@ -217,13 +262,18 @@ target_compile_definitions(marlin_lang PRIVATE MARLIN_STD_DIR="${CMAKE_CURRENT_S
 
 # Paralel döngü içeren programlar MLIR'in iş parçacığı havuzuna
 # (libmlir_async_runtime.so) bağlanır; marlin_lang onu bu dizinde arar.
-target_compile_definitions(marlin_lang PRIVATE MARLIN_LLVM_LIB_DIR="${LLVM_LIBRARY_DIR}")
+# Windows'ta DLL'ler bin dizinindedir; program derlenince yanına kopyalanır.
+target_compile_definitions(marlin_lang PRIVATE MARLIN_LLVM_LIB_DIR="${LLVM_LIBRARY_DIR}"
+        MARLIN_LLVM_BIN_DIR="${LLVM_TOOLS_BINARY_DIR}")
 
 # 8. ANTLR'ın ürettiği dosyaların ve bulduğumuz sistem başlıklarının yolunu projeye tanıt
 target_include_directories(marlin_lang PRIVATE
         ${ANTLR_OUT_DIR}
         ${ANTLR4_INCLUDE_DIR}
 )
+if(MARLIN_ANTLR_FROM_SOURCE)
+    target_compile_definitions(marlin_lang PRIVATE ANTLR4CPP_STATIC)
+endif()
 
 # 9. MLIR kütüphanelerini ve bulduğumuz ANTLR kütüphanesini (SO/A dosyası) bağla
 target_link_libraries(marlin_lang PRIVATE

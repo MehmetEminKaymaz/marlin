@@ -318,8 +318,8 @@ int main(int argc, char** argv) {
     // --- Bağlama: geçici nesne dosyası + çalışma zamanı → çalıştırılabilir ---
     std::string runtimeLib = marlin::NativeCodegen::findRuntimeLibrary(argv[0]);
     if (runtimeLib.empty()) {
-        llvm::errs() << "Calisma zamani kutuphanesi (libmarlinrt.a) bulunamadi; "
-                        "MARLIN_RUNTIME ortam degiskeniyle yolunu verin.\n";
+        llvm::errs() << "Calisma zamani kutuphanesi (" << marlin::NativeCodegen::runtimeLibraryName()
+                     << ") bulunamadi; MARLIN_RUNTIME ortam degiskeniyle yolunu verin.\n";
         return 1;
     }
     llvm::SmallString<128> objectPath;
@@ -329,7 +329,8 @@ int main(int argc, char** argv) {
     }
     bool ok = codegen->emitObject(*llvmModule, objectPath.str().str(), error) &&
               marlin::NativeCodegen::link(objectPath.str().str(), runtimeLib,
-                                         outputPath.empty() ? "a.out" : outputPath,
+                                         outputPath.empty() ? marlin::NativeCodegen::defaultExecutableName()
+                                                            : outputPath,
                                          generator.usesParallelLoops(), generator.usesGpuCode(),
                                          extraLibs, error);
     llvm::sys::fs::remove(objectPath);

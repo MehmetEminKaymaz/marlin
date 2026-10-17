@@ -20,21 +20,16 @@
 // çağırabilir (çekirdek bağlantıları aralarında paylaştırır); bir istek ise
 // yalnızca onu alan iş parçacığında kullanılır. Son hata mesajı iş
 // parçacığına özeldir.
-
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE  // accept4
-#endif
+//
+// Soket çağrıları platform katmanındadır (platform.h): aynı kod Linux, macOS
+// ve Windows'ta derlenir.
 
 #include "marlin_rt.h"
 #include "http_parser.h"
+#include "platform.h"
 
-#include <errno.h>
-#include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
 
 enum {
     MAX_HEAD_BYTES = 64 * 1024,        // başlık bundan büyükse 431
@@ -43,12 +38,12 @@ enum {
 };
 
 typedef struct {
-    int fd;
+    mr_socket fd;
 } Server;
 
 typedef struct {
-    int fd;
-    char* data;          // isteğin baytları: başlık + gövde
+    mr_socket fd;
+    char* data;         // isteğin baytları: başlık + gövde
     HttpHead head;       // `data`nın içini gösterir
     // Yanıt başlıkları (respond_header ile eklenenler), "ad: değer\r\n" olarak.
     char* headers;
@@ -74,35 +69,8 @@ static int64_t slice_string(HttpSlice s) { return marlin_rt_str_new(s.data, (int
 // Soket yardımcıları
 // ---------------------------------------------------------------------------
 
-// Bütün baytları gönderir. Karşı taraf bağlantıyı kapattıysa sessizce 0 döner
-// (MSG_NOSIGNAL: SIGPIPE süreci öldürmez).
-static int send_all(int fd, const char* data, size_t length) {
-    while (length > 0) {
-        ssize_t n = send(fd, data, length, MSG_NOSIGNAL);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return 0;
-        }
-        data += n;
-        length -= (size_t)n;
-    }
-    return 1;
-}
-
-// En fazla `capacity` bayt okur. Bağlantı kapandıysa 0, zaman aşımında ya
-// da hatada -1 döner.
-static ssize_t receive(int fd, char* buffer, size_t capacity) {
-    for (;;) {
-        ssize_t n = recv(fd, buffer, capacity, 0);
-        if (n < 0 && errno == EINTR) continue;
-        return n;
-    }
-}
-
-static int timed_out(ssize_t n) { return n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK); }
-
 // Geçersiz isteğe kısa bir hata yanıtı.
-static void send_error(int fd, int status) {
+static void send_error(mr_socket fd, int status) {
     const char* reason = http_reason_phrase(status);
     char response[256];
     int n = snprintf(response, sizeof response,
@@ -113,12 +81,7 @@ static void send_error(int fd, int status) {
                      "\r\n"
                      "%s\n",
                      status, reason, strlen(reason) + 1, reason);
-    send_all(fd, response, (size_t)n);
-}
-
-static void close_connection(int fd) {
-    shutdown(fd, SHUT_WR);
-    close(fd);
+    mr_socket_send_all(fd, response, (size_t)n);
 }
 
 static int expects_continue(const HttpHead* head) {
@@ -131,7 +94,7 @@ static int expects_continue(const HttpHead* head) {
 
 // Bağlantıdan bir isteğin tamamını okur. Geçersizse hata yanıtını gönderip
 // bağlantıyı kapatır ve NULL döner.
-static Request* read_request(int fd) {
+static Request* read_request(mr_socket fd) {
     size_t capacity = 4096, length = 0;
     char* data = malloc(capacity);
     HttpHead head;
@@ -150,11 +113,11 @@ static Request* read_request(int fd) {
             capacity = capacity * 2 > MAX_HEAD_BYTES ? MAX_HEAD_BYTES : capacity * 2;
             data = realloc(data, capacity);
         }
-        ssize_t n = receive(fd, data + length, capacity - length);
+        int64_t n = mr_socket_recv(fd, data + length, capacity - length);
         if (n <= 0) {
             // Hiçbir şey göndermeden kapanan bağlantı sessizce bırakılır;
             // isteğin yarısında zaman aşımı olduysa 408.
-            if (length > 0 && timed_out(n)) {
+            if (length > 0 && n == MR_RECV_TIMEOUT) {
                 status = 408;
                 goto reject;
             }
@@ -170,15 +133,15 @@ static Request* read_request(int fd) {
     }
     const size_t total = head.head_length + (size_t)head.content_length;
     if (total > length && expects_continue(&head))
-        send_all(fd, "HTTP/1.1 100 Continue\r\n\r\n", 25);
+        mr_socket_send_all(fd, "HTTP/1.1 100 Continue\r\n\r\n", 25);
     if (total + 1 > capacity) {
         capacity = total + 1;
         data = realloc(data, capacity);
     }
     while (length < total) {
-        ssize_t n = receive(fd, data + length, total - length);
+        int64_t n = mr_socket_recv(fd, data + length, total - length);
         if (n <= 0) {
-            if (timed_out(n)) {
+            if (n == MR_RECV_TIMEOUT) {
                 status = 408;
                 goto reject;
             }
@@ -200,7 +163,7 @@ reject:
     send_error(fd, status);
 drop:
     free(data);
-    close_connection(fd);
+    mr_socket_close(fd);
     return NULL;
 }
 
@@ -212,35 +175,18 @@ drop:
 // or_die ise programı mesajla durdurur.
 int64_t marlin_http_listen(int32_t port, int32_t or_die) {
     last_error[0] = '\0';
-    int fd = -1;
     if (port < 0 || port > 65535) {
         snprintf(last_error, sizeof last_error, "gecersiz port: %d (0..65535 olmali)", port);
-        goto fail;
+    } else {
+        char reason[200];
+        mr_socket fd = mr_tcp_listen(port, 128, reason, sizeof reason);
+        if (fd != MR_NO_SOCKET) {
+            Server* server = malloc(sizeof *server);
+            server->fd = fd;
+            return (int64_t)(intptr_t)server;
+        }
+        snprintf(last_error, sizeof last_error, "port %d dinlenemedi: %s", port, reason);
     }
-    fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) goto fail_errno;
-
-    // Program yeniden başlatıldığında, kapanan eski bağlantılar beklerken de
-    // aynı port hemen dinlenebilsin.
-    int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
-
-    struct sockaddr_in address;
-    memset(&address, 0, sizeof address);
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_ANY);
-    address.sin_port = htons((uint16_t)port);
-    if (bind(fd, (struct sockaddr*)&address, sizeof address) < 0) goto fail_errno;
-    if (listen(fd, 128) < 0) goto fail_errno;
-
-    Server* server = malloc(sizeof *server);
-    server->fd = fd;
-    return (int64_t)(intptr_t)server;
-
-fail_errno:
-    snprintf(last_error, sizeof last_error, "port %d dinlenemedi: %s", port, strerror(errno));
-fail:
-    if (fd >= 0) close(fd);
     if (or_die) marlin_rt_panic("http: %s", last_error);
     return 0;
 }
@@ -252,20 +198,20 @@ int64_t marlin_http_error(void) { return marlin_rt_str_from_text(last_error); }
 int64_t marlin_http_accept(int64_t handle) {
     Server* server = server_of(handle, "next");
     for (;;) {
-        int fd = accept4(server->fd, NULL, NULL, SOCK_CLOEXEC);
-        if (fd < 0) {
+        int transient = 0;
+        mr_socket fd = mr_tcp_accept(server->fd, &transient);
+        if (fd == MR_NO_SOCKET) {
             // Geçici durumlar: bağlantı kabul edilmeden koptu, sinyal geldi,
             // dosya tanıtıcısı ya da bellek bir an için tükendi.
-            if (errno == EINTR || errno == ECONNABORTED) continue;
-            if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS || errno == ENOMEM) {
-                usleep(10 * 1000);
+            if (transient) {
+                mr_sleep_seconds(0.01);
                 continue;
             }
-            marlin_rt_panic("http: baglanti kabul edilemedi (%s)", strerror(errno));
+            char reason[200];
+            mr_socket_error_text(reason, sizeof reason);
+            marlin_rt_panic("http: baglanti kabul edilemedi (%s)", reason);
         }
-        struct timeval timeout = {IO_TIMEOUT_SECONDS, 0};
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
+        mr_socket_set_timeout(fd, IO_TIMEOUT_SECONDS);
 
         Request* request = read_request(fd);
         if (request) return (int64_t)(intptr_t)request;
@@ -275,7 +221,7 @@ int64_t marlin_http_accept(int64_t handle) {
 void marlin_http_close(int64_t handle) {
     if (!handle) return;
     Server* server = (Server*)(intptr_t)handle;
-    close(server->fd);
+    mr_socket_close(server->fd);
     free(server);
 }
 
@@ -376,11 +322,11 @@ void marlin_http_respond(int64_t r, int32_t status, int64_t body) {
         length +=(size_t)snprintf(head + length, capacity - length, "Content-Length: %zu\r\n", body_length);
     length += (size_t)snprintf(head + length, capacity - length, "Connection: close\r\n\r\n");
 
-    if (send_all(request->fd, head, length) && !is_head && body_length > 0)
-        send_all(request->fd, marlin_rt_str_data(body), body_length);
+    if (mr_socket_send_all(request->fd, head, length) && !is_head && body_length > 0)
+        mr_socket_send_all(request->fd, marlin_rt_str_data(body), body_length);
     free(head);
 
-    close_connection(request->fd);
+    mr_socket_close(request->fd);
     free(request->headers);
     free(request->data);
     free(request);

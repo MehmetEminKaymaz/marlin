@@ -23,13 +23,13 @@
 #include "marlin_rt.h"
 
 #include <libpq-fe.h>
-#include <pthread.h>
+#include "platform.h"
 #include <stdlib.h>
 #include <string.h>
 
 typedef struct {
     PGconn* pg;
-    pthread_mutex_t lock;
+    mr_mutex lock;
 } Conn;
 
 typedef struct {
@@ -37,8 +37,8 @@ typedef struct {
     int size;
     int* free_list;       // boş bağlantıların sırası (yığıt)
     int free_count;
-    pthread_mutex_t lock;
-    pthread_cond_t available;
+    mr_mutex lock;
+    mr_cond available;
 } Pool;
 
 typedef struct {
@@ -98,13 +98,13 @@ static Conn* open_conn(const char* conninfo) {
     PQsetNoticeProcessor(pg, ignore_notice, NULL);
     Conn* conn = malloc(sizeof *conn);
     conn->pg = pg;
-    pthread_mutex_init(&conn->lock, NULL);
+    mr_mutex_init(&conn->lock);
     return conn;
 }
 
 static void close_conn(Conn* conn) {
     PQfinish(conn->pg);
-    pthread_mutex_destroy(&conn->lock);
+    mr_mutex_destroy(&conn->lock);
     free(conn);
 }
 
@@ -122,9 +122,9 @@ void marlin_postgres_close(int64_t handle) {
 // Bağlantının son hatası (begin / commit gibi komutlar için).
 int64_t marlin_postgres_conn_error(int64_t handle) {
     Conn* conn = conn_of(handle, "error");
-    pthread_mutex_lock(&conn->lock);
+    mr_mutex_lock(&conn->lock);
     set_error(PQerrorMessage(conn->pg));
-    pthread_mutex_unlock(&conn->lock);
+    mr_mutex_unlock(&conn->lock);
     return marlin_rt_str_from_text(last_error);
 }
 
@@ -153,8 +153,8 @@ int64_t marlin_postgres_pool(int64_t conninfo, int32_t size) {
         }
         pool->free_list[pool->free_count++] = i;
     }
-    pthread_mutex_init(&pool->lock, NULL);
-    pthread_cond_init(&pool->available, NULL);
+    mr_mutex_init(&pool->lock);
+    mr_cond_init(&pool->available);
     return (int64_t)(intptr_t)pool;
 }
 
@@ -162,8 +162,8 @@ void marlin_postgres_pool_close(int64_t handle) {
     if (!handle) return;
     Pool* pool = (Pool*)(intptr_t)handle;
     for (int i = 0; i < pool->size; ++i) close_conn(pool->conns[i]);
-    pthread_mutex_destroy(&pool->lock);
-    pthread_cond_destroy(&pool->available);
+    mr_mutex_destroy(&pool->lock);
+    mr_cond_destroy(&pool->available);
     free(pool->conns);
     free(pool->free_list);
     free(pool);
@@ -172,25 +172,25 @@ void marlin_postgres_pool_close(int64_t handle) {
 // Boş bir bağlantı alır (yoksa biri geri verilene kadar bekler).
 int64_t marlin_postgres_acquire(int64_t handle) {
     Pool* pool = pool_of(handle, "acquire");
-    pthread_mutex_lock(&pool->lock);
-    while (pool->free_count == 0) pthread_cond_wait(&pool->available, &pool->lock);
+    mr_mutex_lock(&pool->lock);
+    while (pool->free_count == 0) mr_cond_wait(&pool->available, &pool->lock);
     Conn* conn = pool->conns[pool->free_list[--pool->free_count]];
-    pthread_mutex_unlock(&pool->lock);
+    mr_mutex_unlock(&pool->lock);
     return (int64_t)(intptr_t)conn;
 }
 
 void marlin_postgres_release(int64_t poolHandle, int64_t connHandle) {
     Pool* pool = pool_of(poolHandle, "release");
     Conn* conn = conn_of(connHandle, "release");
-    pthread_mutex_lock(&pool->lock);
+    mr_mutex_lock(&pool->lock);
     for (int i = 0; i < pool->size; ++i) {
         if (pool->conns[i] != conn) continue;
         pool->free_list[pool->free_count++] = i;
-        pthread_cond_signal(&pool->available);
-        pthread_mutex_unlock(&pool->lock);
+        mr_cond_signal(&pool->available);
+        mr_mutex_unlock(&pool->lock);
         return;
     }
-    pthread_mutex_unlock(&pool->lock);
+    mr_mutex_unlock(&pool->lock);
     marlin_rt_panic("postgres.release: baglanti bu havuza ait degil");
 }
 
@@ -219,10 +219,10 @@ static void params_free(Params* p) {
 // PostgreSQL sorgudan çıkarır. Değerler SQL metnine hiç eklenmediği için
 // SQL injection olmaz.
 static int64_t run_query(Conn* conn, const char* sql, Params* params) {
-    pthread_mutex_lock(&conn->lock);
+    mr_mutex_lock(&conn->lock);
     PGresult* res = PQexecParams(conn->pg, sql, params->count, NULL,
                                  (const char* const*)params->values, NULL, NULL, /*text*/ 0);
-    pthread_mutex_unlock(&conn->lock);
+    mr_mutex_unlock(&conn->lock);
     params_free(params);
     Result* result = malloc(sizeof *result);
     result->res = res; // bellek yetersizse NULL; ok yanlış görünür
@@ -245,9 +245,9 @@ int64_t marlin_postgres_pool_query(int64_t poolHandle, int64_t sql, int64_t para
 // Sonuç döndürmeyen komut (BEGIN, COMMIT ...): başarılı mı?
 int32_t marlin_postgres_command(int64_t connHandle, int64_t sql) {
     Conn* conn = conn_of(connHandle, "command");
-    pthread_mutex_lock(&conn->lock);
+    mr_mutex_lock(&conn->lock);
     PGresult* res = PQexec(conn->pg, marlin_rt_str_data(sql));
-    pthread_mutex_unlock(&conn->lock);
+    mr_mutex_unlock(&conn->lock);
     const ExecStatusType status = PQresultStatus(res);
     PQclear(res);
     return status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK;

@@ -1,10 +1,7 @@
 // std.io — klavyeden okuma ve satır sonu eklemeden yazma (bkz. std/io.marl).
 
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE // flockfile
-#endif
-
 #include "marlin_rt.h"
+#include "platform.h"
 
 // Okumadan önce bekleyen çıktı yazılır: kullanıcı, cevap vereceği soruyu görmeli.
 int64_t marlin_io_read_line(void) {
@@ -19,7 +16,7 @@ int32_t marlin_io_eof(void) {
 
 // print'ten farkı: satır sonu eklemez.
 void marlin_io_write(int64_t text) {
-    flockfile(stdout);
+    mr_lock_stream(stdout);
     fwrite(marlin_rt_str_data(text), 1, (size_t)marlin_str_len(text), stdout);
-    funlockfile(stdout);
+    mr_unlock_stream(stdout);
 }

@@ -1,41 +1,34 @@
 // std.os — komut satırı argümanları, ortam değişkenleri, çıkış (bkz. std/os.marl).
 
 #include "marlin_rt.h"
+#include "platform.h"
 
 #include <stdlib.h>
-#include <unistd.h>
 
-// Programın `main`i parametresizdir; argümanlar program başlamadan önce
-// buraya kaydedilir. (Linux'ta C kütüphanesi, başlangıç fonksiyonlarına
-// main'in argümanlarını verir.)
-static int saved_argc;
-static char** saved_argv;
+// Programın `main`i parametresizdir; argümanları platform katmanı program
+// başlamadan önce kaydeder (bkz. platform_posix.c, platform_win32.c).
 
-__attribute__((constructor))
-static void save_arguments(int argc, char** argv) {
-    saved_argc = argc;
-    saved_argv = argv;
-}
-
-int64_t marlin_os_arg_count(void) { return saved_argc; }
+int64_t marlin_os_arg_count(void) { return mr_arg_count(); }
 
 // 0: programın adı, 1..: argümanlar.
 int64_t marlin_os_arg(int64_t index) {
-    if (index < 0 || index >= saved_argc)
+    if (index < 0 || index >= mr_arg_count())
         marlin_rt_panic("arg: indeks sinir disinda (indeks %lld, arguman sayisi %d)",
-                       (long long)index, saved_argc);
-    return marlin_rt_str_from_text(saved_argv[index]);
+                       (long long)index, mr_arg_count());
+    return marlin_rt_str_from_text(mr_arg((int)index));
 }
 
 // Ortam değişkeninin değeri; tanımlı değilse boş string.
 int64_t marlin_os_env(int64_t name) {
-    const char* value = getenv(marlin_rt_str_data(name));
-    return marlin_rt_str_from_text(value ? value : "");
+    char* value = mr_getenv(marlin_rt_str_data(name));
+    const int64_t result = marlin_rt_str_from_text(value ? value : "");
+    free(value);
+    return result;
 }
 
-// Programı hemen bitirir. (_exit: bkz. marlin_rt.c, fail.)
+// Programı hemen bitirir. (_Exit: bkz. marlin_rt.c, fail.)
 void marlin_os_exit(int32_t code) {
     fflush(stdout);
     fflush(stderr);
-    _exit(code);
+    _Exit(code);
 }

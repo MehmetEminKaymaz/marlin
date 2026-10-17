@@ -1,0 +1,90 @@
+# Derleyiciyi üç platformda derler ve test takımını çalıştırır.
+#
+# LLVM/MLIR 19.1.7 her seferinde derlenmez: conda-forge'un hazır paketleri
+# kullanılır (micromamba; indirilen paketler önbellekte kalır). ANTLR C++
+# runtime'ı ise projeyle birlikte kaynaktan derlenir (MARLIN_ANTLR_FROM_SOURCE).
+#
+# Makinelerde GPU yoktur: @GPU testleri yalnızca --gpu=off ile çalışır
+# (bkz. tests/run.sh). PostgreSQL sunucusu yalnızca Linux'ta açılabildiği için
+# postgres testi diğer platformlarda atlanır.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (x86_64)
+            os: ubuntu-24.04
+          - name: macOS (arm64)
+            os: macos-14
+          - name: Windows (x86_64)
+            os: windows-2022
+
+    defaults:
+      run:
+        shell: bash -el {0}   # micromamba ortamı her adımda etkin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: marlin
+          create-args: >-
+            mlir=19.1.7
+            llvmdev=19.1.7
+            libpq
+            sqlite
+            cmake
+            ninja
+          init-shell: bash
+          cache-downloads: true
+          cache-environment: true
+
+      # Windows: MSVC ortamı (link.exe, sistem kütüphaneleri) ve clang-cl.
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+
+      - name: Derleme ayarları
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            prefix="$(cygpath -m "$CONDA_PREFIX")/Library"
+            echo "MARLIN_CMAKE_EXTRA=-DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl" >> "$GITHUB_ENV"
+            echo "MARLIN_EXE=.exe" >> "$GITHUB_ENV"
+          else
+            prefix="$CONDA_PREFIX"
+          fi
+          echo "MARLIN_PREFIX=$prefix" >> "$GITHUB_ENV"
+
+      - name: Yapılandır
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR="$MARLIN_PREFIX/lib/cmake/llvm" \
+            -DMLIR_DIR="$MARLIN_PREFIX/lib/cmake/mlir" \
+            -DCMAKE_PREFIX_PATH="$MARLIN_PREFIX" \
+            -DMARLIN_ANTLR_FROM_SOURCE=ON \
+            $MARLIN_CMAKE_EXTRA
+
+      - name: Derle
+        run: cmake --build build --parallel
+
+      - name: PostgreSQL test sunucusu
+        if: runner.os == 'Linux'
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -c "CREATE USER marlin WITH PASSWORD 'marlin';"
+          sudo -u postgres psql -c "CREATE DATABASE marlin_test OWNER marlin;"
+          echo "MARLIN_PG_TEST=host=localhost port=5432 dbname=marlin_test user=marlin password=marlin" >> "$GITHUB_ENV"
+
+      - name: Testler
+        run: bash tests/run.sh "../build/marlin_lang$MARLIN_EXE"
