@@ -60,6 +60,7 @@ jobs:
             libxml2
             libpq
             sqlite
+            libcurl
             cmake
             ninja
           init-shell: bash

@@ -1,0 +1,130 @@
+// output: hazir
+// output: true 200 merhaba Ayşe text/plain; charset=utf-8
+// output: 201 {"a": "ğ"} application/json 11
+// output: deger
+// output: true 404
+// output: 200 merhaba Yonlendirme
+// output: 200 0
+// output: 262144
+// output: 201 262144
+// output: false true
+// output: false false
+// output: false
+// std.http.client (libcurl): program kendi sunucusunu bir görevde başlatır ve
+// ona istek gönderir. (Derleyici libcurl olmadan derlendiyse test atlanır.)
+import std.http as http;
+import std.http.client as web;
+import std.time as zaman;
+
+func selam(http.Request req) -> http.Response {
+    return http.text(200, "merhaba " + http.query_param(req, "ad"));
+}
+
+// Gövdeyi, içerik tipini ve uzunluğunu geri gönderir.
+func yanki(http.Request req) -> http.Response {
+    http.Response res = http.response(201, http.header(req, "content-type"), req.body);
+    http.add_header(res, "X-Uzunluk", str(len(req.body)));
+    return res;
+}
+
+func baslik(http.Request req) -> http.Response {
+    return http.text(200, http.header(req, "x-ad"));
+}
+
+func eski(http.Request req) -> http.Response {
+    return http.redirect("/selam?ad=Yonlendirme");
+}
+
+func buyuk_metin() -> string {
+    string s = "a";
+    for i in 0 .. 18 { s = s + s; }       // 2^18 = 262144 bayt
+    return s;
+}
+
+func buyuk(http.Request req) -> http.Response {
+    return http.text(200, buyuk_metin());
+}
+
+func yavas(http.Request req) -> http.Response {
+    zaman.sleep(2.0);
+    return http.text(200, "gec");
+}
+
+func sunucu(list<http.Route> rotalar) -> void {
+    http.serve(18479, rotalar);
+}
+
+func main() -> void {
+    list<http.Route> rotalar = [];
+    push(rotalar, http.get("/selam", selam));
+    push(rotalar, http.post("/yanki", yanki));
+    push(rotalar, http.get("/baslik", baslik));
+    push(rotalar, http.get("/eski", eski));
+    push(rotalar, http.get("/buyuk", buyuk));
+    push(rotalar, http.get("/yavas", yavas));
+    task<void> t = marl sunucu(rotalar);
+    string b = "http://127.0.0.1:18479";
+
+    // Sunucu görevi dinlemeye başlayana kadar dene
+    web.Reply ilk = web.get(b + "/selam");
+    int deneme = 0;
+    while !ilk.ok && deneme < 100 {
+        free(ilk.headers);
+        zaman.sleep(0.05);
+        ilk = web.get(b + "/selam");
+        deneme = deneme + 1;
+    }
+    free(ilk.headers);
+    print("hazir");
+
+    web.Reply r = web.get(b + "/selam?ad=Ay%C5%9Fe");
+    print(r.ok, r.status, r.body, web.header(r, "Content-Type"));
+    free(r.headers);
+
+    web.Reply p = web.post(b + "/yanki", "{\"a\": \"ğ\"}", "application/json");
+    print(p.status, p.body, web.header(p, "content-type"), web.header(p, "x-uzunluk"));
+    free(p.headers);
+
+    web.Reply h = web.request("GET", b + "/baslik", [http.Header("X-Ad", "deger")], "");
+    print(h.body);
+    free(h.headers);
+
+    // Sunucunun cevabı ne olursa olsun yanıt gelmiştir: ok doğru
+    web.Reply y = web.get(b + "/yok");
+    print(y.ok, y.status);
+    free(y.headers);
+
+    // Yönlendirme izlenir
+    web.Reply e = web.get(b + "/eski");
+    print(e.status, e.body);
+    free(e.headers);
+
+    // HEAD: gövde yok
+    web.Reply hd = web.request("HEAD", b + "/selam?ad=x", [], "");
+    print(hd.status, len(hd.body));
+    free(hd.headers);
+
+    // Büyük yanıt ve büyük gövde
+    web.Reply bk = web.get(b + "/buyuk");
+    print(len(bk.body));
+    free(bk.headers);
+    web.Reply bp = web.post(b + "/yanki", buyuk_metin(), "text/plain");
+    print(bp.status, web.header(bp, "x-uzunluk"));
+    free(bp.headers);
+
+    // Ağ hataları programı durdurmaz
+    web.Reply red = web.get("http://127.0.0.1:1/");
+    print(red.ok, red.error != "");
+    free(red.headers);
+    web.Reply dosya = web.get("file:///etc/passwd");        // yalnızca http ve https
+    web.Reply bozuk = web.get("bu bir adres degil");
+    print(dosya.ok, bozuk.ok);
+    free(dosya.headers);
+    free(bozuk.headers);
+
+    // Zaman aşımı
+    web.Reply gec = web.request_timeout("GET", b + "/yavas", [], "", 0.5);
+    print(gec.ok);
+    free(gec.headers);
+    free(rotalar);
+}

@@ -101,6 +101,9 @@ for src in *.marl; do
         rc=$?
         if [ -n "$TIMEOUT" ] && [ "$rc" = 124 ]; then
             bad "$src $opt" "zaman asimi (60 sn): derleyici takildi"; continue
+        elif [ "$rc" != 0 ] && grep -q 'kullanilamiyor: derleyici' "$TMP/err"; then
+            # Derleyici bu modülün dış kütüphanesi (libcurl, libpq ...) olmadan derlenmiş.
+            echo "  ATLANDI  $src $opt ($(head -1 "$TMP/err" | sed 's/;.*//'))"; skipped=$((skipped + 1)); continue
         elif [ "$rc" != 0 ]; then
             # (128'den büyük kod: derleyici bir sinyalle çöktü; sinyal = kod - 128)
             bad "$src $opt" "derlenemedi (cikis kodu $rc): $(head -3 "$TMP/err")"; continue

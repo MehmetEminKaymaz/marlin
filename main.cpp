@@ -199,6 +199,12 @@ int main(int argc, char** argv) {
 #else
             missing = "sqlite3 (paket: libsqlite3-dev)";
 #endif
+        } else if (module.name == "std.http.client") {
+#ifdef MARLIN_CURL_LIB
+            lib = MARLIN_CURL_LIB;
+#else
+            missing = "libcurl (paket: libcurl4-openssl-dev)";
+#endif
         }
         if (missing) {
             std::cerr << module.name << " kullanilamiyor: derleyici " << missing

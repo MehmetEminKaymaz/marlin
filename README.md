@@ -265,6 +265,7 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `map_anahtar_yok.marl` | Olmayan anahtarı okumak programı durdurur |
 | `hatalar_map.marl` | Map'lerin hatalı kullanımı: anahtar/değer tipleri, paralel döngüde yazma, göreve verme, global map |
 | `http_chunked.marl` | Parçalı istek gövdesi: uzantılar, sondaki başlıklar, gecikmeli gelen parçalar, pipelining, `Content-Length` ile birlikte `Transfer-Encoding` (400), gövde sınırı (413) |
+| `http_istemci.marl` | `std.http.client`: kendi sunucusuna GET, POST, başlıklar, 404, yönlendirme, HEAD, büyük gövde, bağlantı reddi, `file://` reddi, zaman aşımı (libcurl yoksa atlanır) |
 | `http_keepalive.marl` | `std.http` bağlantıları: aynı bağlantıda art arda istekler, pipelining, `Connection: close`, HTTP/1.0, boştaki bağlantının zaman aşımı, geçersiz istekten sonra kapanma |
 | `json.marl` | `std.json` elle okuma: iç içe değerler, `\u` kaçışları ve vekil çiftleri, olmayan değerler, yanlış tipte okuma, konumlu ayrıştırma hataları, `quote` |
 | `json_tipli.marl` | `from_json` / `to_json`: iç içe struct, liste, map, gidiş-dönüş, yolu ile tip hatası, aralık denetimi |
@@ -887,7 +888,31 @@ Tarayıcıdan `http://localhost:8080/` ya da `curl -i localhost:8080/selam?ad=Ay
   }
   ```
 - **Bağlantılar (keep-alive):** bir bağlantıdan art arda birçok istek gelebilir; HTTP/1.1'de bağlantı yanıttan sonra açık kalır, istemci `Connection: close` derse kapanır (HTTP/1.0'da yalnızca `Connection: keep-alive` isterse açık kalır). Yanıtı beklemeden gönderilen istekler (pipelining) sırayla yanıtlanır. Sunucu bütün bağlantıları aynı anda bekler (`poll`; Windows'ta `WSAPoll`): yavaş ya da boşta bekleyen bir istemci diğerlerini bekletmez. Yarım istek 10 saniye beklenir (sonra 408), boştaki bağlantı 5 saniye sonra kapanır.
-- **Şimdilik:** Ağır bir işi hızlandırmak için işleyicinin içinde `parallel for` ya da `@GPU` fonksiyon kullanılabilir (sıralı `serve` ile). Parçalı (`Transfer-Encoding: chunked`) istek gövdesi çözülür, işleyici `req.body`'de düz metni görür; başka aktarım kodlamaları (gzip) 501 ile reddedilir. HTTPS yok; gerekirse sunucunun önüne nginx / caddy konur. HTTP istemcisi henüz yok.
+- **Şimdilik:** Ağır bir işi hızlandırmak için işleyicinin içinde `parallel for` ya da `@GPU` fonksiyon kullanılabilir (sıralı `serve` ile). Parçalı (`Transfer-Encoding: chunked`) istek gövdesi çözülür, işleyici `req.body`'de düz metni görür; başka aktarım kodlamaları (gzip) 501 ile reddedilir. HTTPS yok; gerekirse sunucunun önüne nginx / caddy konur.
+
+**HTTP istemcisi (`std.http.client`)**
+
+```
+import std.http as http;
+import std.http.client as web;
+
+web.Reply r = web.get("https://api.ornek.com/kullanicilar/7");
+if !r.ok {
+    print("istek gonderilemedi: " + r.error);   // adres, baglanti, TLS, zaman asimi
+} else {
+    print(r.status, web.header(r, "content-type"), r.body);
+}
+free(r.headers);
+
+web.Reply p = web.post(url, to_json(k), "application/json");
+web.Reply q = web.request("PUT", url, [http.Header("Authorization", "Bearer abc")], govde);
+web.Reply z = web.request_timeout("GET", url, [], "", 2.0);   // 2 saniye
+```
+
+- `ok` yanıtın geldiğini söyler; sunucu 404 ya da 500 dese de `ok` doğrudur, kod `status`'tadır. Ağ hataları programı durdurmaz: `ok` yanlış, sebebi `error`'da.
+- HTTPS sertifikası doğrulanır (süresi geçmiş ya da sahte sertifika reddedilir). Yalnızca `http://` ve `https://` adresleri kabul edilir. Yönlendirmeler en fazla 10 kez izlenir; sıkıştırılmış ve parçalı yanıtlar kendiliğinden açılır. Varsayılan zaman aşımı 30 saniye, yanıt en fazla 64 MB.
+- Yanıtın başlık listesi çağıranındır: `free(r.headers)`. İstek gönderen fonksiyon yanıtı bekler; birçok isteği aynı anda göndermek için görevler (`marl`) kullanılır.
+- libcurl ile çalışır: derleyici libcurl bulunarak derlenmelidir (Linux: `libcurl4-openssl-dev`). Bulunamazsa yalnızca `std.http.client` import eden programlar derlenemez.
 - Ayrıştırıcının kaynağı `runtime/http_parser.c`'dir: soket kullanmaz, her kuralın yanında ilgili RFC maddesi yazar.
 
 **JSON (`std.json`, `from_json`, `to_json`)**

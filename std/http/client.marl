@@ -1,0 +1,107 @@
+// std.http.client — HTTP istemcisi.
+//
+//   import std.http as http;
+//   import std.http.client as web;
+//
+//   web.Reply r = web.get("https://api.ornek.com/kullanicilar/7");
+//   if !r.ok {
+//       print("istek gonderilemedi: " + r.error);   // ağ hatası
+//       return;
+//   }
+//   print(r.status, web.header(r, "content-type"));
+//   print(r.body);
+//   free(r.headers);
+//
+//   web.Reply p = web.post(url, to_json(k), "application/json");
+//
+//   list<http.Header> basliklar = [http.Header("Authorization", "Bearer abc")];
+//   web.Reply q = web.request("PUT", url, basliklar, govde);
+//
+// YANIT
+//
+// `ok` isteğin gidip yanıtın geldiğini söyler; sunucunun cevabı ne olursa
+// olsun (404, 500 ...) `ok` doğrudur, kod `status`tadır. `ok` yanlışsa ağ
+// hatası vardır (adres çözülemedi, bağlantı reddedildi, TLS / sertifika,
+// zaman aşımı) ve `error` sebebi söyler; program durmaz.
+//
+// Yanıtın başlık listesi (headers) çağıranındır: işi bitince free(r.headers).
+//
+// AYRINTILAR
+//
+//   * Yalnızca http:// ve https:// adresleri. HTTPS sertifikası doğrulanır.
+//   * Yönlendirmeler (301, 302 ...) en fazla 10 kez izlenir; sonuç son yanıttır.
+//   * Sıkıştırılmış (gzip ...) ve parçalı yanıtlar kendiliğinden açılır.
+//   * Zaman aşımı 30 saniye (request_timeout ile değiştirilir); yanıt en
+//     fazla 64 MB.
+//   * İstek gönderen fonksiyon yanıt gelene kadar bekler. Birçok isteği aynı
+//     anda göndermek için görevler (marl) kullanılır.
+//
+// libcurl ile çalışır; derleyici libcurl bulunarak derlenmiş olmalıdır.
+
+import std.http as http;
+import std.string as strs;
+
+// C tarafı: runtime/std_http_client.c
+extern func c_begin(string method, string url) -> int64;
+extern func c_add_header(int64 exchange, string name, string value) -> void;
+extern func c_set_timeout(int64 exchange, float64 seconds) -> void;
+extern func c_perform(int64 exchange, string body) -> void;
+extern func c_ok(int64 exchange) -> bool;
+extern func c_error(int64 exchange) -> string;
+extern func c_status(int64 exchange) -> int;
+extern func c_body(int64 exchange) -> string;
+extern func c_header_count(int64 exchange) -> int64;
+extern func c_header_name(int64 exchange, int64 index) -> string;
+extern func c_header_value(int64 exchange, int64 index) -> string;
+extern func c_free(int64 exchange) -> void;
+
+public struct Reply {
+    bool ok;                    // yanıt geldi mi? (yanlışsa: error)
+    string error;
+    int status;                 // 200, 404 ...
+    list<http.Header> headers;  // son yanıtın başlıkları
+    string body;
+}
+
+// `seconds` saniyede yanıt gelmezse ok yanlış olur (0: süre sınırı yok).
+public func request_timeout(string method, string url, list<http.Header> headers, string body,
+                            float64 seconds) -> Reply {
+    int64 exchange = c_begin(method, url);
+    for i in 0 .. len(headers) {
+        c_add_header(exchange, headers[i].name, headers[i].value);
+    }
+    c_set_timeout(exchange, seconds);
+    c_perform(exchange, body);
+
+    list<http.Header> received = [];
+    for i in 0 .. c_header_count(exchange) {
+        push(received, http.Header(c_header_name(exchange, i), c_header_value(exchange, i)));
+    }
+    Reply reply = Reply(c_ok(exchange), c_error(exchange), c_status(exchange), received, c_body(exchange));
+    c_free(exchange);
+    return reply;
+}
+
+public func request(string method, string url, list<http.Header> headers, string body) -> Reply {
+    return request_timeout(method, url, headers, body, 30.0);
+}
+
+public func get(string url) -> Reply {
+    return request("GET", url, [], "");
+}
+
+// Gövdeyle POST; `content_type` örneğin "application/json".
+public func post(string url, string body, string content_type) -> Reply {
+    return request("POST", url, [http.Header("Content-Type", content_type)], body);
+}
+
+// Yanıt başlığının değeri; büyük/küçük harf ayrımı yapılmaz. Yoksa "".
+public func header(Reply r, string name) -> string {
+    string wanted = strs.lower(name);
+    for i in 0 .. len(r.headers) {
+        if strs.lower(r.headers[i].name) == wanted {
+            return r.headers[i].value;
+        }
+    }
+    return "";
+}

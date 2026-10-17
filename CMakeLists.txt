@@ -285,6 +285,20 @@ else()
     message(STATUS "std.sqlite: sqlite3 bulunamadi (libsqlite3-dev); surucu derlenmeyecek")
 endif()
 
+# HTTP istemcisi (std.http.client): libcurl. (Debian/Ubuntu'da başlıklar
+# çok mimarili dizindedir: include/x86_64-linux-gnu/curl.)
+find_path(MARLIN_CURL_INCLUDE curl/curl.h
+        PATHS ${MARLIN_DEPS_DIR}/include ${MARLIN_DEPS_DIR}/include/x86_64-linux-gnu)
+find_library(MARLIN_CURL_LIB NAMES curl libcurl libcurl_imp PATHS ${MARLIN_DEPS_DIR}/lib/x86_64-linux-gnu)
+if(MARLIN_CURL_INCLUDE AND MARLIN_CURL_LIB)
+    message(STATUS "std.http.client: libcurl ${MARLIN_CURL_LIB}")
+    target_sources(marlinrt PRIVATE runtime/std_http_client.c)
+    set_source_files_properties(runtime/std_http_client.c PROPERTIES INCLUDE_DIRECTORIES "${MARLIN_CURL_INCLUDE}")
+    target_compile_definitions(marlin_lang PRIVATE MARLIN_CURL_LIB="${MARLIN_CURL_LIB}")
+else()
+    message(STATUS "std.http.client: libcurl bulunamadi (libcurl4-openssl-dev); istemci derlenmeyecek")
+endif()
+
 # Standart kütüphanenin marlin dosyaları (import std.file → std/file.marl).
 # marlin_lang önce yanındaki `std` dizinine, sonra buraya bakar.
 target_compile_definitions(marlin_lang PRIVATE MARLIN_STD_DIR="${CMAKE_CURRENT_SOURCE_DIR}/std")
