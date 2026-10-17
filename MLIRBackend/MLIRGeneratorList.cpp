@@ -218,31 +218,44 @@ void MLIRGenerator::assignElement(AssignmentStmt* node) {
     mlir::Value index = toIndex(emitExpr(access->indices[0].get()), access->indices[0]->type, loc);
     Values values = emitLeaves(node->value.get());
 
-    // Sağ taraf elemanın eski değerini kullanmış olabilir (l[i] = f(l[i])).
-    // Önce bütün yeni değerler (matris bellekleri, stringler) sahiplenilir,
-    // eskiler ancak ondan sonra bırakılır.
-    for (size_t i = 0; i < count; ++i) {
-        const SemType& type = columns[begin + i].type.elementType();
-        if (type.isMatrix() || isHandle(type))
-            values[i] = adoptElement(values[i], type, node->line, loc);
-    }
+    std::vector<SemType> types;
+    for (size_t i = 0; i < count; ++i) types.push_back(columns[begin + i].type.elementType());
+    adoptOwnedValues(values, types, node->line, loc);
+    writeElement(cells, types, index, values, node->line, loc, /*checked=*/true);
+    flushTemporaries(loc);
+}
 
-    for (size_t i = 0; i < count; ++i) {
-        const SemType& type = columns[begin + i].type.elementType();
-        const bool checked = i == 0;
+// Sağ taraf elemanın eski değerini kullanmış olabilir (l[i] = f(l[i])).
+// Önce bütün yeni değerler (matris bellekleri, stringler) sahiplenilir, eskiler
+// ancak ondan sonra (writeElement) bırakılır.
+void MLIRGenerator::adoptOwnedValues(Values& values, llvm::ArrayRef<SemType> types, int line,
+                                     mlir::Location loc) {
+    for (size_t i = 0; i < values.size(); ++i)
+        if (types[i].isMatrix() || isHandle(types[i]))
+            values[i] = adoptElement(values[i], types[i], line, loc);
+}
+
+// Sütunların `index`teki elemanlarının yerine `values` yazılır (matris ve
+// handle değerleri adoptOwnedValues ile sahiplenilmiş olmalı). `checked`: indeks
+// ilk sütunda denetlenir.
+void MLIRGenerator::writeElement(const Values& cells, llvm::ArrayRef<SemType> types,
+                                 mlir::Value index, const Values& values, int line,
+                                 mlir::Location loc, bool checked) {
+    for (size_t i = 0; i < cells.size(); ++i) {
+        const SemType& type = types[i];
+        const bool check = checked && i == 0;
         if (type.isArray()) {
             // Elemanın dizisi yerinde kalır; içeriği değişir.
-            mlir::Value stored = listManager.loadElement(cells[i], index, node->line, loc, checked);
+            mlir::Value stored = listManager.loadElement(cells[i], index, line, loc, check);
             copyArray(values[i], stored, type, /*releaseOld=*/true, loc);
         } else if (type.isMatrix() || isHandle(type)) {
-            mlir::Value old = listManager.loadElement(cells[i], index, node->line, loc, checked);
-            listManager.storeElement(cells[i], index, values[i], node->line, loc, /*checked=*/false);
+            mlir::Value old = listManager.loadElement(cells[i], index, line, loc, check);
+            listManager.storeElement(cells[i], index, values[i], line, loc, /*checked=*/false);
             releaseElement(old, type, loc);
         } else {
-            listManager.storeElement(cells[i], index, values[i], node->line, loc, checked);
+            listManager.storeElement(cells[i], index, values[i], line, loc, check);
         }
     }
-    flushTemporaries(loc);
 }
 
 // ===========================================================================
@@ -255,10 +268,20 @@ void MLIRGenerator::assignElement(AssignmentStmt* node) {
 
 void MLIRGenerator::emitStructListLoop(ForCollectionStmt* node) {
     auto loc = locOf(node);
-    const std::vector<SemLeaf> columns = leavesOf(node->collection->type);
+    const SemType& collectionType = node->collection->type;
     const std::vector<SemLeaf> fields = leavesOf(node->iterType, node->iteratorName);
 
-    Values cells = emitLeaves(node->collection.get());
+    // for k in m: map'in anahtar listesi üzerinde (eklenme sırasıyla).
+    std::vector<SemLeaf> columns;
+    Values cells;
+    if (collectionType.isMap()) {
+        Values parts = emitLeaves(node->collection.get());
+        cells.push_back(parts[kMapKeysLeafPos]);
+        columns.push_back({"", SemType::List(collectionType.keyType())});
+    } else {
+        columns = leavesOf(collectionType);
+        cells = emitLeaves(node->collection.get());
+    }
     flushTemporaries(loc);
 
     // Uzunluk döngüye girerken bir kez okunur; eleman her yinelemede sınır

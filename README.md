@@ -261,6 +261,10 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `struct_liste.marl` | `list<struct>`: ekleme, çıkarma, alan okuma ve yazma, iç içe struct, struct içinde struct listesi, paralel döngü |
 | `struct_liste_alanlar.marl` | Elemanı matris, dizi ve liste alanı taşıyan struct listeleri |
 | `hatalar_struct_liste.marl` | Struct listelerinin hatalı kullanımı |
+| `map.marl` | `map<K, V>`: ekleme, okuma, `has`, `remove`, `keys`, eklenme sırası, büyüme, struct değer ve alan, struct alanı olarak map, başvuru davranışı |
+| `map_anahtar_yok.marl` | Olmayan anahtarı okumak programı durdurur |
+| `hatalar_map.marl` | Map'lerin hatalı kullanımı: anahtar/değer tipleri, paralel döngüde yazma, göreve verme, global map |
+| `paralel_ic_ice.marl` | İç içe ve çağrı üzerinden iç içe paralel döngüler (az çekirdekte kilitlenmemeli) |
 | `modul_import.marl` | `import`, `as`, `from`: başka dosyalardaki fonksiyon ve globaller, alt dizin, birbirini import eden modüller |
 | `modul_gpu.marl` | Başka modüldeki `@GPU` fonksiyonların CPU'dan, GPU'dan ve çekirdek içinden çağrılması |
 | `hatalar_modul*.marl` | Bulunamayan modül, modülde olmayan isim, isim çakışması, private tanımın import edilmesi, modüldeki sözdizimi hatası, paralel döngüden güvensiz modül fonksiyonu |
@@ -530,7 +534,7 @@ func main() -> void {
 }
 ```
 
-**Tipler:** `int8` `int16` `int` `int64`, `uint8` `uint16` `uint` `uint64`, `float` (32 bit) `float64`, `bool`, `char`, `string`, sabit boyutlu diziler (`int[5]`), listeler (`list<int>`), matrisler (`matrix<float>`), fonksiyon tipleri (`(int) -> int`), struct'lar (`struct Nokta { ... }`).
+**Tipler:** `int8` `int16` `int` `int64`, `uint8` `uint16` `uint` `uint64`, `float` (32 bit) `float64`, `bool`, `char`, `string`, sabit boyutlu diziler (`int[5]`), listeler (`list<int>`), map'ler (`map<string, int>`), matrisler (`matrix<float>`), fonksiyon tipleri (`(int) -> int`), struct'lar (`struct Nokta { ... }`).
 
 **Dizi mi, liste mi?**
 
@@ -697,6 +701,31 @@ for q in l {                 // q her yinelemede elemanın kopyasıdır
 - Literal yalnızca tipi belli olan yerde yazılabilir: `let l = [Nokta(1, 2)];` hatadır, `list<Nokta> l = [Nokta(1, 2)];` yazılır.
 - Bir struct, kendi listesini içeremez (`struct Dugum { list<Dugum> cocuklar; }` hatadır). Bunun sebebi saklama biçimidir: `list<Nokta>` bellekte alan başına bir liste olarak durur (bütün `x`'ler bir arada, bütün `y`'ler bir arada), kendisini içeren bir yapı sonsuza açılırdı.
 - Global struct listesi ve `@GPU` fonksiyonlarda struct listesi yoktur.
+
+**Map (`map<K, V>`)**
+
+Anahtardan değere eşleme. Anahtarlar **eklenme sırasını korur**: `for k in m` ve `keys(m)` anahtarları eklendikleri sırayla verir.
+
+```
+map<string, int> fiyat = [];          // boş map (ya da: map<string, int> fiyat;)
+fiyat["elma"] = 3;                    // anahtar yoksa eklenir
+fiyat["elma"] = 5;                    // varsa değeri değişir (sırası değişmez)
+print(fiyat["elma"], len(fiyat));     // 5 1
+if has(fiyat, "armut") { ... }        // anahtar var mı?
+bool silindi = remove(fiyat, "elma"); // vardıysa siler, true döner
+for k in fiyat { print(k, fiyat[k]); }
+list<string> ks = keys(fiyat);        // anahtarların yeni bir listesi (free ile bırakılır)
+free(fiyat);
+```
+
+- Anahtar: tamsayılar, `char`, `bool` ya da `string`. Değer: liste elemanı olabilen her şey (sayı, `bool`, `char`, `string`, fonksiyon, görev, struct).
+- Olmayan bir anahtarı **okumak** programı mesajla durdurur (`map'te "x" anahtari yok`); önce `has` ile bakılır.
+- Değer struct ise alanı yerinde değiştirilebilir: `yer["a"].x = 3.0` (anahtar olmalıdır).
+- Map de listeler gibi **başvurudur**: `map<string, int> b = a;` aynı map'i gösterir, fonksiyona verilen map'i fonksiyon değiştirebilir. Belleği kendiliğinden bırakılmaz: `free(m)`.
+- Struct alanı olabilir (`struct Depo { map<string, int> stok; }`), fonksiyondan döndürülebilir.
+- `remove` sonraki anahtarları bir öne kaydırır (sıra korunsun diye); bu yüzden map'in büyüklüğüyle orantılı sürer. `for k in m` döngüsünün içinde map'ten anahtar silinmemelidir.
+- `parallel for` içinde map yalnızca okunur (`m[k]`, `has`, `len`); yazma ve `remove` yasaktır.
+- Şimdilik yok: global map, `@GPU` fonksiyonlarda map, map'i göreve (`marl`) verme, `list<map<...>>`, dolu map literali (`["a": 1]`).
 
 **Modüller (`import`)**
 

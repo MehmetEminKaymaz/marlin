@@ -129,6 +129,20 @@ void MLIRGenerator::visit(AssignmentStmt* node) {
         assignStruct(node, ident);
         return;
     }
+    // m[k] = ...  ya da  m[k].alan = ...
+    {
+        size_t begin = 0;
+        Expression* target = node->target.get();
+        while (auto* member = dynamic_cast<MemberExpr*>(target)) {
+            begin += leafOffset(member);
+            target = member->base.get();
+        }
+        auto* access = dynamic_cast<ArrayAccessExpr*>(target);
+        if (access && access->target->type.isMap()) {
+            assignMapElement(node, access, begin);
+            return;
+        }
+    }
     // liste[i].alan = ...  ya da  liste[i] = struct
     auto* element = dynamic_cast<ArrayAccessExpr*>(node->target.get());
     if (dynamic_cast<MemberExpr*>(node->target.get()) || node->target->type.isComposite() ||
@@ -325,7 +339,7 @@ void MLIRGenerator::emitParallelFor(ForRangeStmt* node, mlir::Value start, mlir:
 // for x in dizi  →  0 .. N arası indeks döngüsü; x her yinelemede okunan eleman.
 void MLIRGenerator::visit(ForCollectionStmt* node) {
     auto loc = locOf(node);
-    if (node->collection->type.isList()) {
+    if (node->collection->type.isList() || node->collection->type.isMap()) {
         emitStructListLoop(node);
         return;
     }

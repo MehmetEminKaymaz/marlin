@@ -296,6 +296,7 @@ private:
     void noteElementAccess(ArrayAccessExpr* access, bool isWrite);
     void noteNestedWrite(Expression* target);
     void noteMutatingBuiltin(const ASTNode* at, const std::string& name);
+    void noteMapWrite(const ASTNode* at);
     void noteCall(FunctionCallExpr* call);
     void finishParallelLoop(ParallelLoop& loop);
     void checkParallelCalls();

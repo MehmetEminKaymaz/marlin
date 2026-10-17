@@ -341,8 +341,32 @@ private:
     void ownTemporaryList(Expression* arg, const Values& cells);
     /// liste[i] = ...;   liste[i].alan = ...;
     void assignElement(AssignmentStmt* node);
-    /// for p in liste — elemanı struct olan liste üzerinde.
+    /// Yazılacak matris ve handle değerlerini sahiplenir (eskiler bırakılmadan önce).
+    void adoptOwnedValues(Values& values, llvm::ArrayRef<SemType> types, int line, mlir::Location loc);
+    /// Sütunların `index`teki elemanlarının yerine `values` yazılır.
+    void writeElement(const Values& cells, llvm::ArrayRef<SemType> types, mlir::Value index,
+                      const Values& values, int line, mlir::Location loc, bool checked);
+    /// for p in liste — elemanı struct olan liste üzerinde; for k in m.
     void emitStructListLoop(ForCollectionStmt* node);
+
+    // --- Map'ler (MLIRGeneratorMap.cpp) ---
+    /// map<K, V> m = [];  ve  map<K, V> m;  → yeni, boş map'in yaprakları.
+    Values emitMapLiteral(const SemType& mapType, mlir::Location loc);
+    /// Anahtar ifadesinin tablodaki gösterimi (i64).
+    mlir::Value emitMapKey(Expression* key, const SemType& keyType);
+    /// Anahtar değerinin tablodaki gösterimi: 64 bite genişletilir (string: adresi).
+    mlir::Value toMapKey(mlir::Value value, const SemType& keyType, mlir::Location loc);
+    /// Anahtarın satırı (i64); yoksa -1.
+    mlir::Value mapFind(mlir::Value table, mlir::Value key, const SemType& keyType, mlir::Location loc);
+    /// Anahtarın satırı (index); yoksa program durur.
+    mlir::Value mapRow(mlir::Value table, mlir::Value key, const SemType& keyType, int line,
+                       mlir::Location loc);
+    /// m[k] — değerin [begin, begin + count) yaprakları.
+    Values emitMapElement(ArrayAccessExpr* node, size_t begin, size_t count);
+    /// m[k] = ...;  m[k].alan = ...;
+    void assignMapElement(AssignmentStmt* node, ArrayAccessExpr* access, size_t begin);
+    /// len / free / has / remove / keys
+    void emitMapBuiltin(FunctionCallExpr* node);
     void declareStruct(VariableDecl* node);
     void assignStruct(AssignmentStmt* node, Identifier* target);
     /// Üretilmekte olan fonksiyon struct döndürüyorsa, dizi alanlarının

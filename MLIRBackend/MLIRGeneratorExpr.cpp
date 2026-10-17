@@ -159,6 +159,12 @@ void MLIRGenerator::visit(ArrayAccessExpr* node) {
         return;
     }
 
+    // m[k] — anahtar yoksa program durur
+    if (node->target->type.isMap()) {
+        lastValue = emitMapElement(node, 0, 1).front();
+        return;
+    }
+
     // matris[i, j, ...] — her boyut için bir indeks; bellek üzerinden, sınır denetimli
     if (node->target->type.isMatrix()) {
         mlir::Value buffer = emitMatrixBuffer(node->target.get());
@@ -398,6 +404,13 @@ void MLIRGenerator::emitBuiltinCall(FunctionCallExpr* node) {
             break;
         default:
             break;
+    }
+
+    // Map yerleşikleri (len, free, has, remove, keys): argümanlarını kendileri
+    // üretir (MLIRGeneratorMap.cpp).
+    if (!node->arguments.empty() && node->arguments[0]->type.isMap()) {
+        emitMapBuiltin(node);
+        return;
     }
 
     // Liste yerleşikleri: liste (ve eleman) struct içeriyorsa birden çok

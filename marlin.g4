@@ -33,6 +33,7 @@ pathName
     | 'string'
     | 'list'
     | 'matrix'
+    | 'map'
     ;
 
 // Üst seviyede yalnızca fonksiyonlar ve global değişkenler bulunabilir;
@@ -179,6 +180,7 @@ variableType
     : baseType ('[' NUMBER ']')?                                    #ArrayOrBaseType
     | 'list' '<' variableType '>'                                   #ListType
     | 'matrix' '<' variableType (',' NUMBER)? '>'                   #MatrixType   // matrix<T> = matrix<T, 2>; sayı: boyut sayısı
+    | 'map' '<' variableType ',' variableType '>'                   #MapType      // map<anahtar, deger>
     | 'task' '<' variableType '>'                                   #TaskType     // marl ile başlatılan görevin sonucu
     | '(' typeList? ')' '->' variableType                           #LambdaType
     | qualifiedName                                                 #NamedType    // struct: Nokta, geometri.Nokta

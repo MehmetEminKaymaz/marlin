@@ -3,7 +3,7 @@
 // error: stringlerle yalnizca + ve karsilastirma
 // error: 'to_int' string bekler (bulunan: int)
 // error: 'str' sayisal, bool, char ya da string bekler (bulunan: list<int>)
-// error: 'free' liste ya da string bekler (bulunan: int)
+// error: 'free' liste, map ya da string bekler (bulunan: int)
 // error: tip uyusmazligi: beklenen string, bulunan char
 // error: @GPU fonksiyonda yalnizca sayisal/bool/char degerler ve matrisler kullanilabilir (bulunan: string)
 @GPU

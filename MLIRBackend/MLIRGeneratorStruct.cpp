@@ -57,9 +57,10 @@ MLIRGenerator::Values MLIRGenerator::emitLeaves(Expression* expr, size_t begin, 
     if (auto* member = dynamic_cast<MemberExpr*>(expr))
         return emitLeaves(member->base.get(), leafOffset(member) + begin, count);
 
-    // Liste elemanı: l[i]
+    // Liste ya da map elemanı: l[i], m[k]
     if (auto* access = dynamic_cast<ArrayAccessExpr*>(expr))
-        return emitElement(access, begin, count);
+        return access->target->type.isMap() ? emitMapElement(access, begin, count)
+                                            : emitElement(access, begin, count);
 
     // Kalan ifadeler bütün olarak üretilir; istenen aralık sonuçtan seçilir.
     Values all = emitWholeLeaves(expr);
@@ -70,7 +71,7 @@ MLIRGenerator::Values MLIRGenerator::emitWholeLeaves(Expression* expr) {
     auto loc = locOf(expr);
 
     if (auto* list = dynamic_cast<ListLiteral*>(expr))
-        return emitStructListLiteral(list);
+        return list->type.isMap() ? emitMapLiteral(list->type, loc) : emitStructListLiteral(list);
     auto* call = static_cast<FunctionCallExpr*>(expr);
     if (call->builtin == Builtin::Pop) return emitListPop(call);
     if (call->builtin == Builtin::Scan) return emitScan(call);
@@ -129,7 +130,16 @@ void MLIRGenerator::declareStruct(VariableDecl* node) {
     const std::vector<SemLeaf> leaves = leavesOf(node->varType, node->name);
 
     if (!node->initializer) {
-        for (const SemLeaf& leaf : leaves) declareDefault(leaf.path, leaf.type, loc);
+        // Listeler boş başlar; map'in tablosu (yaprağı ".#index") yeni bir
+        // tablo olur: `map<K, V> m;` boş bir map'tir.
+        for (const SemLeaf& leaf : leaves) {
+            if (llvm::StringRef(leaf.path).ends_with(kMapIndexLeaf))
+                declareLocal(leaf.path, leaf.type,
+                             runtime.callValue("marlin_map_new", {}, ctx.builder.getI64Type(), loc),
+                             node->line, loc);
+            else
+                declareDefault(leaf.path, leaf.type, loc);
+        }
         return;
     }
     Values values = emitLeaves(node->initializer.get());

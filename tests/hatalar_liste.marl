@@ -5,7 +5,7 @@
 // error: liste elemani sayisal, bool, char, string, fonksiyon, task ya da struct olmali (bulunan: list<int>)
 // error: bu tipte bir deger yazdirilamaz: list<int>
 // error: tip uyusmazligi: beklenen list<float>, bulunan list<int>
-// error: 'len' liste, dizi ya da string bekler (bulunan: int)
+// error: 'len' liste, map, dizi ya da string bekler (bulunan: int)
 // error: tip uyusmazligi: beklenen int, bulunan bool
 // error: 'pop' 1 arguman bekler (verilen: 2)
 list<int> genel;

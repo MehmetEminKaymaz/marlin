@@ -27,6 +27,7 @@ enum class TypeKind {
  Matrix,
  Lambda,
  Task,   // task<T>: marl ile başlatılan görevin (henüz bitmemiş olabilecek) sonucu
+ Map,    // map<K, V>: anahtar Type::keyType, değer Type::elementType
  Named   // kullanıcının tanımladığı tip (struct); adı Type::name alanında
 };
 

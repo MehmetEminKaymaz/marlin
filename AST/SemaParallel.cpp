@@ -141,6 +141,15 @@ void Sema::noteNestedWrite(Expression* target) {
     noteElementAccess(rootAccess, /*isWrite=*/true);
 }
 
+// m[k] = ...,  m[k].x = ... — map'e yazma anahtar ekleyebilir (tablo ve
+// listeler büyür); iki yineleme aynı anda yapamaz. Map paralel döngüde
+// yalnızca okunur.
+void Sema::noteMapWrite(const ASTNode* at) {
+    noteUnsafe("bir map'i degistiriyor");
+    if (inParallel())
+        error(at, "paralel dongude map degistirilemez (yalnizca okunabilir)");
+}
+
 void Sema::noteMutatingBuiltin(const ASTNode* at, const std::string& name) {
     noteUnsafe("'" + name + "' ile bir listeyi degistiriyor");
     if (inParallel())

@@ -14,7 +14,7 @@
 // tutulur. Kod üretimi (MLIRBackend) yalnızca SemType'a bakar.
 // ---------------------------------------------------------------------------
 struct SemType {
-    enum class Kind { Error, Void, Bool, Char, Int, Float, String, Array, List, Matrix, Function, Struct, Task };
+    enum class Kind { Error, Void, Bool, Char, Int, Float, String, Array, List, Matrix, Function, Struct, Task, Map };
 
     Kind kind = Kind::Error;
     unsigned width = 0;        // Int / Float
@@ -22,7 +22,7 @@ struct SemType {
     int64_t arraySize = 0;     // Array
     int rank = 0;              // Matrix: boyut sayısı (1 = vektör, 2 = matris, ...)
     // Array / List / Matrix: {eleman};  Task: {sonuç};  Function: {dönüş, param0, param1, ...};
-    // Struct: alanların tipleri, tanım sırasıyla
+    // Struct: alanların tipleri, tanım sırasıyla;  Map: {anahtar, değer}
     std::vector<SemType> sub;
     std::string name;                     // Struct: tanımın adı (modül önekiyle)
     std::vector<std::string> fieldNames;  // Struct: alan adları (`sub` ile aynı sırada)
@@ -77,6 +77,16 @@ struct SemType {
         return t;
     }
 
+    // Anahtardan değere eşleme. Anahtarlar eklenme sırasını korur. Liste gibi
+    // başvuru olarak dolaşır ve elle bırakılır (free). Tek bir değer olarak
+    // saklanmaz; yapraklarına ayrılır (bkz. leavesOf, MAP).
+    static SemType Map(const SemType& key, const SemType& value) {
+        SemType t = make(Kind::Map);
+        t.sub.push_back(key);
+        t.sub.push_back(value);
+        return t;
+    }
+
     // Kullanıcının tanımladığı kayıt tipi. İki struct tipi adları aynıysa
     // aynıdır. Struct değeri tek bir değer olarak saklanmaz; alanlarına
     // ayrılır (bkz. leavesOf).
@@ -102,6 +112,7 @@ struct SemType {
     bool isFunction() const { return kind == Kind::Function; }
     bool isStruct() const   { return kind == Kind::Struct; }
     bool isTask() const     { return kind == Kind::Task; }
+    bool isMap() const      { return kind == Kind::Map; }
     bool isNumeric() const  { return isInt() || isFloat(); }
     // Tek bir SSA değeri / memref elemanı olarak saklanabilen tipler
     bool isScalar() const   { return isNumeric() || isBool() || isChar(); }
@@ -110,11 +121,21 @@ struct SemType {
     const SemType& returnType() const  { return sub.front(); }
     size_t paramCount() const          { return sub.size() - 1; }
     const SemType& paramType(size_t i) const { return sub[i + 1]; }
+    const SemType& keyType() const     { return sub[0]; }  // Map
+    const SemType& valueType() const   { return sub[1]; }  // Map
 
-    // Tek bir değer olarak saklanmayıp yapraklarına ayrılan tipler: struct ve
-    // elemanı böyle olan liste (list<Nokta>; bkz. leavesOf).
+    // Tek bir değer olarak saklanmayıp yapraklarına ayrılan tipler: struct,
+    // map ve elemanı böyle olan liste (list<Nokta>; bkz. leavesOf).
     bool isComposite() const {
-        return isStruct() || (isList() && elementType().isComposite());
+        return isStruct() || isMap() || (isList() && elementType().isComposite());
+    }
+    // Tipin kendisi ya da (struct ise, iç içe) alanlarından biri map mi?
+    bool containsMap() const {
+        if (isMap()) return true;
+        if (!isStruct()) return false;
+        for (const SemType& field : sub)
+            if (field.containsMap()) return true;
+        return false;
     }
 
     // Struct: alanın sırası; yoksa -1.
@@ -175,6 +196,7 @@ struct SemType {
             }
             case Kind::Struct: return name;
             case Kind::Task:   return "task<" + elementType().str() + ">";
+            case Kind::Map:    return "map<" + keyType().str() + ", " + valueType().str() + ">";
         }
         return "?";
     }
@@ -221,16 +243,43 @@ private:
 // Sütunların uzunlukları her zaman eşittir (eleman ekleme/çıkarma hepsine
 // birden uygulanır). Sütun adları kaynakta yazılamaz; yalnızca kod üretiminin
 // değişken tablosunda yaşar.
+//
+// MAP
+//
+// map<K, V> üç parçadan oluşan gizli bir struct gibi saklanır:
+//
+//   map<string, Nokta> m   →   m.#index      int64         anahtar → satır tablosu
+//                              m.#keys       list<string>  anahtarlar, eklenme sırasıyla
+//                              m.#values.x   list<float64> değerler: list<V>'nin
+//                              m.#values.y   list<float64>   yaprakları
+//
+// Satır r'deki anahtar keys[r], değeri values[r]'dir. Tablo çalışma zamanının
+// bir nesnesidir (runtime/marlin_map.c): anahtarı satır numarasına çevirir.
+// Listeler gibi yaprakların hepsi başvurudur (tablonun adresi ve listelerin
+// hücreleri değişmez), bu yüzden map'i kopyalamak aynı map'i paylaşmaktır.
+// '#' kaynakta bir adda bulunamaz; yapraklar yalnızca derleyicinin tablosundadır.
 // ---------------------------------------------------------------------------
 struct SemLeaf {
     std::string path;  // "c.merkez.x": verilen kök ad + alan yolu
     SemType type;
 };
 
+// Map yapraklarının sırası (bkz. MAP): tablo, anahtarlar, sonra değerler.
+constexpr const char* kMapIndexLeaf = ".#index";
+constexpr size_t kMapIndexLeafPos = 0;
+constexpr size_t kMapKeysLeafPos = 1;
+constexpr size_t kMapValuesLeafPos = 2;
+
 inline void collectLeaves(const SemType& type, const std::string& path, std::vector<SemLeaf>& out) {
     if (type.isStruct()) {
         for (size_t i = 0; i < type.sub.size(); ++i)
             collectLeaves(type.sub[i], path + "." + type.fieldNames[i], out);
+        return;
+    }
+    if (type.isMap()) {
+        out.push_back({path + kMapIndexLeaf, SemType::Int(64)});
+        out.push_back({path + ".#keys", SemType::List(type.keyType())});
+        collectLeaves(SemType::List(type.valueType()), path + ".#values", out);
         return;
     }
     if (type.isComposite()) { // struct listesi: elemanın her yaprağı için bir liste

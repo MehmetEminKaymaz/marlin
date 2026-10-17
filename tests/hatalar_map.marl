@@ -1,0 +1,39 @@
+// Map'lerin hatalı kullanımları.
+// error: global degisken olarak yalnizca
+// error: map anahtari tamsayi, char, bool ya da string olmali (bulunan: float64)
+// error: map degeri sayisal, bool, char, string, fonksiyon, task ya da struct olmali (bulunan: list<int>)
+// error: tip uyusmazligi: beklenen string, bulunan int
+// error: tip uyusmazligi: beklenen int, bulunan string
+// error: map<string, int> tek anahtarla indekslenir (verilen: 2)
+// error: 'has' ilk arguman olarak map bekler (bulunan: list<int>)
+// error: 'keys' 1 arguman bekler (verilen: 2)
+// error: bu tipte bir deger yazdirilamaz: map<string, int>
+// error: paralel dongude map degistirilemez (yalnizca okunabilir)
+// error: paralel dongude 'remove' kullanilamaz
+// error: gorev argumani olarak map<string, int> henuz desteklenmiyor
+// error: tip uyusmazligi: beklenen map<string, int>, bulunan int[2]
+map<string, int> genel;
+
+func say(map<string, int> m) -> int {
+    return len(m);
+}
+
+func main() -> void {
+    map<float64, int> a;
+    map<string, list<int>> b;
+    map<string, int> m = [];
+    m[5] = 1;
+    m["a"] = "b";
+    print(m["a", "b"]);
+    list<int> l = [];
+    print(has(l, 1));
+    print(keys(m, 1));
+    print(m);
+    parallel for i in 0 .. 10 {
+        m["x"] = i;
+        remove(m, "x");
+        int okunur = m["y"];                  // okumak serbest
+    }
+    task<int> t = marl say(m);
+    map<string, int> dolu = [1, 2];
+}

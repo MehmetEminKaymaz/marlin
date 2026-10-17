@@ -1,0 +1,11 @@
+// output: 1
+// stderr: map'te "yok" anahtari yok (satir 10; once has ile bakin)
+// expect: 1
+// Olmayan anahtar okunursa program mesajla durur.
+
+func main() -> void {
+    map<string, int> m = [];
+    m["var"] = 1;
+    print(m["var"]);
+    print(m["yok"]);
+}

@@ -23,6 +23,9 @@ bool Sema::taskResultAllowed(const SemType& type) {
 // tek tek uygulanır. Liste elemanları kopyalanırken yalnızca tek değerlik
 // elemanlar desteklenir (listenin içindeki liste, dizi ya da matris henüz yok).
 bool Sema::taskArgumentAllowed(const SemType& type) {
+    // Map'in yaprakları sıradan bir sayı (tablonun adresi) ve listelerdir;
+    // listeler kopyalanır ama tablo kopyalanmazdı. Henüz desteklenmiyor.
+    if (type.containsMap()) return false;
     for (const SemLeaf& leaf : leavesOf(type)) {
         const SemType& t = leaf.type;
         if (t.isList()) {
@@ -100,7 +103,7 @@ void Sema::visit(MarlExpr* node) {
     for (auto& arg : call->arguments) {
         if (arg->type.isError() || taskArgumentAllowed(arg->type)) continue;
         error(arg.get(), "gorev argumani olarak " + arg->type.str() + " henuz desteklenmiyor "
-                         "(elemani liste, dizi ya da matris olan listeler kopyalanamiyor)");
+                         "(map ve elemani liste, dizi ya da matris olan listeler kopyalanamiyor)");
         ok = false;
     }
     if (ok) node->type = SemType::Task(call->type);

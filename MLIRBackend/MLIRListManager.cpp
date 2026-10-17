@@ -157,6 +157,25 @@ Value MLIRListManager::pop(Value list, int line, Location loc) {
     return value;
 }
 
+void MLIRListManager::removeAt(Value list, Value index, Location loc) {
+    OpBuilder& b = ctx.builder;
+    Value data = loadData(list, loc);
+    Value length = b.create<memref::DimOp>(loc, data, 0);
+    Value one = b.create<arith::ConstantIndexOp>(loc, 1);
+    Value last = b.create<arith::SubIOp>(loc, length, one);
+
+    // data[j] = data[j + 1],  j = index .. last - 1
+    b.create<scf::ForOp>(loc, index, last, one, ValueRange(),
+        [&](OpBuilder& nb, Location l, Value j, ValueRange) {
+            Value next = nb.create<arith::AddIOp>(l, j, one);
+            Value moved = nb.create<memref::LoadOp>(l, data, ValueRange(next));
+            nb.create<memref::StoreOp>(l, moved, data, ValueRange(j));
+            nb.create<scf::YieldOp>(l);
+        });
+    // Bellek küçültülmez; yalnızca uzunluk bir azalır (pop gibi).
+    b.create<memref::StoreOp>(loc, resized(data, last, loc), list);
+}
+
 void MLIRListManager::free(Value list, Location loc) {
     OpBuilder& b = ctx.builder;
     b.create<memref::DeallocOp>(loc, loadData(list, loc));

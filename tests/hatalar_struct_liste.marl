@@ -1,6 +1,6 @@
 // error: struct 'Dugum' kendisini iceriyor
 // error: 'l' bir struct degil (tipi: list<Nokta>); '.x' ile alanina erisilemez
-// error: '.x' alanina atama yapilamaz: hedef bir degiskenin (p.x) ya da liste elemaninin (l[i].x) alani olmali
+// error: '.x' alanina atama yapilamaz: hedef bir degiskenin (p.x), liste elemaninin (l[i].x) ya da map elemaninin (m[k].x) alani olmali
 // error: dongu degiskeni 'p.x' degistirilemez
 // error: dongu degiskeni 'k.m' degistirilemez; listedeki elemani indeksle degistirin (or. liste[i].m)
 // error: struct listesi literalinin tipi belirtilmeli (or. list<Nokta> l = [...];)

@@ -1,0 +1,129 @@
+// output: 3 true false
+// output: elma 5
+// output: armut 7
+// output: kiraz 2
+// output: 12
+// output: true false 2
+// output: armut kiraz
+// output: kiraz armut elma
+// output: 2 4 0
+// output: 499500 1000 999
+// output: 3.0 4.0 30.0
+// output: 2
+// output: true false
+// output: bir iki
+// output: 1 1
+// output: x
+// output: 5
+// leaks: 0
+// map<K, V>: anahtardan değere eşleme; anahtarlar eklenme sırasını korur.
+
+struct Nokta {
+    float64 x;
+    float64 y;
+}
+
+struct Depo {
+    string ad;
+    map<string, int> stok;
+}
+
+// map başvurudur: fonksiyon çağıranın map'ini değiştirir.
+func ekle(map<string, int> m, string k, int v) -> void {
+    m[k] = v;
+}
+
+func yeni_sayac() -> map<string, int> {
+    map<string, int> m = [];
+    m["x"] = 5;
+    return m;
+}
+
+func main() -> void {
+    // Ekleme, okuma, üzerine yazma, len, has
+    map<string, int> fiyat = [];
+    fiyat["elma"] = 3;
+    fiyat["armut"] = 7;
+    fiyat["kiraz"] = 2;
+    fiyat["elma"] = 5;                     // var olan anahtar: değer değişir, sıra değişmez
+    print(len(fiyat), has(fiyat, "elma"), has(fiyat, "muz"));
+
+    // for k in m: eklenme sırasıyla
+    for k in fiyat {
+        print(k, fiyat[k]);
+    }
+    int toplam = 0;
+    for k in fiyat { toplam = toplam + fiyat[k]; }
+    print(toplam - 2);                     // 5 + 7 + 2 - 2
+
+    // remove: sonraki anahtarlar bir öne kayar, sıra korunur
+    bool silindi = remove(fiyat, "elma");
+    bool yine = remove(fiyat, "elma");
+    print(silindi, yine, len(fiyat));
+    list<string> anahtarlar = keys(fiyat);
+    print(anahtarlar[0], anahtarlar[1]);
+    free(anahtarlar);
+    fiyat["elma"] = 1;                     // silinip yeniden eklenen sona gelir
+    fiyat["kiraz"] = fiyat["kiraz"] + 1;
+    // sıra artık: armut, kiraz, elma
+    list<string> ks = keys(fiyat);
+    print(ks[1], ks[0], ks[2]);
+    free(ks);
+
+    // Tamsayı anahtar; başlangıç değeri olmadan tanımlanan map boştur
+    map<int64, int> kare;
+    for i in 0 .. 3 { kare[i * 2] = i * 2; }
+    print(kare[2], kare[4], kare[0]);
+
+    // Büyüme: tablo ve listeler birlikte büyür
+    map<int, int64> buyuk = [];
+    for i in 0 .. 1000 { buyuk[i] = i; }
+    int64 s = 0;
+    for k in buyuk { s = s + buyuk[k]; }
+    print(s, len(buyuk), buyuk[999]);
+
+    // Struct değer; m[k].alan = ...
+    map<string, Nokta> yer = [];
+    yer["a"] = Nokta(1.0, 2.0);
+    yer["a"].x = 3.0;
+    yer["a"].y = yer["a"].y * 2.0;
+    yer["b"] = Nokta(10.0, 20.0);
+    Nokta b = yer["b"];
+    print(yer["a"].x, yer["a"].y, b.x + b.y);
+
+    // Map başvurudur: atama ve parametre aynı map'i paylaşır
+    map<string, int> ayni = fiyat;
+    ekle(ayni, "muz", 9);
+    remove(ayni, "armut");
+    remove(fiyat, "muz");
+    print(len(fiyat));
+
+    // char ve bool anahtar
+    map<char, string> harf = [];
+    harf['a'] = "bir";
+    harf['b'] = "iki";
+    map<bool, int> evet = [];
+    evet[true] = 1;
+    print(has(harf, 'a'), has(evet, false));
+    print(harf['a'], harf['b']);
+
+    // Struct alanı olarak map
+    Depo d = Depo("ana", []);
+    d.stok["vida"] = 1;
+    ekle(d.stok, "somun", 1);
+    print(d.stok["vida"], d.stok["somun"]);
+
+    // Fonksiyon map döndürür
+    map<string, int> sayac = yeni_sayac();
+    for k in sayac { print(k); }
+    print(sayac["x"]);
+
+    free(fiyat);
+    free(kare);
+    free(buyuk);
+    free(yer);
+    free(harf);
+    free(evet);
+    free(d.stok);
+    free(sayac);
+}

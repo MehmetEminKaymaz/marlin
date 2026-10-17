@@ -248,11 +248,13 @@ public:
             case TypeKind::Matrix:  typeStr = "Matrix"; break;
             case TypeKind::Lambda:  typeStr = "Lambda"; break;
             case TypeKind::Task:    typeStr = "Task"; break;
+            case TypeKind::Map:     typeStr = "Map"; break;
             case TypeKind::Named:   typeStr = node->name; break;
             default: typeStr = "Unknown"; break;
         }
         printNode("Type: " + typeStr);
         indentLevel++;
+        if (node->keyType) node->keyType->accept(*this);
         if (node->elementType) node->elementType->accept(*this);
         for (auto& pt : node->paramTypes) {
             if (pt) pt->accept(*this);

@@ -457,6 +457,13 @@ virtual std::any visitMatrixType(marlinParser::MatrixTypeContext *ctx) override 
     return matrixType;
 }
 
+virtual std::any visitMapType(marlinParser::MapTypeContext *ctx) override {
+    auto mapType = new Type(TypeKind::Map);
+    mapType->keyType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType(0))));
+    mapType->elementType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType(1))));
+    return mapType;
+}
+
 virtual std::any visitTaskType(marlinParser::TaskTypeContext *ctx) override {
     auto taskType = new Type(TypeKind::Task);
     taskType->elementType = std::unique_ptr<Type>(std::any_cast<Type*>(visit(ctx->variableType())));

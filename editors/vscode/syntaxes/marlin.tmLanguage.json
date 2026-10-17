@@ -117,7 +117,7 @@
     },
     "types": {
       "name": "storage.type.primitive.marlin",
-      "match": "\\b(int8|int16|int64|int|uint8|uint16|uint64|uint|float64|float|bool|char|string|void|list|matrix|task)\\b"
+      "match": "\\b(int8|int16|int64|int|uint8|uint16|uint64|uint|float64|float|bool|char|string|void|list|matrix|map|task)\\b"
     },
     "constants": {
       "name": "constant.language.boolean.marlin",
@@ -125,7 +125,7 @@
     },
     "builtins": {
       "comment": "Yerleşik fonksiyonlar (AST/Builtins.h)",
-      "match": "\\b(print|time|sqrt|sin|cos|tan|atan|tanh|exp|log|log2|log10|floor|ceil|round|trunc|pow|atan2|abs|min|max|push|pop|len|free|str|to_int|to_float|zeros|ones|fill|shape|rows|cols|matmul|transpose|sum|await|scan)\\s*(?=\\()",
+      "match": "\\b(print|time|sqrt|sin|cos|tan|atan|tanh|exp|log|log2|log10|floor|ceil|round|trunc|pow|atan2|abs|min|max|push|pop|len|free|has|remove|keys|str|to_int|to_float|zeros|ones|fill|shape|rows|cols|matmul|transpose|sum|await|scan)\\s*(?=\\()",
       "captures": { "1": { "name": "support.function.builtin.marlin" } }
     },
     "function-call": {

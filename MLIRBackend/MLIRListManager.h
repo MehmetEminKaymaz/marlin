@@ -71,6 +71,10 @@ public:
     /// Son elemanı çıkarıp döndürür; liste boşsa program hata mesajıyla durur.
     mlir::Value pop(mlir::Value list, int line, mlir::Location loc);
     void free(mlir::Value list, mlir::Location loc);
+    /// `index`teki elemanı çıkarır; sonrakiler bir öne kayar (sıra korunur).
+    /// İndeks denetlenmez (çağıran geçerli olduğunu bilir). Çıkan elemanın
+    /// kendi belleği varsa onu bırakmak çağıranın işidir.
+    void removeAt(mlir::Value list, mlir::Value index, mlir::Location loc);
 
 private:
     mlir::Value loadData(mlir::Value list, mlir::Location loc);

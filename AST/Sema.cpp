@@ -296,6 +296,25 @@ SemType Sema::resolveType(Type* t) {
             }
             return SemType::Task(result);
         }
+        case TypeKind::Map: {
+            SemType key = resolveType(t->keyType.get());
+            SemType value = resolveType(t->elementType.get());
+            if (key.isError() || value.isError()) return SemType::Error();
+            if (!key.isInt() && !key.isChar() && !key.isBool() && !key.isString()) {
+                error(t->keyType.get(), "map anahtari tamsayi, char, bool ya da string olmali (bulunan: " +
+                                        key.str() + ")");
+                return SemType::Error();
+            }
+            // Değerler bir listede durur (bkz. SemType.h, MAP): liste elemanının
+            // kuralları geçerlidir.
+            if (!value.isScalar() && !value.isString() && !value.isStruct() && !value.isFunction() &&
+                !value.isTask()) {
+                error(t->elementType.get(), "map degeri sayisal, bool, char, string, fonksiyon, task ya "
+                                            "da struct olmali (bulunan: " + value.str() + ")");
+                return SemType::Error();
+            }
+            return SemType::Map(key, value);
+        }
         case TypeKind::Named:
             return resolveNamedType(t);
     }
@@ -375,8 +394,9 @@ SemType Sema::check(ExprPtr& e) {
 // check ile aynı, ama bağlamın beklediği tipi bilir. Tek başına tipi
 // çıkarılamayan ifadeler (boş liste literali `[]`) tipini buradan alır.
 SemType Sema::checkExpecting(ExprPtr& e, const SemType& expected) {
+    // (map<K, V> m = []; boş map'tir; map'in dolu literali yoktur.)
     auto* list = dynamic_cast<ListLiteral*>(e.get());
-    if (list && list->elements.empty() && expected.isList()) {
+    if (list && list->elements.empty() && (expected.isList() || expected.isMap())) {
         list->type = expected;
         return expected;
     }
@@ -951,6 +971,22 @@ void Sema::visit(ArrayAccessExpr* node) {
     skipWholeRead = dynamic_cast<Identifier*>(node->target.get()) != nullptr;
     SemType target = check(node->target);
     skipWholeRead = false;
+
+    // m[k]: anahtarın değeri. Yazma (m[k] = v) anahtar yoksa ekler.
+    if (target.isMap()) {
+        for (auto& index : node->indices) check(index);
+        if (node->indices.size() != 1) {
+            error(node, target.str() + " tek anahtarla indekslenir (verilen: " +
+                        std::to_string(node->indices.size()) + ")");
+            return;
+        }
+        if (node->indices[0]->type.isError()) return;
+        coerce(node->indices[0], target.keyType());
+        if (isWrite) noteMapWrite(node);
+        node->type = target.valueType();
+        return;
+    }
+
     for (auto& index : node->indices) {
         SemType t = check(index);
         if (!t.isError() && !t.isInt())
@@ -959,7 +995,7 @@ void Sema::visit(ArrayAccessExpr* node) {
 
     if (target.isError()) return;
     if (!target.isArray() && !target.isList() && !target.isMatrix() && !target.isString()) {
-        error(node->target.get(), "indekslenen ifade dizi, liste, matris ya da string degil (bulunan: " + target.str() + ")");
+        error(node->target.get(), "indekslenen ifade dizi, liste, matris, map ya da string degil (bulunan: " + target.str() + ")");
         return;
     }
 
@@ -1219,10 +1255,31 @@ void Sema::checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
             node->type = SemType::Void();
             if (args.size() != 1 || !args[0]->type.isString()) noteMutatingBuiltin(node, name);
             if (!expectArgs(1) || !ok) return;
-            if (!args[0]->type.isList() && !args[0]->type.isString())
-                error(args[0].get(), "'free' liste ya da string bekler (bulunan: " +
+            if (!args[0]->type.isList() && !args[0]->type.isMap() && !args[0]->type.isString())
+                error(args[0].get(), "'free' liste, map ya da string bekler (bulunan: " +
                                      args[0]->type.str() + ")");
             return;
+
+        // --- Map'ler ---
+        // has(m, k) → bool;  remove(m, k) → bool (anahtar vardı ve silindi);
+        // keys(m) → anahtarların yeni bir listesi (çağıranındır; free ile bırakılır).
+        case Builtin::Has: case Builtin::Remove: case Builtin::Keys: {
+            const bool isKeys = node->builtin == Builtin::Keys;
+            if (node->builtin == Builtin::Remove) noteMutatingBuiltin(node, name);
+            if (!expectArgs(isKeys ? 1 : 2) || !ok) return;
+            if (!args[0]->type.isMap()) {
+                error(args[0].get(), "'" + name + "' ilk arguman olarak map bekler (bulunan: " +
+                                     args[0]->type.str() + ")");
+                return;
+            }
+            if (isKeys) {
+                node->type = SemType::List(args[0]->type.keyType());
+                return;
+            }
+            coerce(args[1], args[0]->type.keyType());
+            node->type = SemType::Bool();
+            return;
+        }
 
         // str(x): sayı, bool ya da char → print'in yazdığı metin.
         case Builtin::Str:
@@ -1260,8 +1317,8 @@ void Sema::checkBuiltinCall(FunctionCallExpr* node, const std::string& name,
         case Builtin::Len: {
             if (!expectArgs(1) || !ok) return;
             const SemType& t = args[0]->type;
-            if (!t.isList() && !t.isArray() && !t.isString()) {
-                error(args[0].get(), "'len' liste, dizi ya da string bekler (bulunan: " + t.str() + ")");
+            if (!t.isList() && !t.isMap() && !t.isArray() && !t.isString()) {
+                error(args[0].get(), "'len' liste, map, dizi ya da string bekler (bulunan: " + t.str() + ")");
                 return;
             }
             node->type = SemType::Int(64);
@@ -1522,15 +1579,21 @@ void Sema::visit(AssignmentStmt* node) {
     accessIsWrite = skipWholeRead = false;
     SemType value = checkExpecting(node->value, target);
 
-    // l[i].x = ... — alanına atanan struct bir liste elemanı olmalı. (Değişkenin
-    // alanı `p.x = ...` noktalı isim olarak gelir; f().x ise geçici bir değerdir.)
+    // l[i].x = ... — alanına atanan struct bir liste ya da map elemanı olmalı.
+    // (Değişkenin alanı `p.x = ...` noktalı isim olarak gelir; f().x ise
+    // geçici bir değerdir.) m[k].x = ... anahtar yoksa programı durdurur.
     if (targetMember && !target.isError()) {
         Expression* base = targetMember->base.get();
         while (auto* inner = dynamic_cast<MemberExpr*>(base)) base = inner->base.get();
         auto* element = dynamic_cast<ArrayAccessExpr*>(base);
-        if (!element || !element->target->type.isList())
+        if (!element || (!element->target->type.isList() && !element->target->type.isMap()))
             return error(node->target.get(), "'." + targetMember->field + "' alanina atama yapilamaz: "
-                         "hedef bir degiskenin (p.x) ya da liste elemaninin (l[i].x) alani olmali");
+                         "hedef bir degiskenin (p.x), liste elemaninin (l[i].x) ya da map "
+                         "elemaninin (m[k].x) alani olmali");
+        if (element->target->type.isMap()) {
+            noteMapWrite(node->target.get());
+            if (inParallel()) return;
+        }
     }
     // Hedef, bir değişkenin doğrudan elemanı değilse (l[i].x, l[i].dizi[j])
     // paralel döngü denetimi için ayrıca kaydedilir.
@@ -1668,7 +1731,8 @@ void Sema::visit(ForCollectionStmt* node) {
     node->iterType = SemType::Error();
     if (!coll.isError()) {
         if (coll.isArray() || coll.isList()) node->iterType = coll.elementType();
-        else error(node->collection.get(), "for ... in bir dizi ya da liste bekler (bulunan: " + coll.str() + ")");
+        else if (coll.isMap()) node->iterType = coll.keyType(); // anahtarlar, eklenme sırasıyla
+        else error(node->collection.get(), "for ... in bir dizi, liste ya da map bekler (bulunan: " + coll.str() + ")");
     }
 
     scopes.emplace_back();

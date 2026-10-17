@@ -140,6 +140,7 @@ set(PROJECT_SOURCES
         MLIRBackend/MLIRGeneratorString.cpp
         MLIRBackend/MLIRGeneratorTask.cpp
         MLIRBackend/MLIRGeneratorScan.cpp
+        MLIRBackend/MLIRGeneratorMap.cpp
         Lsp/MarlinLsp.cpp
         Lsp/MarlinLsp.h
         Lsp/MarlinCheck.cpp
@@ -248,7 +249,8 @@ add_library(marlinrt STATIC
         runtime/std_http.c
         runtime/http_parser.c
         runtime/http_parser.h
-        runtime/marlin_task.c)
+        runtime/marlin_task.c
+        runtime/marlin_map.c)
 add_dependencies(marlin_lang marlinrt)
 target_compile_definitions(marlin_lang PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE:marlinrt>")
 

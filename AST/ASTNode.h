@@ -44,7 +44,8 @@ class Type : public ASTNode {
     // olmayan sayı) -1 olur ve Sema raporlar.
     int rank = 0;
     std::string name;   // Named: kaynakta yazılan tip adı ("Nokta", "geometri.Nokta")
-    std::unique_ptr<Type> elementType;
+    std::unique_ptr<Type> elementType;  // Map: değer tipi
+    std::unique_ptr<Type> keyType;      // Map: anahtar tipi
     std::vector<std::unique_ptr<Type>> paramTypes;
     std::unique_ptr<Type> returnType;
 

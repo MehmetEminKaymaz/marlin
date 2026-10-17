@@ -34,9 +34,12 @@ enum class Builtin {
     Pow, Atan2,
     // Tamsayı ve kayan nokta; sonuç argümanın tipinde
     Abs, Min, Max,
-    // Listeler: push(l, x), pop(l).  len liste, dizi ve string alır;
-    // free liste ya da stringin belleğini bırakır.
+    // Listeler: push(l, x), pop(l).  len liste, map, dizi ve string alır;
+    // free liste, map ya da stringin belleğini bırakır.
     Push, Pop, Len, Free,
+    // Map'ler: has(m, k) anahtar var mı; remove(m, k) anahtarı siler (vardıysa
+    // true); keys(m) anahtarların yeni bir listesi (eklenme sırasıyla).
+    Has, Remove, Keys,
     // Stringler: str(x) değeri metne çevirir (print'in yazdığı biçimde);
     // to_int(s) / to_float(s) metni sayıya çevirir.
     Str, ToInt, ToFloat,
@@ -64,6 +67,7 @@ inline Builtin lookupBuiltin(const std::string& name) {
         {"abs", Builtin::Abs},     {"min", Builtin::Min},     {"max", Builtin::Max},
         {"push", Builtin::Push},   {"pop", Builtin::Pop},     {"len", Builtin::Len},
         {"free", Builtin::Free},
+        {"has", Builtin::Has},     {"remove", Builtin::Remove}, {"keys", Builtin::Keys},
         {"str", Builtin::Str},     {"to_int", Builtin::ToInt}, {"to_float", Builtin::ToFloat},
         {"zeros", Builtin::Zeros}, {"ones", Builtin::Ones},   {"fill", Builtin::Fill},
         {"rows", Builtin::Rows},   {"cols", Builtin::Cols},   {"shape", Builtin::Shape},
