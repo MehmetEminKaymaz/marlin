@@ -225,10 +225,13 @@ void ModuleLoader::resolveImport(int importer, ImportDecl* decl) {
         }
     }
 
+    // Yol her platformda '/' ile yazılır (Windows da kabul eder): hata
+    // mesajları platformdan bağımsız olsun.
+    const std::string path = found.generic_string();
     std::string source;
-    if (!readSource(found.string(), source)) {
-        error(importer, decl, "modul dosyasi acilamadi: " + found.string());
+    if (!readSource(path, source)) {
+        error(importer, decl, "modul dosyasi acilamadi: " + path);
         return;
     }
-    decl->target = addModule(name, found.string(), source);
+    decl->target = addModule(name, path, source);
 }

@@ -223,10 +223,12 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
     if (windows) {
         args.push_back("-lws2_32");
         args.push_back("-lshell32");
-        // C kütüphanesinin DLL hali (msvcrt/ucrt): runtime /MD ile derlenir,
-        // MLIR'in DLL'leri de onu kullanır. clang'ın varsayılanı statik
-        // libcmt'dir; ikisi karışırsa bağlayıcı çakışır.
-        args.push_back("-fms-runtime-lib=dll");
+        // C kütüphanesinin DLL hali (msvcrt → ucrt, vcruntime): runtime /MD ile
+        // derlenir, MLIR'in DLL'leri de onu kullanır. clang sürücüsü bağlarken
+        // statik libcmt'yi ekler; ikisi karışınca runtime'ın __imp_ sembolleri
+        // çözülemez. Statik olan dışlanır, DLL olan açıkça bağlanır.
+        args.push_back("-Wl,/nodefaultlib:libcmt");
+        args.push_back("-lmsvcrt");
     } else {
         args.push_back("-lm");
     }

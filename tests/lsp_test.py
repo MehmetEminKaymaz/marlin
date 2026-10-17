@@ -6,7 +6,7 @@
 # Bir LSP istemcisi gibi davranır: belge açar, değiştirir, kapatır ve gelen
 # tanılamaları (hataları) beklenenlerle karşılaştırır. Başarılıysa çıkış kodu 0.
 
-import json, os, signal, subprocess, sys, tempfile
+import json, os, pathlib, subprocess, sys, tempfile, threading
 
 compiler = sys.argv[1]
 work = tempfile.mkdtemp()
@@ -16,14 +16,19 @@ with open(helper, "w") as f:
     f.write('public func iki() -> int {\n    return "iki";\n}\n')
 
 server = subprocess.Popen([compiler, "--lsp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-signal.signal(signal.SIGALRM, lambda *a: fail("sunucu 5 saniyede yanit vermedi"))
 failures = []
 
 
-def fail(message):
-    print("LSP testi basarisiz:", message)
+def timed_out():
+    # (Zamanlayıcı ayrı bir iş parçacığında çalışır; sys.exit orada yetmez.)
+    print("LSP testi basarisiz: sunucu 5 saniyede yanit vermedi", flush=True)
     server.kill()
-    sys.exit(1)
+    os._exit(1)
+
+
+def file_uri(path):
+    # Linux: file:///tmp/..., Windows: file:///C:/...
+    return pathlib.Path(path).as_uri()
 
 
 def send(message):
@@ -33,7 +38,8 @@ def send(message):
 
 
 def receive():
-    signal.alarm(5)
+    timer = threading.Timer(5, timed_out)
+    timer.start()
     length = 0
     while True:
         line = server.stdout.readline()
@@ -42,7 +48,7 @@ def receive():
         if line.lower().startswith(b"content-length:"):
             length = int(line.split(b":")[1])
     message = json.loads(server.stdout.read(length))
-    signal.alarm(0)
+    timer.cancel()
     return message
 
 
@@ -72,7 +78,7 @@ def expect(step, got, file, wanted):
         failures.append(f"{step}: {file} beklenen {wanted}, gelen {actual}")
 
 
-uri = "file://" + root
+uri = file_uri(root)
 send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}})
 caps = receive()["result"]["capabilities"]
 if caps.get("textDocumentSync", {}).get("change") != 1:
@@ -104,7 +110,7 @@ if not got.get("ana.marl") or "sozdizimi hatasi" not in got["ana.marl"][0][2]:
     failures.append(f"sozdizimi: beklenen sozdizimi hatasi, gelen {got.get('ana.marl')}")
 
 # 4) main'i olmayan modül dosyası hata vermez.
-module_uri = "file://" + os.path.join(work, "modul.marl")
+module_uri = file_uri(os.path.join(work, "modul.marl"))
 send({"jsonrpc": "2.0", "method": "textDocument/didOpen",
       "params": {"textDocument": {"uri": module_uri, "languageId": "marlin", "version": 1,
                                   "text": "public func bir() -> int { return 1; }\n"}}})

@@ -22,6 +22,7 @@
 #include "mlir/Tools/lsp-server-support/Logging.h"
 #include "mlir/Tools/lsp-server-support/Protocol.h"
 #include "mlir/Tools/lsp-server-support/Transport.h"
+#include "llvm/Support/Program.h"   // ChangeStdinToBinary
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -250,6 +251,10 @@ private:
 
 int runLanguageServer(const std::string& compilerPath) {
     lsp::Logger::setLogLevel(lsp::Logger::Level::Error);
+    // Windows'ta akışlar metin kipinde açılır ve \n'i \r\n'e çevirir; LSP
+    // mesajlarının bayt sayısı (Content-Length) bozulmasın. (POSIX'te etkisiz.)
+    llvm::sys::ChangeStdinToBinary();
+    llvm::sys::ChangeStdoutToBinary();
     lsp::JSONTransport transport(stdin, llvm::outs());
     lsp::MessageHandler handler(transport);
     Server server(handler, findStdDirectory(compilerPath));
