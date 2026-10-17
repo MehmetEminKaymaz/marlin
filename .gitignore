@@ -14,6 +14,11 @@ generated/
 # CLion proje ayarları (Önemli: Eğer ortak çalışmıyorsan tutmana gerek yok)
 .idea/
 
+# VS Code eklentisinin bağımlılıkları ve derlenmiş hali
+editors/vscode/node_modules/
+editors/vscode/out/
+editors/vscode/*.vsix
+
 # İşletim sistemi çöpleri
 .DS_Store
 Thumbs.db

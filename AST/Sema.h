@@ -27,6 +27,9 @@
 class Sema : public ASTVisitor {
 public:
     bool hasErrors() const { return !errors.empty(); }
+    // Kök dosyada `main` aranmasın (editörde açılan bir modül dosyası
+    // denetlenirken; bkz. Lsp/MarlinLsp.cpp).
+    void setRequireMain(bool require) { requireMain = require; }
     const std::vector<std::string>& getErrors() const { return errors; }
 
     void visit(Program* node) override;
@@ -97,6 +100,7 @@ private:
     // İfadeyi denetleyen visit metodu takeHint ile alır ve sıfırlar.
     SemType hint;
     std::vector<std::string> errors;
+    bool requireMain = true;
 
     void error(const ASTNode* node, const std::string& msg);
 

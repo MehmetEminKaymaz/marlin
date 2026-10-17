@@ -93,6 +93,10 @@ set(PROJECT_SOURCES
         MLIRBackend/MLIRGeneratorString.cpp
         MLIRBackend/MLIRGeneratorTask.cpp
         MLIRBackend/MLIRGeneratorScan.cpp
+        Lsp/MarlinLsp.cpp
+        Lsp/MarlinLsp.h
+        Lsp/MarlinCheck.cpp
+        Lsp/MarlinCheck.h
         MLIRBackend/MLIRListManager.cpp
         MLIRBackend/MLIRListManager.h
         MLIRBackend/MLIRRuntime.h
@@ -155,6 +159,10 @@ add_executable(marlin_lang
 # kullanır (AST üzerinde dynamic_cast, ANTLR).
 set_source_files_properties(LLVMBackend/GpuOffload.cpp LLVMBackend/ParallelMatmul.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+# Dil sunucusu da MLIR'in LSP kütüphanesinin sınıflarını (llvm::ErrorInfo ...)
+# kullanır; aynı sebeple RTTI'siz derlenir. AST'ye dokunan kısmı ayrı bir
+# dosyadadır (Lsp/MarlinCheck.cpp).
+set_source_files_properties(Lsp/MarlinLsp.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")
 
 # Çalışma zamanı kütüphanesi: derlenen her marlin programına bağlanır (print vb.).
 # Derleyiciyle aynı dizine üretilir; marlin_lang onu yanında arar, bulamazsa
@@ -266,6 +274,9 @@ target_link_libraries(marlin_lang PRIVATE
         MLIRSCFToControlFlow
         MLIRControlFlowToLLVM
         MLIRReconcileUnrealizedCasts
+
+        # Dil sunucusu (marlin_lang --lsp): MLIR'in LSP altyapısı
+        MLIRLspServerSupportLib
 
         # CPU'da matris çarpımı çekirdeği: vektör işlemleri → llvm
         MLIRVectorDialect

@@ -1,0 +1,121 @@
+{
+  "name": "marlin",
+  "displayName": "Marlin",
+  "description": "marlin dili: sözdizimi renklendirme, yazarken hata gösterme (dil sunucusu), derle ve çalıştır",
+  "version": "0.1.0",
+  "publisher": "marlin-lang",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": ["marlin", "mlir", "gpu", "compiler"],
+  "extensionKind": ["workspace"],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/*.marl"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "marlin",
+        "aliases": ["Marlin", "marlin"],
+        "extensions": [".marl"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/marl.svg",
+          "dark": "./images/marl.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "marlin",
+        "scopeName": "source.marlin",
+        "path": "./syntaxes/marlin.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "marlin",
+        "path": "./snippets/marlin.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "marlin.run",
+        "title": "Derle ve Çalıştır",
+        "category": "Marlin",
+        "icon": "$(play)"
+      },
+      {
+        "command": "marlin.runTests",
+        "title": "Testleri Çalıştır",
+        "category": "Marlin"
+      },
+      {
+        "command": "marlin.restartServer",
+        "title": "Dil Sunucusunu Yeniden Başlat",
+        "category": "Marlin"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "marlin.run",
+          "when": "resourceLangId == marlin",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "marlin.run",
+          "when": "editorLangId == marlin"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "marlin.run",
+        "key": "ctrl+alt+r",
+        "when": "editorLangId == marlin"
+      }
+    ],
+    "configuration": {
+      "title": "Marlin",
+      "properties": {
+        "marlin.compilerPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "`marlin_lang` derleyicisinin yolu. Boşsa önce çalışma alanındaki `cmake-build-debug/marlin_lang`, sonra `PATH` aranır."
+        },
+        "marlin.runArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "**Derle ve Çalıştır** için derleyiciye verilecek ek seçenekler (ör. `-O2`, `--gpu=off`)."
+        },
+        "marlin.languageServer": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Yazarken hataları göstermek için dil sunucusunu (`marlin_lang --lsp`) çalıştır."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npx --yes @vscode/vsce package --skip-license --allow-missing-repository"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.5"
+  }
+}

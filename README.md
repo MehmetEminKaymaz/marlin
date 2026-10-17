@@ -106,6 +106,29 @@ Bu "deneme.marl dosyasının 3. satırının 13. sütununda" demektir.
 
 ---
 
+### VS Code ile yazmak
+
+`editors/vscode/` dizinindeki eklenti şunları sağlar:
+- renklendirme
+- yazarken hata gösterme: derleyicinin kendisi dil sunucusu olarak çalışır, hatalar derleyicininkilerle aynıdır
+- "Derle ve Çalıştır" düğmesi
+- snippet'ler
+
+Kurulum (bir kez):
+
+1. VS Code'a **WSL** eklentisini (Microsoft) kur.
+2. WSL terminalinde proje dizinine geç ve `code .` yaz. VS Code, klasörü WSL içinde açar (sol altta `WSL: Ubuntu` yazar).
+3. Eklentiler panelinde `...` menüsünden **Install from VSIX...** seç ve `editors/vscode/marlin-0.1.0.vsix` dosyasını göster. WSL'e bağlıyken kurulduğu için WSL tarafına kurulur.
+
+Kullanım:
+- `.marl` dosyası açınca renkler ve hatalar kendiliğinden gelir.
+- Sağ üstteki ▷ düğmesi ya da `Ctrl+Alt+R` dosyayı derleyip çalıştırır.
+- `Ctrl+Shift+P` → "Marlin: Testleri Çalıştır".
+
+Derleyiciyi yeniden derledikten sonra `Ctrl+Shift+P` → "Marlin: Dil Sunucusunu Yeniden Başlat".
+
+Eklentiyi değiştirirsen yeniden paketlemek için (Windows PowerShell'de): `cd editors\vscode; npm install; npm run compile; npm run package`.
+
 ## 4. Derleyicinin seçenekleri
 
 ```
@@ -1093,6 +1116,12 @@ LLVMBackend/        MLIR → çalıştırılabilir dosya
   GpuOffload.*        @GPU fonksiyonlardaki paralel işleri GPU çekirdeğine çevirir
   ParallelMatmul.*    CPU'da matris çarpımını çekirdeklere dağıtır
   NativeCodegen.*     Optimizasyon, nesne dosyası, bağlama
+
+Lsp/                Dil sunucusu (marlin_lang --lsp; editör eklentisi kullanır)
+  MarlinLsp.cpp       LSP mesajları (MLIR'in LSP altyapısı üzerinde)
+  MarlinCheck.cpp     belgeyi derleyicinin ön ucuyla (ModuleLoader + Sema) denetler
+
+editors/vscode/     VS Code eklentisi: gramer (syntaxes/), snippet'ler, dil sunucusu istemcisi (src/)
 
 runtime/            Derlenen programlara eklenen C kütüphanesi (libmarlinrt.a)
   marlin_rt.c          print, stringler, hata mesajları

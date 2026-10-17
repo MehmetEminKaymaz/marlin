@@ -82,9 +82,22 @@ void ModuleLoader::error(int module, const ASTNode* at, const std::string& msg) 
                      std::to_string(at->column) + ": hata: " + msg);
 }
 
+// Dosyanın metni: editörde açıksa oradaki (kaydedilmemiş) hali, değilse diskteki.
+bool ModuleLoader::readSource(const std::string& path, std::string& out) const {
+    if (overlay) {
+        std::error_code ec;
+        auto open = overlay->find(fs::weakly_canonical(path, ec).string());
+        if (open != overlay->end()) {
+            out = open->second;
+            return true;
+        }
+    }
+    return readFile(path, out);
+}
+
 std::unique_ptr<Program> ModuleLoader::load(const std::string& rootPath) {
     std::string source;
-    if (!readFile(rootPath, source)) {
+    if (!readSource(rootPath, source)) {
         errors.push_back("Dosya acilamadi: " + rootPath);
         return nullptr;
     }
@@ -213,7 +226,7 @@ void ModuleLoader::resolveImport(int importer, ImportDecl* decl) {
     }
 
     std::string source;
-    if (!readFile(found.string(), source)) {
+    if (!readSource(found.string(), source)) {
         error(importer, decl, "modul dosyasi acilamadi: " + found.string());
         return;
     }

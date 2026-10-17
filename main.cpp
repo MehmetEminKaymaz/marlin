@@ -8,6 +8,7 @@
 #include "MLIRBackend/MLIRGenerator.h"
 #include "LLVMBackend/LLVMLowering.h"
 #include "LLVMBackend/NativeCodegen.h"
+#include "Lsp/MarlinLsp.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
@@ -110,7 +111,8 @@ static const char* const kUsage =
     "  -O0 .. -O3     LLVM optimizasyon seviyesi (varsayilan: -O0)\n"
     "  --gpu=off      @GPU fonksiyonlari da CPU icin derler (GPU'suz makinede\n"
     "                 calistirmak ya da CPU ile karsilastirmak icin)\n"
-    "  --print-ast    semantik analizden gecmis AST'yi yazdirir\n";
+    "  --print-ast    semantik analizden gecmis AST'yi yazdirir\n"
+    "  --lsp          dil sunucusu olarak calisir (editor eklentisi icin; tek basina kullanilir)\n";
 
 enum class EmitKind { MLIR, GpuMLIR, LLVMDialect, LLVMIR, Object, Executable };
 
@@ -134,6 +136,12 @@ static bool writeText(const std::string& path, PrintFn print) {
 }
 
 int main(int argc, char** argv) {
+    // Dil sunucusu: editörle (VS Code eklentisi) stdin / stdout üzerinden konuşur.
+    if (argc >= 2 && std::string(argv[1]) == "--lsp") {
+        static int lspAnchor;
+        return marlin::runLanguageServer(llvm::sys::fs::getMainExecutable(argv[0], &lspAnchor));
+    }
+
     std::string inputPath, outputPath;
     std::vector<std::string> importDirs;
     EmitKind emit = EmitKind::Executable;

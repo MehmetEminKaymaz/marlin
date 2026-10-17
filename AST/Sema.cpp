@@ -523,7 +523,9 @@ void Sema::visit(Program* node) {
     // kök modülün (derlenen dosyanın) `main`i giriş noktasıdır.
     const std::string rootError = node->modules[0].path + ": hata: ";
     Symbol* mainFn = findGlobal("main");
-    if (!mainFn || mainFn->kind != Symbol::Function) {
+    if (!requireMain && !mainFn) {
+        // modül dosyası: main'i olmaması doğal
+    } else if (!mainFn || mainFn->kind != Symbol::Function) {
         errors.push_back(rootError + "programda 'main' fonksiyonu yok");
     } else if (mainFn->isGpu) {
         errors.push_back(rootError + "'main' @GPU olamaz; program CPU'da baslar");

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#0b6e99"/>
+  <!-- marlin balığı: gövde, kılıç burun, kuyruk, sırt yüzgeci -->
+  <path d="M5 17 L11 15.5 Q16 11 22 14 L26 10 L25 16 L26 22 L22 18 Q16 21 11 18.5 Z" fill="#ffffff"/>
+  <path d="M14 13 L17 8 L19 12.5 Z" fill="#ffffff"/>
+  <circle cx="13.5" cy="15.6" r="0.9" fill="#0b6e99"/>
+</svg>

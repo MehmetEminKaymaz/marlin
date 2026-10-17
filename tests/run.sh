@@ -125,5 +125,12 @@ for src in *.marl; do
     done
 done
 
+# Dil sunucusu (editör eklentisinin kullandığı marlin_lang --lsp)
+if python3 lsp_test.py "$COMPILER" > "$TMP/lsp" 2>&1; then
+    ok "dil sunucusu (lsp_test.py)"
+else
+    bad "dil sunucusu (lsp_test.py)" "$(cat "$TMP/lsp")"
+fi
+
 echo "$pass gecti, $fail kaldi$( [ "$skipped" -gt 0 ] && echo ", $skipped atlandi")"
 [ "$fail" -eq 0 ]

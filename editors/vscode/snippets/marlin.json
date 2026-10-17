@@ -1,0 +1,126 @@
+{
+  "main": {
+    "prefix": "main",
+    "description": "Programın giriş noktası",
+    "body": ["func main() -> void {", "\t$0", "}"]
+  },
+  "func": {
+    "prefix": "func",
+    "description": "Fonksiyon",
+    "body": ["func ${1:ad}(${2:int x}) -> ${3:int} {", "\t$0", "}"]
+  },
+  "public func": {
+    "prefix": "pfunc",
+    "description": "Başka modüllerden kullanılabilen fonksiyon",
+    "body": ["public func ${1:ad}(${2:int x}) -> ${3:int} {", "\t$0", "}"]
+  },
+  "gpu func": {
+    "prefix": "gpufunc",
+    "description": "GPU'da çalışan fonksiyon",
+    "body": ["@GPU", "func ${1:ad}(matrix<float64> ${2:a}) -> matrix<float64> {", "\t$0", "}"]
+  },
+  "struct": {
+    "prefix": "struct",
+    "description": "Struct",
+    "body": ["struct ${1:Ad} {", "\t${2:int} ${3:alan};", "\t$0", "}"]
+  },
+  "if": {
+    "prefix": "if",
+    "body": ["if ${1:kosul} {", "\t$0", "}"]
+  },
+  "if else": {
+    "prefix": "ifelse",
+    "body": ["if ${1:kosul} {", "\t$2", "} else {", "\t$0", "}"]
+  },
+  "for range": {
+    "prefix": "for",
+    "description": "Aralık döngüsü",
+    "body": ["for ${1:i} in ${2:0} .. ${3:n} {", "\t$0", "}"]
+  },
+  "for in": {
+    "prefix": "forin",
+    "description": "Liste ya da dizi üzerinde döngü",
+    "body": ["for ${1:x} in ${2:liste} {", "\t$0", "}"]
+  },
+  "parallel for": {
+    "prefix": "pfor",
+    "description": "Yinelemeleri çekirdeklere dağıtan döngü",
+    "body": ["parallel for ${1:i} in ${2:0} .. ${3:n} {", "\t$0", "}"]
+  },
+  "while": {
+    "prefix": "while",
+    "body": ["while ${1:kosul} {", "\t$0", "}"]
+  },
+  "marl await": {
+    "prefix": "marl",
+    "description": "Görev başlat ve sonucunu bekle",
+    "body": ["task<${1:int64}> ${2:t} = marl ${3:hesapla}(${4});", "$0", "${1:int64} ${5:sonuc} = await(${2:t});"]
+  },
+  "task list": {
+    "prefix": "marllist",
+    "description": "Birden çok görev başlat, hepsini bekle",
+    "body": [
+      "list<task<${1:int64}>> ${2:isler} = [];",
+      "for ${3:k} in 0 .. ${4:8} {",
+      "\tpush(${2:isler}, marl ${5:hesapla}(${3:k}));",
+      "}",
+      "for ${6:g} in ${2:isler} {",
+      "\t$0await(${6:g});",
+      "}",
+      "free(${2:isler});"
+    ]
+  },
+  "lambda": {
+    "prefix": "lambda",
+    "body": ["(${1:int x}) -> ${2:int} | ${0:x * 2}"]
+  },
+  "import": {
+    "prefix": "import",
+    "body": ["import ${1:std.string} as ${2:str};"]
+  },
+  "http server": {
+    "prefix": "httpserve",
+    "description": "std.http ile sunucu",
+    "body": [
+      "import std.http as http;",
+      "",
+      "func ${1:anasayfa}(http.Request req) -> http.Response {",
+      "\treturn http.text(200, \"merhaba\\n\");",
+      "}",
+      "",
+      "func main() -> void {",
+      "\tlist<http.Route> rotalar = [];",
+      "\tpush(rotalar, http.get(\"/\", ${1:anasayfa}));",
+      "\thttp.serve(${2:8080}, rotalar);",
+      "}"
+    ]
+  },
+  "postgres query": {
+    "prefix": "pgquery",
+    "description": "Parametreli sorgu, satırlar struct'a",
+    "body": [
+      "pg.Result ${1:r} = pg.query(${2:db}, \"SELECT ${3:id, ad} FROM ${4:tablo} WHERE ${5:id} = \\$1\", [pg.arg_int(${6:1})]);",
+      "if !${1:r}.ok {",
+      "\tprint(${1:r}.error);",
+      "}",
+      "list<${7:Satir}> ${8:satirlar} = scan(${1:r}.rows);",
+      "pg.clear(${1:r});",
+      "$0"
+    ]
+  },
+  "sqlite open": {
+    "prefix": "sqlopen",
+    "description": "SQLite veritabanı aç",
+    "body": [
+      "import std.sqlite as sql;",
+      "",
+      "sql.Conn ${1:db} = sql.open(\"${2:veri.db}\");",
+      "if !${1:db}.ok {",
+      "\tprint(${1:db}.error);",
+      "\treturn;",
+      "}",
+      "$0",
+      "sql.close(${1:db});"
+    ]
+  }
+}

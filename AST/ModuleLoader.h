@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include "ASTNode.h"
 
@@ -43,9 +44,17 @@ public:
 
     const std::vector<std::string>& getErrors() const { return errors; }
 
+    // Editörde açık (kaydedilmemiş olabilecek) dosyalar: kesin yol → metin.
+    // Bir dosya burada varsa diskten okunmaz (bkz. Lsp/MarlinLsp.cpp).
+    void setOverlay(const std::unordered_map<std::string, std::string>* documents) {
+        overlay = documents;
+    }
+
 private:
     std::vector<std::string> searchDirs;
     std::string stdDir;
+    const std::unordered_map<std::string, std::string>* overlay = nullptr;
+    bool readSource(const std::string& path, std::string& out) const;
     std::vector<std::string> errors;
     std::vector<std::string> canonicalPaths; // modül sırası → dosyanın kesin yolu
     std::unique_ptr<Program> program;

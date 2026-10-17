@@ -1,8 +1,14 @@
     import std.string as str;
     import std.file as file;
+    import std.time as time;
 
     int globalX = 42;
     float globalPi = 3.14;
+
+    struct Point {
+        float x;
+        float y;
+    }
 
 
     func topla(int a,int b) -> int
@@ -12,63 +18,21 @@
 
     // Basit tür çıkarımı ve temel işlemler
     func main() -> void {
-        let a = 10;                 // let ile tür çıkarımı (int)
-        int b = 20;
-        let sonuc = a + b * 2;      // binary expr + let
-        bool flag = true;
-        list<int> listem = [];
 
-        print(flag);
+        Point p = Point(1.0, 2.0);
+        Point p2 = Point(3.0, 4.0);
 
-        if(b == 20)
-        {
-           print("b nin değeri 20 dir");
-        }
+        p.x = 5.0;
+        print("p.x: ", p.x);
+        print(time.now());
 
+        print("merhaba ben marlin!");
+    }
+
+    func writeLoop() -> void {
         for i in 0 .. 10 {
-           push(listem,i);
-        }
-
-        print("liste elemanları yazdırılıyor");
-        for i in listem {
             print(i);
         }
-
-        let kare = (int n) -> int | n*n;
-        print("topla fonksiyonu çağırılıyor");
-        print(topla(a,b));
-        print("kare lambda fonksiyonu çağırılıyor");
-        print(kare(4));
-
-
-        matrix<int> mat1 = [[1,2],[2,3]];
-        matrix<int> mat2 = [[4,5],[6,7]];
-        print(mat1);
-        print(mat2);
-        let matsonuc = mat1 * mat2;
-        print(matsonuc);
-
-        print("paralel başlıyor");
-
-        parallel for i in 0 .. 1000 {
-
-            print(i);
-
-        }
-
-
-        print("GPU:", matmulGpu());
-        print("CPU:", matmulCpu());
-        print(time());
-
-        file.write_text("deneme.txt", str(matmulCpu()));
-        string s = "asd";
-        print(s+"35");
-
-        if(s == "asd"){
-            print("eşit");
-        }
-
     }
 
 
