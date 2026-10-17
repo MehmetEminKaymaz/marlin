@@ -174,13 +174,19 @@ static void bindTaskBridges(mlir::ModuleOp module) {
 //                              dialect'i (matematik → libdevice çağrıları)
 //   G5  gpu-to-llvm            CPU tarafındaki gpu işlemleri → GPU çalışma
 //                              zamanı çağrıları (mgpu*; bkz. runtime/marlin_gpu.c)
-//   G6  gpu-module-to-binary   gpu.module → derlenmiş çekirdek (NVPTX kod
-//                              üretici + ptxas, ya da PTX metni; bkz.
-//                              findGpuToolchain); programın içine gömülür.
+//   G6  gpu-module-to-binary   gpu.module → PTX (NVPTX kod üretici; bkz.
+//                              findGpuToolchain); programın içine gömülür,
+//                              sürücü çalışırken derler.
 // Çekirdeklerin matematik fonksiyonları (sin, exp ...) CUDA araç takımındaki
-// libdevice'tan gelir: o yoksa çekirdek derlenemez. ptxas da varsa çekirdek
-// makine koduna (fatbin) derlenir; yoksa PTX metni olarak gömülür ve sürücü
-// program açılırken derler.
+// libdevice'tan gelir: o yoksa çekirdek derlenemez.
+//
+// Çekirdek her zaman PTX metni olarak gömülür; NVIDIA sürücüsü onu program
+// çalışırken o makinedeki kartın makine koduna çevirir (ve ön belleğinde
+// saklar). Makine kodu (cubin / fatbin) derleme anında tek bir mimari için
+// üretilirdi: eski mimari için üretilen kod yeni kartta çalışmaz (sürücü yine
+// içindeki PTX'e döner), yeni ptxas sürümleri de eski mimarileri bırakır
+// (CUDA 13'te sm_50 yok). PTX ile ptxas gerekmez ve aynı program her kuşak
+// kartta çalışır; ölçümde fatbin'le arada hız farkı yoktur.
 GpuToolchain findGpuToolchain() {
     GpuToolchain result;
     const std::string toolkit = mlir::NVVM::getCUDAToolkitPath().str();
@@ -194,12 +200,9 @@ GpuToolchain findGpuToolchain() {
         result.missing = "CUDA arac takiminda libdevice yok (" + std::string(libdevice) + ")";
         return result;
     }
-    llvm::SmallString<256> ptxas(toolkit);
-    llvm::sys::path::append(ptxas, "bin", "ptxas");
-    const bool hasPtxas = llvm::sys::fs::exists(ptxas) || llvm::sys::fs::exists(std::string(ptxas) + ".exe");
     result.available = true;
     result.toolkit = toolkit;
-    result.format = hasPtxas ? "fatbin" : "isa";
+    result.format = "isa"; // PTX
     return result;
 }
 

@@ -29,12 +29,12 @@ namespace marlin {
 void registerLoweringInterfaces(mlir::DialectRegistry& registry);
 
 /// GPU çekirdeklerini derleyecek araçlar (NVIDIA: CUDA araç takımının
-/// libdevice'ı; varsa ptxas). Derleyicinin çalıştığı makinede aranır:
-/// CUDA_ROOT / CUDA_HOME / CUDA_PATH ya da MLIR derlenirken bulunan yol.
+/// libdevice'ı). Derleyicinin çalıştığı makinede aranır: CUDA_ROOT /
+/// CUDA_HOME / CUDA_PATH ya da MLIR derlenirken bulunan yol.
 struct GpuToolchain {
     bool available = false;
     std::string toolkit;   // CUDA araç takımının dizini
-    std::string format;    // "fatbin" (ptxas varsa) ya da "isa" (PTX; sürücü derler)
+    std::string format;    // gömülen çekirdeğin biçimi: "isa" (PTX; sürücü derler)
     std::string missing;   // bulunamadıysa sebebi
 };
 GpuToolchain findGpuToolchain();

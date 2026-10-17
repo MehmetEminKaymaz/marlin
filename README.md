@@ -1165,7 +1165,6 @@ print("sure:", time() - once, "saniye");
 | `error while loading shared libraries: libmlir_async_runtime.so` | `parallel for` içeren programlar LLVM derlemendeki bir kütüphaneyi kullanır ve yolunu içlerinde taşır. LLVM dizinini taşıdıysan ya da programı başka bir makineye kopyaladıysan bulunamaz; derleyiciyi yeniden derleyip programı yeniden üret. |
 | Program çalışırken `... failed with 'CUDA_ERROR_...'` yazıyor | GPU'da hata oldu. GPU belleği yetmiyor olabilir; ya da `parallel for` içinde sınır dışı indeks vardır. `MARLIN_GPU=cpu` ile çalıştırıp dene. |
 | `@GPU` program GPU'yu kullanmıyor (CPU kadar yavaş) | Derleme makinesinde CUDA araç takımı bulunamamış olabilir (`--gpu=on` ile derle: sebebi yazar) ya da çalışan makinede NVIDIA sürücüsü yoktur (`nvidia-smi`). |
-| `@GPU` programı derlenirken `ptxas` bulunamadı hatası | CUDA araç takımı bulunamıyor. `export PATH=/usr/local/cuda-12.9/bin:$PATH` |
 | `... hata: sozdizimi hatasi: ...` | Yazım hatası. Mesajın başında dosya, satır ve sütun yazar (`deneme.marl:3:6`); açıklaması ANTLR'dan geldiği için İngilizcedir. |
 | `'std.x' adinda bir standart modul yok` | Modül adı yanlış ya da derleyici `std/` dizinini bulamıyor. Derleyiciyi başka yere kopyaladıysan yolunu ver: `export MARLIN_STD=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/std` |
 | `modul bulunamadi: 'a.b'` | `a/b.marl` dosyası import eden dosyanın dizininde yok. Yolu denetle ya da dizini `-I` ile ver. |

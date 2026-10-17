@@ -77,7 +77,8 @@ jobs:
       - name: CUDA derleme araçları
         if: runner.os == 'Linux'
         run: |
-          micromamba install -y -n marlin -c conda-forge cuda-nvcc cuda-nvvm-tools || true
+          # (Yereldekiyle aynı sürüm: libdevice'ı LLVM 19 okuyabilmeli.)
+          micromamba install -y -n marlin -c conda-forge cuda-version=12.9 cuda-nvcc cuda-nvvm-tools || true
           libdevice=$(find "$CONDA_PREFIX" -name libdevice.10.bc 2>/dev/null | head -1)
           if [ -n "$libdevice" ]; then
             root=$(dirname "$(dirname "$(dirname "$libdevice")")")
