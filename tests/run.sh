@@ -97,14 +97,19 @@ for src in *.marl; do
 
     configs=("-O0" "-O2")
     if grep -q '^@GPU' "$src"; then
-        configs=("-O0" "-O2" "-O0 @vulkan" "-O2 @vulkan" "-O0 @cpu" "-O2 @cpu")
+        configs=("-O0" "-O2" "-O0 @vulkan" "-O2 @vulkan" "-O2 @vulkan-ayrik" "-O0 @cpu" "-O2 @cpu")
     fi
 
     for opt in "${configs[@]}"; do
-        # "@cpu" / "@vulkan": program MARLIN_GPU=cpu / vulkan ile çalıştırılır
+        # "@cpu" / "@vulkan": program MARLIN_GPU=cpu / vulkan ile çalıştırılır.
+        # "@vulkan-ayrik": Vulkan, ayrık kartın bellek düzeniyle (kartın kendi
+        # belleği + ara tampon; MARLIN_VULKAN_STAGING=1) — yazılım sürücüsünde
+        # de sınanabilsin diye zorlanır.
         gpu_env=""
+        staging=""
         copt="$opt" # derleyicinin seçenekleri ($opt raporlarda etiket olarak kalır)
         case "$opt" in *" @"*) gpu_env="${opt##* @}"; copt="${opt% @*}" ;; esac
+        if [ "$gpu_env" = vulkan-ayrik ]; then gpu_env=vulkan; staging=1; fi
         # ($opt bilerek tırnaksız: birden çok seçenek içerebilir)
         $TIMEOUT "$COMPILER" "$src" $copt -o "$PROG" > "$TMP/err" 2>&1
         rc=$?
@@ -119,7 +124,7 @@ for src in *.marl; do
         fi
         : > "$TMP/replies"
         if [ -n "$port" ]; then
-            MARLIN_STRING_CHECK=1 MARLIN_GPU="$gpu_env" MARLIN_GPU_REPORT=1 $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr" &
+            MARLIN_STRING_CHECK=1 MARLIN_VULKAN_STAGING="$staging" MARLIN_GPU="$gpu_env" MARLIN_GPU_REPORT=1 $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr" &
             server=$!
             while IFS= read -r request; do
                 $PY http_gonder.py "$port" "$request" >> "$TMP/replies" 2>&1
@@ -127,7 +132,7 @@ for src in *.marl; do
             wait "$server"
             code=$?
         else
-            MARLIN_STRING_CHECK=1 MARLIN_GPU="$gpu_env" MARLIN_GPU_REPORT=1 $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr"
+            MARLIN_STRING_CHECK=1 MARLIN_VULKAN_STAGING="$staging" MARLIN_GPU="$gpu_env" MARLIN_GPU_REPORT=1 $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr"
             code=$?
         fi
         if [ -n "$TIMEOUT" ] && [ "$code" = 124 ]; then

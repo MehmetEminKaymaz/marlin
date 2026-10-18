@@ -1,0 +1,23 @@
+// sum: 4096x4096 float'ın toplamı. Aynı çağrı 1 ve 21 toplamla ölçülür;
+// fark toplam başına GPU süresidir (kopyalama düşülür).
+
+@GPU
+func toplamlar(matrix<float> a, int n) -> float64 {
+    float64 t = 0.0;
+    for k in 0 .. n {
+        t = t + sum(a);
+    }
+    return t;
+}
+
+func main() -> void {
+    matrix<float> a = fill(4096, 4096, 0.5);
+    float64 isinma = toplamlar(a, 1);
+    float64 t0 = time();
+    float64 bir = toplamlar(a, 1);
+    float64 t1 = time();
+    float64 t = toplamlar(a, 21);
+    float64 t2 = time();
+    print("toplam_bir_ms", ((t2 - t1) - (t1 - t0)) * 1000.0 / 20.0);
+    print("sagla", t, isinma, bir);
+}

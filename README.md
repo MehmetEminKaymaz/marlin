@@ -1121,6 +1121,18 @@ Bilinmesi gerekenler:
 - Aynı program CPU'da (`MARLIN_GPU=cpu` ile ya da GPU'suz makinede) aynı sonucu verir (yukarıdaki toplama farkı dışında).
 - `--emit=gpu-mlir` ile hangi kısımların GPU çekirdeği olduğunu görebilirsin.
 
+**GPU ölçümleri (`bench/`):** `bash bench/olc.sh` ölçüm programlarını `-O2` ile derleyip CUDA'da ve CPU'da çalıştırır, her birinin en iyi süresini ve sağlama değerini yazar (`bash bench/olc.sh <derleyici> "cuda vulkan cpu"` ile arka uçlar seçilir). Programlar aynı çağrıyı az ve çok turla ölçüp farkı alır: kopyalama düşülmüş, tur başına GPU süresi. RTX 4060 Laptop (WSL) ölçümleri:
+
+| Program | Ölçülen | CUDA | CPU (20 çekirdek) |
+|---|---|---|---|
+| `eleman` | 4096² `float`, `x * 0.5 + b`, tur başına | ~0.7 ms (bant genişliği sınırında) | ~16 ms |
+| `toplam` | 4096² `float`, `sum`, toplam başına | ~0.4 ms | ~8 ms |
+| `indeks` | 16 milyon `int64`, bölme/kalanlı `parallel for`, tur başına | ~0.6 ms | ~10 ms |
+| `carpim` | 2048² `float` `matmul` × 5 (kopyalama dahil) | ~30 ms | ~350 ms |
+| `kucuk` | 1024 elemanlı küçük `@GPU` çağrısı, çağrı başına | ~70 µs | ~0.1 µs |
+
+Küçük `@GPU` çağrıların sabit bir maliyeti vardır (GPU'ya ve geri kopyalama, bekleme): küçük işlerde CPU çok daha hızlıdır. GPU çalışma zamanı bu maliyeti düşük tutmak için çekirdek modüllerini bir kez yükler, GPU belleğini havuzda tutar (CUDA'nın akış sıralı ayırıcısı) ve akışları yeniden kullanır.
+
 **Yerleşik fonksiyonlar:**
 
 | | |
@@ -1237,6 +1249,7 @@ runtime/            Derlenen programlara eklenen C kütüphanesi (libmarlinrt.a)
   std_sqlite.c        SQLite sürücüsü
 std/                Standart kütüphane modülleri (import std.file → std/file.marl)
 tests/              Test programları ve run.sh
+bench/              GPU ölçüm programları ve olc.sh (bkz. "GPU ölçümleri")
 ```
 
 **Gereksinimler** (WSL içinde kurulu olanlar): LLVM/MLIR 19.1.7 (`/home/emin/llvm-project/build-gpu`; X86 ve NVPTX hedefleriyle derlenmiş), ANTLR 4.10 (`/home/emin/antlr-4.10-complete.jar` ve `libantlr4-runtime-dev`), Java, CMake, bir C/C++ derleyicisi. `@GPU` için: NVIDIA çekirdekleri CUDA araç takımıyla (`/usr/local/cuda-12.9`) derlenir; Vulkan arka ucu için Vulkan başlıkları gerekir (`libvulkan-dev`; yoksa CMake `~/marlin-deps` altında da arar). Vulkan yolunu ekran kartı olmadan denemek için `mesa-vulkan-drivers` (lavapipe). Veritabanı sürücüleri için `libpq-dev` ve `libsqlite3-dev` (isteğe bağlı; yoksa CMake bunları `~/marlin-deps` altında da arar, bkz. `tests/pg_test_sunucu.sh`). Bu yollar `CMakeLists.txt` içinde sabit yazılıdır; başka bir makinede derlemek için orada değiştirmek gerekir.

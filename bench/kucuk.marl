@@ -1,0 +1,22 @@
+// Çok sayıda küçük @GPU çağrısı: her çağrıda 1024 eleman GPU'ya gider,
+// bir çekirdek çalışır, sonuç geri gelir. Ölçülen: çağrı başına sabit
+// maliyet (modül yükleme, bellek ayırma, kopyalama, bekleme).
+
+@GPU
+func olcekle(matrix<float, 1> a, float k) -> matrix<float, 1> {
+    return a * k + 1.0;
+}
+
+func main() -> void {
+    matrix<float, 1> a = fill(1024, 0.5);
+    matrix<float, 1> r = olcekle(a, 2.0);
+    float64 once = time();
+    float toplam = 0.0;
+    for i in 0 .. 2000 {
+        matrix<float, 1> s = olcekle(a, 2.0);
+        toplam = toplam + s[i % 1024];
+    }
+    float64 sure = time() - once;
+    print("kucuk_cagri_us", sure * 1000000.0 / 2000.0);
+    print("sagla", toplam, r[0]);
+}

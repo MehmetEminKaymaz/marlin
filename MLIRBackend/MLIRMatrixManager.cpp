@@ -253,15 +253,26 @@ Value MLIRMatrixManager::sum(llvm::ArrayRef<Value> inputs, mlir::Type elementTyp
 }
 
 // GPU'da toplam. Sonucu tek bir sayıya indirgemek kendiliğinden paralel
-// değildir; bu yüzden iş ikiye bölünür:
+// değildir; bu yüzden iş ağaç biçiminde kademelere bölünür:
 //
-//   1. GPU: `workers` kadar iş parçacığı, elemanları aralarında paylaşır
-//      (t numaralı iş parçacığı t, t + workers, t + 2*workers ... sıralı
-//      elemanları toplar) ve kendi ara toplamını `partial[t]`ye yazar.
-//   2. CPU: ara toplamlar kopyalanır ve toplanır (en çok `workers` sayı).
+//   1. GPU: en çok kFirstStage iş parçacığı elemanları aralarında paylaşır
+//      (t numaralı iş parçacığı t, t + W, t + 2W ... sıralı elemanları
+//      toplar: komşu iş parçacıkları komşu elemanları okur) ve kendi ara
+//      toplamını `partial[t]`ye yazar.
+//   2. GPU: aynı yolla en çok kSecondStage iş parçacığı ara toplamları
+//      toplar.
+//   3. CPU: kalan en çok kSecondStage ara toplam kopyalanır ve toplanır.
+//
+// İlk kademenin iş parçacığı sayısı GPU'yu doldurmaya yetmeli: az iş
+// parçacığı bellekten okumanın gecikmesini gizleyemez (RTX 4060'ta 8192 ile
+// ~96 GB/s, 65536 ile bant genişliği sınırına yakın). İkinci kademe CPU'ya
+// kopyalanan ve orada toplanan sayıyı küçük tutar.
 //
 // Elemanların toplanma sırası CPU'dakinden farklıdır; kayan noktalı sayılarda
 // sonuç son basamaklarda farklı çıkabilir.
+static constexpr int64_t kFirstStage = 65536;
+static constexpr int64_t kSecondStage = 256;
+
 Value MLIRMatrixManager::sumOnDevice(llvm::ArrayRef<Value> inputs, mlir::Type elementType,
                                      ElementFn body, Location loc) {
     OpBuilder& b = ctx.builder;
@@ -270,6 +281,33 @@ Value MLIRMatrixManager::sumOnDevice(llvm::ArrayRef<Value> inputs, mlir::Type el
     auto add = [&](Value lhs, Value rhs) -> Value {
         if (isFloat) return b.create<arith::AddFOp>(loc, lhs, rhs);
         return b.create<arith::AddIOp>(loc, lhs, rhs);
+    };
+    Value zero = b.create<arith::ConstantIndexOp>(loc, 0);
+    Value one = b.create<arith::ConstantIndexOp>(loc, 1);
+
+    // Bir kademe: `count` eleman en çok `limit` iş parçacığına paylaştırılır;
+    // ara toplamlar GPU'da yeni bir tampona yazılır (boyutu `workers`).
+    auto stage = [&](llvm::ArrayRef<Value> buffers, Value count, int64_t limit, ElementFn element,
+                     Value& workers) -> Value {
+        workers = b.create<arith::MinSIOp>(loc, count, b.create<arith::ConstantIndexOp>(loc, limit));
+        workers = b.create<arith::MaxSIOp>(loc, workers, one); // boş matriste de bir ara toplam (0)
+        Value sizes[] = {workers};
+        Value partial = allocateIn(sizes, elementType, /*onDevice=*/true, loc);
+        b.create<scf::ParallelOp>(
+            loc, ValueRange(zero), ValueRange(workers), ValueRange(one),
+            [&](OpBuilder&, Location, ValueRange workerIds) {
+                Value worker = workerIds[0];
+                auto loop = b.create<scf::ForOp>(
+                    loc, worker, count, workers, ValueRange(zeroOf(elementType, loc)),
+                    [&](OpBuilder&, Location, Value index, ValueRange total) {
+                        llvm::SmallVector<Value, 4> elements;
+                        for (Value buffer : buffers)
+                            elements.push_back(b.create<memref::LoadOp>(loc, buffer, ValueRange(index)));
+                        b.create<scf::YieldOp>(loc, add(total[0], element(elements)));
+                    });
+                b.create<memref::StoreOp>(loc, loop.getResult(0), partial, ValueRange(worker));
+            });
+        return partial;
     };
 
     // Toplamda elemanın konumu önemsizdir: girdiler tek boyutlu görülür.
@@ -285,29 +323,12 @@ Value MLIRMatrixManager::sumOnDevice(llvm::ArrayRef<Value> inputs, mlir::Type el
         flat.push_back(buffer);
     }
 
-    Value zero = b.create<arith::ConstantIndexOp>(loc, 0);
-    Value one = b.create<arith::ConstantIndexOp>(loc, 1);
     Value count = b.create<memref::DimOp>(loc, flat[0], zero);
-    Value workers = b.create<arith::MinSIOp>(loc, count,
-                                             b.create<arith::ConstantIndexOp>(loc, 8192));
-    workers = b.create<arith::MaxSIOp>(loc, workers, one); // boş matriste de bir ara toplam (0)
-
-    Value sizes[] = {workers};
-    Value partial = allocateIn(sizes, elementType, /*onDevice=*/true, loc);
-    b.create<scf::ParallelOp>(
-        loc, ValueRange(zero), ValueRange(workers), ValueRange(one),
-        [&](OpBuilder&, Location, ValueRange workerIds) {
-            Value worker = workerIds[0];
-            auto loop = b.create<scf::ForOp>(
-                loc, worker, count, workers, ValueRange(zeroOf(elementType, loc)),
-                [&](OpBuilder&, Location, Value index, ValueRange total) {
-                    llvm::SmallVector<Value, 4> elements;
-                    for (Value buffer : flat)
-                        elements.push_back(b.create<memref::LoadOp>(loc, buffer, ValueRange(index)));
-                    b.create<scf::YieldOp>(loc, add(total[0], body(elements)));
-                });
-            b.create<memref::StoreOp>(loc, loop.getResult(0), partial, ValueRange(worker));
-        });
+    Value firstWorkers, workers;
+    Value first = stage(flat, count, kFirstStage, body, firstWorkers);
+    auto identity = [](ValueRange elements) -> Value { return elements[0]; };
+    Value partial = stage({first}, firstWorkers, kSecondStage, identity, workers);
+    free(first, /*onDevice=*/true, loc);
 
     Value hostPartial = download(partial, loc);
     free(partial, /*onDevice=*/true, loc);

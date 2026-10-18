@@ -1,0 +1,21 @@
+// matmul: 2048x2048 float, tek @GPU çağrısında 5 kez.
+
+@GPU
+func carpimlar(matrix<float> a, matrix<float> b, int n) -> matrix<float> {
+    matrix<float> x = a;
+    for k in 0 .. n {
+        x = matmul(x, b);
+    }
+    return x;
+}
+
+func main() -> void {
+    matrix<float> a = fill(2048, 2048, 0.001);
+    matrix<float> b = fill(2048, 2048, 0.0005);
+    matrix<float> isinma = carpimlar(a, b, 1);
+    float64 once = time();
+    matrix<float> x = carpimlar(a, b, 5);
+    float64 sure = time() - once;
+    print("carpim_ms", sure * 1000.0);
+    print("sagla", x[5, 7], isinma[1, 1]);
+}

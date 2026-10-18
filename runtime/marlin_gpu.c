@@ -99,11 +99,23 @@ typedef unsigned long long CUdeviceptr;
     X(cuMemHostRegister, "cuMemHostRegister_v2", CUresult, (void*, size_t, unsigned))  \
     X(cuMemHostUnregister, "cuMemHostUnregister", CUresult, (void*))
 
+// Akış sıralı bellek havuzu (CUDA 11.2+; eski sürücüde yoktur, o zaman
+// cuMemAlloc / cuMemFree kullanılır).
+typedef void* CUmemoryPool;
+#define CU_MEMPOOL_ATTR_RELEASE_THRESHOLD 4
+#define CUDA_POOL_FUNCTIONS(X)                                                         \
+    X(cuMemAllocAsync, "cuMemAllocAsync", CUresult, (CUdeviceptr*, size_t, CUstream))  \
+    X(cuMemFreeAsync, "cuMemFreeAsync", CUresult, (CUdeviceptr, CUstream))             \
+    X(cuDeviceGetDefaultMemPool, "cuDeviceGetDefaultMemPool", CUresult, (CUmemoryPool*, CUdevice)) \
+    X(cuMemPoolSetAttribute, "cuMemPoolSetAttribute", CUresult, (CUmemoryPool, int, void*))
+
 #define DECLARE_POINTER(field, symbol, ret, params) ret(*field) params;
 static struct {
     CUDA_FUNCTIONS(DECLARE_POINTER)
+    CUDA_POOL_FUNCTIONS(DECLARE_POINTER)
 } cuda;
 #undef DECLARE_POINTER
+static int cudaPool; // havuz kullanılabiliyor
 
 static CUcontext context; // birincil bağlam (cihaz 0)
 static char cudaDeviceName[256];
@@ -124,7 +136,10 @@ static void* open_cuda_driver(void) {
 #endif
 }
 
+static mr_mutex cudaModulesLock;
+
 static int detect_cuda(void) {
+    mr_mutex_init(&cudaModulesLock);
     void* library = open_cuda_driver();
     if (!library) return 0;
 #define LOAD_POINTER(field, symbol, ret, params)                          \
@@ -140,6 +155,22 @@ static int detect_cuda(void) {
     if (cuda.cuDeviceGet(&device, 0) != CUDA_SUCCESS) return 0;
     if (cuda.cuDevicePrimaryCtxRetain(&context, device) != CUDA_SUCCESS) return 0;
     cuda.cuDeviceGetName(cudaDeviceName, (int)sizeof cudaDeviceName, device);
+
+    // Bellek havuzu: GPU belleği ayırmak ve bırakmak (cuMemAlloc / cuMemFree)
+    // her biri ~0.1 ms sürer ve bırakma bütün aygıtı bekletir; @GPU çağrısı
+    // başına birkaç kez yapılır. Havuzda bırakılan blok sürücüye geri
+    // verilmez, sonraki ayırmada yeniden kullanılır. Varsayılan havuz boşta
+    // kalan belleği her beklemede sürücüye iade eder; eşik en yükseğe
+    // çekilerek program boyunca tutulur. (Bellek sıkışırsa sürücü yine
+    // havuzdan geri alır.)
+#define LOAD_POOL(field, symbol, ret, params) cuda.field = (ret(*) params)mr_library_symbol(library, symbol);
+    CUDA_POOL_FUNCTIONS(LOAD_POOL)
+#undef LOAD_POOL
+    CUmemoryPool pool;
+    uint64_t keepAll = UINT64_MAX;
+    cudaPool = cuda.cuMemAllocAsync && cuda.cuMemFreeAsync && cuda.cuDeviceGetDefaultMemPool &&
+               cuda.cuMemPoolSetAttribute && cuda.cuDeviceGetDefaultMemPool(&pool, device) == CUDA_SUCCESS &&
+               cuda.cuMemPoolSetAttribute(pool, CU_MEMPOOL_ATTR_RELEASE_THRESHOLD, &keepAll) == CUDA_SUCCESS;
     return 1;
 }
 
@@ -292,23 +323,44 @@ static MarlinGpuPackage open_package(const void* data, size_t size) {
 // mgpu arayüzü (imzalar MLIR'in gpu-to-llvm dönüşümünün çağırdığıyla aynı)
 // ---------------------------------------------------------------------------
 
-// Paket her çekirdek başlatmada yeniden "yüklenir" (MLIR 19'un ürettiği kod
-// böyledir); Vulkan arka ucu onu adresine göre bir kez işler.
+// Paket her çekirdek başlatmada yeniden "yüklenir" ve ardından bırakılır
+// (MLIR 19'un ürettiği kod böyledir). Yükleme pahalıdır: CUDA'da sürücü
+// PTX'i her seferinde yeniden işler. Paket programın içinde sabit bir
+// adreste durduğu için o adrese göre bir kez yüklenir ve program boyunca
+// saklanır; "bırakma" bir şey yapmaz. (Vulkan arka ucu kendi içinde aynısını
+// yapar.)
+typedef struct CudaModule {
+    struct CudaModule* next;
+    const void* key;
+    CUmodule module;
+} CudaModule;
+
+static CudaModule* cudaModules; // (kilidi cudaModulesLock, detect_cuda'da kurulur)
+
 void* mgpuModuleLoad(void* data, size_t size) {
     const MarlinGpuPackage package = open_package(data, size);
     if (on_vulkan()) return vk_module_load(data, &package);
     if (!package.ptx) marlin_rt_panic("GPU paketinde NVIDIA cekirdegi yok");
-    CUmodule module = NULL;
+    mr_mutex_lock(&cudaModulesLock);
+    for (CudaModule* m = cudaModules; m; m = m->next) {
+        if (m->key == data) {
+            mr_mutex_unlock(&cudaModulesLock);
+            return m->module;
+        }
+    }
+    CudaModule* entry = calloc(1, sizeof *entry);
+    if (!entry) marlin_rt_panic("bellek yetersiz");
+    entry->key = data;
     enter();
-    CHECK(cuModuleLoadData(&module, package.ptx));
+    CHECK(cuModuleLoadData(&entry->module, package.ptx));
     leave();
-    return module;
+    entry->next = cudaModules;
+    cudaModules = entry;
+    mr_mutex_unlock(&cudaModulesLock);
+    return entry->module;
 }
 
-void mgpuModuleUnload(void* module) {
-    if (on_vulkan()) return; // saklanır
-    CHECK(cuModuleUnload(module));
-}
+void mgpuModuleUnload(void* module) { (void)module; } // saklanır (yukarıya bakın)
 
 void* mgpuModuleGetFunction(void* module, const char* name) {
     if (on_vulkan()) return vk_module_function(module, name);
@@ -335,9 +387,20 @@ void mgpuLaunchKernel(void* function, intptr_t gridX, intptr_t gridY, intptr_t g
 // olmayan bir tutamaç verilir.)
 static char vulkanStream;
 
+// Üretilen kod her küçük GPU işi için bir akış açar, bekler ve siler (@GPU
+// çağrısı başına birkaç kez). Silinen akış atılmaz, sonraki açılışta yeniden
+// verilir: üretilen kod akışı silmeden önce hep bekler, yani boştadır.
+#define CUDA_SPARE_STREAMS 64
+static CUstream spareStreams[CUDA_SPARE_STREAMS];
+static int spareStreamCount; // (kilidi cudaModulesLock)
+
 void* mgpuStreamCreate(void) {
     if (on_vulkan()) return &vulkanStream;
     CUstream stream = NULL;
+    mr_mutex_lock(&cudaModulesLock);
+    if (spareStreamCount > 0) stream = spareStreams[--spareStreamCount];
+    mr_mutex_unlock(&cudaModulesLock);
+    if (stream) return stream;
     enter();
     CHECK(cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
     leave();
@@ -346,7 +409,11 @@ void* mgpuStreamCreate(void) {
 
 void mgpuStreamDestroy(void* stream) {
     if (on_vulkan()) return;
-    CHECK(cuStreamDestroy(stream));
+    mr_mutex_lock(&cudaModulesLock);
+    const int kept = spareStreamCount < CUDA_SPARE_STREAMS;
+    if (kept) spareStreams[spareStreamCount++] = stream;
+    mr_mutex_unlock(&cudaModulesLock);
+    if (!kept) CHECK(cuStreamDestroy(stream));
 }
 
 void mgpuStreamSynchronize(void* stream) {
@@ -389,27 +456,67 @@ void mgpuEventRecord(void* event, void* stream) {
     CHECK(cuEventRecord(event, stream));
 }
 
+// Ayırma ve bırakma, verilen akışın sırasındadır (havuz): blok, akışta
+// önceki işler bitince bırakılmış sayılır. Üretilen kod her ayırma/bırakma
+// grubundan sonra akışı bekler; farklı akışlardaki işler birbirine karışmaz.
+//
+// Ortak bellek (isHostShared: CPU ile paylaşılan) havuzdan gelmez; onu
+// bırakmak için hangi adreslerin ortak olduğu ayrıca tutulur (nadirdir).
+typedef struct SharedBlock {
+    struct SharedBlock* next;
+    void* ptr;
+} SharedBlock;
+static SharedBlock* sharedBlocks; // (kilidi cudaModulesLock)
+
+static int take_shared(void* ptr) {
+    int found = 0;
+    mr_mutex_lock(&cudaModulesLock);
+    for (SharedBlock** b = &sharedBlocks; *b; b = &(*b)->next) {
+        if ((*b)->ptr == ptr) {
+            SharedBlock* gone = *b;
+            *b = gone->next;
+            free(gone);
+            found = 1;
+            break;
+        }
+    }
+    mr_mutex_unlock(&cudaModulesLock);
+    return found;
+}
+
 void* mgpuMemAlloc(uint64_t sizeBytes, void* stream, bool isHostShared) {
-    (void)stream;
     if (on_vulkan()) return vk_alloc(sizeBytes);
     CUdeviceptr ptr = 0;
     if (sizeBytes == 0) return NULL;
     enter();
-    if (isHostShared)
+    if (isHostShared) {
         CHECK(cuMemAllocManaged(&ptr, sizeBytes, /*CU_MEM_ATTACH_GLOBAL*/ 1));
-    else
+        SharedBlock* block = malloc(sizeof *block);
+        if (!block) marlin_rt_panic("bellek yetersiz");
+        block->ptr = (void*)(uintptr_t)ptr;
+        mr_mutex_lock(&cudaModulesLock);
+        block->next = sharedBlocks;
+        sharedBlocks = block;
+        mr_mutex_unlock(&cudaModulesLock);
+    } else if (cudaPool) {
+        CHECK(cuMemAllocAsync(&ptr, sizeBytes, stream));
+    } else {
         CHECK(cuMemAlloc(&ptr, sizeBytes));
+    }
     leave();
     return (void*)(uintptr_t)ptr;
 }
 
 void mgpuMemFree(void* ptr, void* stream) {
-    (void)stream;
     if (on_vulkan()) {
         vk_free(ptr);
         return;
     }
-    if (ptr) CHECK(cuMemFree((CUdeviceptr)(uintptr_t)ptr));
+    if (!ptr) return;
+    if (cudaPool && !take_shared(ptr))
+        CHECK(cuMemFreeAsync((CUdeviceptr)(uintptr_t)ptr, stream));
+    else
+        CHECK(cuMemFree((CUdeviceptr)(uintptr_t)ptr));
 }
 
 void mgpuMemcpy(void* dst, void* src, size_t sizeBytes, void* stream) {

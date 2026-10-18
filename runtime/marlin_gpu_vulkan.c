@@ -8,13 +8,23 @@
 //
 // MODEL
 //
-//   Bellek     her mgpuMemAlloc ayrı bir VkBuffer'dır; CPU'nun da görebildiği
-//              (HOST_VISIBLE | HOST_COHERENT) bellekte açılır ve kalıcı
-//              olarak eşlenir. Programa eşlenen adres verilir: kopyalama
-//              (mgpuMemcpy) GPU'daki işler bittikten sonra düz memcpy'dir.
-//              Çekirdeğe giden adresten ait olduğu tampon bulunur. Aygıtın
-//              kendi belleği CPU'ya açıksa (DEVICE_LOCAL | HOST_VISIBLE:
-//              tümleşik GPU'lar, Apple, ReBAR'lı kartlar) o tercih edilir.
+//   Bellek     her mgpuMemAlloc ayrı bir VkBuffer'dır. İki düzen var:
+//              * ortak (tümleşik GPU'lar, Apple, yazılım sürücüleri): CPU'nun
+//                da görebildiği (HOST_VISIBLE | HOST_COHERENT) bellekte açılır
+//                ve kalıcı olarak eşlenir. Programa eşlenen adres verilir:
+//                kopyalama (mgpuMemcpy) GPU'daki işler bittikten sonra düz
+//                memcpy'dir. Aygıtın kendi belleği CPU'ya açıksa
+//                (DEVICE_LOCAL | HOST_VISIBLE) o tercih edilir.
+//              * ayrık kart: kartın kendi belleğinde (DEVICE_LOCAL) açılır;
+//                CPU onu göremez. Programa CUDA'daki gibi yalnızca kimlik
+//                olan, okunmayan bir adres verilir. Kopyalamalar CPU'ya açık
+//                bir ara tampondan (staging) parça parça GPU komutuyla
+//                yapılır. CPU'nun kart belleğini PCIe üzerinden doğrudan
+//                okuması çok yavaştır; çekirdekler de kendi belleklerinde
+//                en hızlıdır.
+//              MARLIN_VULKAN_STAGING=1 / 0 düzeni zorlar (testler ayrık kart
+//              yolunu yazılım sürücüsünde de böyle sınar).
+//              Çekirdeğe giden adresten ait olduğu tampon bulunur.
 //   Çekirdek   her çekirdek bir hesaplama hattıdır (VkPipeline); paketle
 //              birlikte bir kez oluşturulur, program boyunca saklanır.
 //   Başlatma   komutlar tek bir komut tamponunda biriktirilir; ardışık
@@ -131,6 +141,7 @@ int setenv(const char* name, const char* value, int overwrite); // (POSIX; -std=
     X(CmdBindDescriptorSets)                                                           \
     X(CmdDispatch)                                                                     \
     X(CmdPipelineBarrier)                                                              \
+    X(CmdCopyBuffer)                                                                   \
     X(CreateFence)                                                                     \
     X(WaitForFences)                                                                   \
     X(ResetFences)                                                                     \
@@ -154,7 +165,8 @@ static struct {
 typedef struct {
     VkBuffer buffer;
     VkDeviceMemory memory;
-    unsigned char* data; // eşlenmiş adres
+    unsigned char* data;   // programa verilen adres (eşlenmişse eşlenen adres)
+    unsigned char* mapped; // CPU'dan erişim; kartın kendi belleğinde NULL
     VkDeviceSize size;
 } Buffer;
 
@@ -210,6 +222,9 @@ static struct {
     VkDeviceSize arenaUsed;
     VkDeviceSize arenaAlign;
     Buffer empty;     // boş memref'ler için
+
+    int staging;      // tamponlar kartın kendi belleğinde (ayrık kart)
+    Buffer stage;     // CPU ↔ kart kopyalamalarının ara tamponu (ilk kopyada açılır)
 
     Buffer* allocations;
     size_t allocationCount;
@@ -307,6 +322,46 @@ static int find_memory_type(uint32_t typeBits, VkMemoryPropertyFlags required, u
     return 0;
 }
 
+// Kartın kendi belleğindeki tamponların programa verilen adresleri: hiçbir
+// gerçek adresle karışmayacak (kullanıcı adres alanının dışında), 256 bayta
+// hizalı ve birbirinden ayrık sayılar. Program bu adresleri hiç okumaz;
+// yalnızca mgpu* çağrılarına geri verir.
+static uintptr_t nextDeviceAddress = (uintptr_t)1 << 62;
+
+// Kartın kendi belleğinde (CPU'ya açık olmayan) depolama tamponu; açılamazsa 0.
+static int create_device_buffer(VkDeviceSize size, Buffer* out) {
+    if (size < 16) size = 16;
+    VkBufferCreateInfo info = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    info.size = size;
+    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBuffer buffer;
+    if (vk.CreateBuffer(g.device, &info, NULL, &buffer) != VK_SUCCESS) return 0;
+    VkMemoryRequirements requirements;
+    vk.GetBufferMemoryRequirements(g.device, buffer, &requirements);
+    uint32_t type;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    if (find_memory_type(requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &type) ||
+        find_memory_type(requirements.memoryTypeBits, 0, &type)) {
+        VkMemoryAllocateInfo allocate = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocate.allocationSize = requirements.size;
+        allocate.memoryTypeIndex = type;
+        if (vk.AllocateMemory(g.device, &allocate, NULL, &memory) != VK_SUCCESS) memory = VK_NULL_HANDLE;
+    }
+    if (memory == VK_NULL_HANDLE || vk.BindBufferMemory(g.device, buffer, memory, 0) != VK_SUCCESS) {
+        vk.DestroyBuffer(g.device, buffer, NULL);
+        if (memory != VK_NULL_HANDLE) vk.FreeMemory(g.device, memory, NULL);
+        return 0;
+    }
+    out->buffer = buffer;
+    out->memory = memory;
+    out->mapped = NULL;
+    out->data = (unsigned char*)nextDeviceAddress;
+    out->size = size;
+    nextDeviceAddress += (uintptr_t)((size + 511) / 256 * 256); // (araya en az bir boşluk)
+    return 1;
+}
+
 // CPU'ya eşlenmiş bir depolama tamponu; açılamazsa 0.
 static int create_buffer(VkDeviceSize size, Buffer* out) {
     if (size < 16) size = 16;
@@ -344,6 +399,7 @@ static int create_buffer(VkDeviceSize size, Buffer* out) {
     out->buffer = buffer;
     out->memory = memory;
     out->data = data;
+    out->mapped = data;
     out->size = size;
     return 1;
 }
@@ -517,6 +573,12 @@ static int create_submission_state(void) {
     if (!create_buffer(ARENA_SIZE, &g.arena) || !create_buffer(16, &g.empty)) return 0;
     g.arenaAlign = g.properties.limits.minStorageBufferOffsetAlignment;
     if (g.arenaAlign < 16) g.arenaAlign = 16;
+
+    // Bellek düzeni (bkz. dosya başı): ayrık kartta kartın kendi belleği.
+    g.staging = g.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+    char* forced = mr_getenv("MARLIN_VULKAN_STAGING");
+    if (forced && *forced) g.staging = strcmp(forced, "0") != 0;
+    free(forced);
     return 1;
 }
 
@@ -562,11 +624,11 @@ const char* vk_backend_device_name(void) { return vk_backend_available() ? g.pro
 // kaynaklar (yuvalar, bağlama kümeleri) yeniden kullanılabilir. Kilit altında.
 static void flush(void) {
     if (!g.recording) return;
-    // Çekirdeklerin yazdıkları CPU'ya görünür olsun.
+    // Çekirdeklerin ve kopyalamaların yazdıkları CPU'ya görünür olsun.
     VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-    vk.CmdPipelineBarrier(g.commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier,
+    vk.CmdPipelineBarrier(g.commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier,
                           0, NULL, 0, NULL);
     CHECK(vk.EndCommandBuffer(g.commands));
     VkSubmitInfo submit = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -593,6 +655,8 @@ void vk_synchronize(void) {
 // Bellek
 // ---------------------------------------------------------------------------
 
+static void begin_recording(void);
+
 void* vk_alloc(uint64_t size) {
     if (size == 0) return NULL;
     // Çekirdek tamponun tamamını görür; aygıtın tek bağlamada izin verdiği
@@ -606,7 +670,7 @@ void* vk_alloc(uint64_t size) {
     }
     Buffer buffer;
     mr_mutex_lock(&g.lock);
-    if (!create_buffer(size, &buffer)) {
+    if (!(g.staging ? create_device_buffer(size, &buffer) : create_buffer(size, &buffer))) {
         mr_mutex_unlock(&g.lock);
         marlin_rt_panic("Vulkan: GPU bellegi ayrilamadi");
     }
@@ -648,24 +712,107 @@ void vk_free(void* ptr) {
     mr_mutex_unlock(&g.lock);
 }
 
+// --- Ayrık kart: kopyalamalar ara tampondan, GPU komutuyla ---
+
+#define STAGE_SIZE ((VkDeviceSize)16 << 20) // ara tampon; büyük kopyalar parça parça
+
+static void ensure_stage(void) {
+    if (g.stage.buffer != VK_NULL_HANDLE) return;
+    if (!create_buffer(STAGE_SIZE, &g.stage)) marlin_rt_panic("Vulkan: kopyalama tamponu ayrilamadi");
+}
+
+// Tek bir tampon kopyası: kaydedilir, gönderilir, beklenir. Kilit altında.
+static void copy_now(VkBuffer from, VkDeviceSize fromOffset, VkBuffer to, VkDeviceSize toOffset,
+                     VkDeviceSize size) {
+    begin_recording();
+    VkBufferCopy region = {fromOffset, toOffset, size};
+    vk.CmdCopyBuffer(g.commands, from, to, 1, &region);
+    flush();
+}
+
+// Kartın belleğindeki adres → tampon ve tampon içindeki konum; kart
+// belleğinde değilse 0 (CPU belleği).
+static int locate(const void* ptr, Buffer** buffer, VkDeviceSize* offset) {
+    if (!g.staging) return 0;
+    Buffer* b = find_buffer(ptr);
+    if (!b) return 0;
+    *buffer = b;
+    *offset = (VkDeviceSize)((const unsigned char*)ptr - b->data);
+    return 1;
+}
+
+// CPU'daki baytlar → kart belleği (fill: kaynak yerine desen yazan işlev).
+static void upload(Buffer* to, VkDeviceSize offset, const unsigned char* from, size_t size,
+                   void (*fill)(unsigned char*, size_t, size_t, const void*), const void* pattern) {
+    ensure_stage();
+    for (size_t done = 0; done < size;) {
+        size_t part = size - done < STAGE_SIZE ? size - done : (size_t)STAGE_SIZE;
+        if (fill) fill(g.stage.mapped, done, part, pattern);
+        else memcpy(g.stage.mapped, from + done, part);
+        copy_now(g.stage.buffer, 0, to->buffer, offset + done, part);
+        done += part;
+    }
+}
+
+static void download(unsigned char* to, Buffer* from, VkDeviceSize offset, size_t size) {
+    ensure_stage();
+    for (size_t done = 0; done < size;) {
+        size_t part = size - done < STAGE_SIZE ? size - done : (size_t)STAGE_SIZE;
+        copy_now(from->buffer, offset + done, g.stage.buffer, 0, part);
+        memcpy(to + done, g.stage.mapped, part);
+        done += part;
+    }
+}
+
 void vk_memcpy(void* dst, const void* src, size_t size) {
     mr_mutex_lock(&g.lock);
     flush();
+    Buffer *to, *from;
+    VkDeviceSize toOffset, fromOffset;
+    const int toDevice = locate(dst, &to, &toOffset);
+    const int fromDevice = locate(src, &from, &fromOffset);
+    if (size == 0) {
+        // (boş kopya)
+    } else if (toDevice && fromDevice) {
+        copy_now(from->buffer, fromOffset, to->buffer, toOffset, size);
+    } else if (toDevice) {
+        upload(to, toOffset, src, size, NULL, NULL);
+    } else if (fromDevice) {
+        download(dst, from, fromOffset, size);
+    } else {
+        memcpy(dst, src, size); // ortak düzen: iki taraf da CPU'dan görünür
+    }
     mr_mutex_unlock(&g.lock);
-    if (size) memcpy(dst, src, size);
 }
 
-void vk_memset32(void* dst, uint32_t value, size_t count) {
-    vk_synchronize();
-    uint32_t* p = dst;
-    for (size_t i = 0; i < count; ++i) p[i] = value;
+// Desen doldurma: ara tamponun `part` baytı, hedefin `done`. baytından
+// itibaren desenle (2 ya da 4 bayt) doldurulur.
+static void fill32(unsigned char* out, size_t done, size_t part, const void* pattern) {
+    (void)done; // (parçalar 4'ün katı konumlardan başlar)
+    for (size_t i = 0; i + 4 <= part; i += 4) memcpy(out + i, pattern, 4);
+}
+static void fill16(unsigned char* out, size_t done, size_t part, const void* pattern) {
+    (void)done;
+    for (size_t i = 0; i + 2 <= part; i += 2) memcpy(out + i, pattern, 2);
 }
 
-void vk_memset16(void* dst, uint16_t value, size_t count) {
-    vk_synchronize();
-    uint16_t* p = dst;
-    for (size_t i = 0; i < count; ++i) p[i] = value;
+static void memset_pattern(void* dst, const void* pattern, size_t unit, size_t count) {
+    mr_mutex_lock(&g.lock);
+    flush();
+    Buffer* to;
+    VkDeviceSize offset;
+    if (locate(dst, &to, &offset)) {
+        upload(to, offset, NULL, unit * count, unit == 4 ? fill32 : fill16, pattern);
+    } else {
+        unsigned char* p = dst;
+        for (size_t i = 0; i < count; ++i) memcpy(p + i * unit, pattern, unit);
+    }
+    mr_mutex_unlock(&g.lock);
 }
+
+void vk_memset32(void* dst, uint32_t value, size_t count) { memset_pattern(dst, &value, 4, count); }
+
+void vk_memset16(void* dst, uint16_t value, size_t count) { memset_pattern(dst, &value, 2, count); }
 
 // ---------------------------------------------------------------------------
 // Çekirdekler
@@ -798,6 +945,14 @@ static void begin_recording(void) {
     VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     CHECK(vk.BeginCommandBuffer(g.commands, &begin));
+    // Önceki gönderimlerde GPU'nun yazdıkları bu gönderimdeki işlere
+    // görünür olsun. (Gönderimler sırayla bitirilip beklense de Vulkan bunu
+    // GPU tarafında kendiliğinden garanti etmez.)
+    VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    vk.CmdPipelineBarrier(g.commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
+                          &barrier, 0, NULL, 0, NULL);
     g.recording = 1;
 }
 

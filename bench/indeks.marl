@@ -1,0 +1,27 @@
+// İndeks hesabı ağır parallel for: 16 milyon elemanlı tablo, her eleman
+// düz sırasından hesaplanan satır/sütundan (bölme, kalan) üretilir. 64 / 32
+// bit indeks farkını gösterir. Aynı çağrı 0 ve 100 turla ölçülür; fark tur
+// başına GPU süresidir.
+
+@GPU
+func tablo(int64 n, int64 sutun, int tur) -> matrix<int64, 1> {
+    matrix<int64, 1> m = zeros(n);
+    for k in 0 .. tur {
+        parallel for i in 0 .. n {
+            m[i] = ((i / sutun) * 7 + (i % sutun) * 3 + k) % 1000;
+        }
+    }
+    return m;
+}
+
+func main() -> void {
+    int64 n = 4096 * 4096;
+    matrix<int64, 1> isinma = tablo(n, 4096, 1);
+    float64 t0 = time();
+    matrix<int64, 1> bos = tablo(n, 4096, 0);
+    float64 t1 = time();
+    matrix<int64, 1> m = tablo(n, 4096, 100);
+    float64 t2 = time();
+    print("indeks_tur_ms", ((t2 - t1) - (t1 - t0)) * 1000.0 / 100.0);
+    print("sagla", m[n - 1], isinma[12345], bos[3]);
+}
