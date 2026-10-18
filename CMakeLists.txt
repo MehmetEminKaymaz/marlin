@@ -225,7 +225,8 @@ add_executable(marlin_lang
 # kullanır (AST üzerinde dynamic_cast, ANTLR).
 set(MARLIN_NO_RTTI "$<IF:$<CXX_COMPILER_ID:MSVC>,/GR-,-fno-rtti>")
 set_source_files_properties(LLVMBackend/GpuOffload.cpp LLVMBackend/ParallelMatmul.cpp
-        LLVMBackend/NestedParallel.cpp LLVMBackend/GpuSpirv.cpp PROPERTIES COMPILE_OPTIONS "${MARLIN_NO_RTTI}")
+        LLVMBackend/NestedParallel.cpp LLVMBackend/GpuSpirv.cpp
+        LLVMBackend/NativeCodegen.cpp PROPERTIES COMPILE_OPTIONS "${MARLIN_NO_RTTI}")
 # Dil sunucusu da MLIR'in LSP kütüphanesinin sınıflarını (llvm::ErrorInfo ...)
 # kullanır; aynı sebeple RTTI'siz derlenir. AST'ye dokunan kısmı ayrı bir
 # dosyadadır (Lsp/MarlinCheck.cpp).

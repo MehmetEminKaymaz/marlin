@@ -127,7 +127,43 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libvulkan1 mesa-vulkan-drivers
-          echo "MARLIN_TEST_VULKAN=1" >> "$GITHUB_ENV"
+
+      # macOS: Vulkan, Metal üzerinde MoltenVK ile. Derleyici GPU kullanan
+      # programın yanına onu kopyalar (conda ortamının lib dizininden).
+      - name: Vulkan (MoltenVK)
+        if: runner.os == 'macOS'
+        run: micromamba install -y -n marlin -c conda-forge moltenvk
+
+      # Vulkan gerçekten çalışıyor mu? Küçük bir @GPU program Vulkan'da
+      # çalıştırılır. macOS'ta makinenin Metal aygıtı olup olmadığı belli
+      # değildir: çalışıyorsa testler Vulkan kullanımını da denetler.
+      - name: Vulkan yoklaması
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p yoklama && cd yoklama
+          cat > yoklama.marl <<'EOF'
+          @GPU
+          func ikiyle(int n) -> matrix<int, 1> {
+              matrix<int, 1> m = zeros(n);
+              parallel for i in 0 .. n {
+                  m[i] = i * 2;
+              }
+              return m;
+          }
+          func main() -> void {
+              print(sum(ikiyle(1000)));
+          }
+          EOF
+          ../build/marlin_lang yoklama.marl -o yoklama
+          ls -la
+          MARLIN_GPU=vulkan MARLIN_GPU_REPORT=1 ./yoklama 2>&1 | tee cikti.txt
+          if grep -q '^marlin gpu: vulkan' cikti.txt && grep -q '^999000$' cikti.txt; then
+            echo "MARLIN_TEST_VULKAN=1" >> "$GITHUB_ENV"
+          elif [ "$RUNNER_OS" = Linux ]; then
+            echo "::error::lavapipe kurulu ama Vulkan calismadi"; exit 1
+          else
+            echo "::notice::Vulkan aygiti yok; @GPU testleri CPU'da calisacak"
+          fi
 
       - name: PostgreSQL test sunucusu
         if: runner.os == 'Linux'

@@ -1,7 +1,11 @@
 #include "NativeCodegen.h"
 
+#include <algorithm>
 #include <cstdlib>
 
+#include "llvm/BinaryFormat/MachO.h"
+#include "llvm/Object/MachO.h"
+#include "llvm/Object/MachOUniversal.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -173,6 +177,100 @@ static bool addMlirRuntime(const llvm::Triple& triple, llvm::StringRef name, con
 #endif
 }
 
+// MACOS'TA VULKAN: MoltenVK
+//
+// macOS'ta Vulkan sürücüsü yoktur; MoltenVK Vulkan'ı Metal üzerinde
+// gerçekleştiren bir kütüphanedir (libMoltenVK.dylib). Sisteme kurulu
+// olması beklenmez: GPU kullanan programın yanına kopyalanır, çalışma
+// zamanı onu orada arar (runtime/marlin_gpu_vulkan.c). Kütüphane derleme
+// makinesinde şuralarda aranır: MARLIN_MOLTENVK (dosya yolu), Vulkan SDK
+// ($VULKAN_SDK/lib), MLIR'in kütüphane dizini (conda ortamı: `moltenvk`
+// paketi), Homebrew (`molten-vk`). Bulunamazsa kopyalanmaz; program
+// sisteme kurulu Vulkan'ı kullanır, o da yoksa CPU'da çalışır.
+//
+// Kütüphanenin kendi yanında aradığı bağımlılıkları (@rpath/..., ör.
+// conda'nın libc++'ı) da kopyalanır; sistem kütüphaneleri (/usr/lib,
+// /System) her Mac'te vardır.
+static std::string findMoltenVK() {
+    if (const char* fromEnv = std::getenv("MARLIN_MOLTENVK"))
+        return llvm::sys::fs::exists(fromEnv) ? fromEnv : "";
+    std::vector<std::string> dirs;
+    if (const char* sdk = std::getenv("VULKAN_SDK")) dirs.push_back(std::string(sdk) + "/lib");
+#ifdef MARLIN_LLVM_LIB_DIR
+    dirs.push_back(MARLIN_LLVM_LIB_DIR);
+#endif
+    dirs.push_back("/opt/homebrew/lib");
+    dirs.push_back("/usr/local/lib");
+    for (const std::string& dir : dirs) {
+        llvm::SmallString<256> path(dir);
+        llvm::sys::path::append(path, "libMoltenVK.dylib");
+        if (llvm::sys::fs::exists(path)) return std::string(path);
+    }
+    return "";
+}
+
+// Mach-O kütüphanesinin @rpath / @loader_path ile yüklediği kütüphanelerin
+// dosya adları. (Evrensel ikili dosyada her mimarinin listesi birleşir.)
+static std::vector<std::string> relativeDependencies(const std::string& path) {
+    std::vector<std::string> names;
+    llvm::Expected<llvm::object::OwningBinary<llvm::object::Binary>> binary = llvm::object::createBinary(path);
+    if (!binary) {
+        llvm::consumeError(binary.takeError());
+        return names;
+    }
+    auto collect = [&](const llvm::object::MachOObjectFile& object) {
+        for (const llvm::object::MachOObjectFile::LoadCommandInfo& command : object.load_commands()) {
+            if (command.C.cmd != llvm::MachO::LC_LOAD_DYLIB && command.C.cmd != llvm::MachO::LC_LOAD_WEAK_DYLIB)
+                continue;
+            const auto dylib = object.getDylibIDLoadCommand(command);
+            llvm::StringRef name(command.Ptr + dylib.dylib.name);
+            if (name.starts_with("@rpath/") || name.starts_with("@loader_path/")) {
+                std::string file = llvm::sys::path::filename(name).str();
+                if (std::find(names.begin(), names.end(), file) == names.end()) names.push_back(file);
+            }
+        }
+    };
+    llvm::object::Binary* bin = binary->getBinary();
+    if (auto* macho = llvm::dyn_cast<llvm::object::MachOObjectFile>(bin)) {
+        collect(*macho);
+    } else if (auto* universal = llvm::dyn_cast<llvm::object::MachOUniversalBinary>(bin)) {
+        for (const auto& slice : universal->objects()) {
+            auto object = slice.getAsObjectFile();
+            if (object) collect(**object);
+            else llvm::consumeError(object.takeError());
+        }
+    }
+    return names;
+}
+
+static bool bundleMoltenVK(const std::string& exePath, std::string& error) {
+    const std::string source = findMoltenVK();
+    if (source.empty()) return true;
+    llvm::SmallString<256> exeDir(exePath);
+    llvm::sys::path::remove_filename(exeDir);
+    if (exeDir.empty()) exeDir = ".";
+
+    auto copyBeside = [&](const std::string& from, llvm::StringRef name) {
+        llvm::SmallString<256> target(exeDir);
+        llvm::sys::path::append(target, name);
+        if (std::error_code ec = llvm::sys::fs::copy_file(from, target)) {
+            error = from + " kopyalanamadi: " + ec.message();
+            return false;
+        }
+        return true;
+    };
+    if (!copyBeside(source, "libMoltenVK.dylib")) return false;
+    // (libMoltenVK.dylib genelde sürümlü dosyaya bağlantıdır; gerçek dosya okunur.)
+    const llvm::StringRef sourceDir = llvm::sys::path::parent_path(source);
+    for (const std::string& name : relativeDependencies(source)) {
+        llvm::SmallString<256> dependency(sourceDir);
+        llvm::sys::path::append(dependency, name);
+        if (name.rfind("libMoltenVK", 0) == 0 || !llvm::sys::fs::exists(dependency)) continue;
+        if (!copyBeside(std::string(dependency), name)) return false;
+    }
+    return true;
+}
+
 // Bağlayıcı olarak C derleyicisinin sürücüsü çağrılır (cc / clang / gcc): o,
 // platformun sistem kütüphanelerini ve başlangıç dosyalarını kendisi ekler.
 // Windows'ta clang (MSVC hedefinde lld-link ya da link.exe'yi çağırır).
@@ -211,10 +309,11 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
 
     // Paralel döngüler ve görevler MLIR'in iş parçacığı havuzunu kullanır.
     // GPU'da çalışan kod ayrıca bir kütüphaneye bağlanmaz: GPU katmanı
-    // çalışma zamanı kütüphanesindedir ve NVIDIA sürücüsünü program açıkken
-    // kendisi yükler (bkz. runtime/marlin_gpu.c). Böylece program GPU'su
-    // olmayan makinede de açılır.
-    (void)needsGpu;
+    // çalışma zamanı kütüphanesindedir ve sürücüleri (CUDA, Vulkan) program
+    // açıkken kendisi yükler (bkz. runtime/marlin_gpu.c). Böylece program
+    // GPU'su olmayan makinede de açılır. macOS'ta Vulkan'ın kendisi
+    // (MoltenVK) programın yanına konur.
+    if (needsGpu && triple.isOSDarwin() && !bundleMoltenVK(exePath, error)) return false;
     if (needsThreads && !addMlirRuntime(triple, "mlir_async_runtime", exePath, args, error)) return false;
 
     // Sistem kütüphaneleri en sonda (statik bağlanan dış kütüphaneler de kullanabilir):

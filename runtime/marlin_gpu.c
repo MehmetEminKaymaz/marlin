@@ -184,34 +184,58 @@ static int allowed_backends(void) {
 enum { BACKEND_NONE = 0, BACKEND_CUDA = 1, BACKEND_VULKAN = 2 };
 static _Thread_local int backend; // bu iş parçacığındaki @GPU çağrısının arka ucu
 
-// Rapor (MARLIN_GPU_REPORT): her arka uç ilk seçildiğinde bir kez.
-static int reported[3];
+static const uint32_t NEEDS = MARLIN_GPU_NEEDS_FLOAT64 | MARLIN_GPU_NEEDS_INT64 | MARLIN_GPU_NEEDS_WIDE_GROUP;
 
-static void report_choice(int chosen) {
-    if (__atomic_exchange_n(&reported[chosen], 1, __ATOMIC_ACQ_REL)) return;
+// Rapor (MARLIN_GPU_REPORT): her farklı karar bir kez yazılır. GPU varken
+// CPU'ya düşülürse sebebi de yazılır:
+//   marlin gpu: cuda (aygıt)
+//   marlin gpu: vulkan (aygıt)
+//   marlin gpu: cpu (vulkan: float64 yok)        aygıt fonksiyonun istediğini yapamıyor
+//   marlin gpu: cpu (vulkan: cekirdek derlenemedi) çekirdeğin SPIR-V'si yok
+//   marlin gpu: cpu                               kullanılabilir GPU yok
+// Anahtar: 0-7 cpu (eksik özellik maskesi; 0 = GPU yok), 8 SPIR-V yok,
+// 9 cuda, 10 vulkan.
+static int reported[11];
+
+static void report_choice(int key, uint32_t missing) {
+    if (__atomic_exchange_n(&reported[key], 1, __ATOMIC_ACQ_REL)) return;
     char* wanted = mr_getenv("MARLIN_GPU_REPORT");
     const int show = wanted && strcmp(wanted, "0") != 0;
     free(wanted);
     if (!show) return;
-    if (chosen == BACKEND_CUDA) fprintf(stderr, "marlin gpu: cuda (%s)\n", cudaDeviceName);
-    else if (chosen == BACKEND_VULKAN) fprintf(stderr, "marlin gpu: vulkan (%s)\n", vk_backend_device_name());
-    else fprintf(stderr, "marlin gpu: cpu\n");
+    if (key == 9) fprintf(stderr, "marlin gpu: cuda (%s)\n", cudaDeviceName);
+    else if (key == 10) fprintf(stderr, "marlin gpu: vulkan (%s)\n", vk_backend_device_name());
+    else if (key == 8) fprintf(stderr, "marlin gpu: cpu (vulkan: cekirdek derlenemedi)\n");
+    else if (missing == 0) fprintf(stderr, "marlin gpu: cpu\n");
+    else
+        fprintf(stderr, "marlin gpu: cpu (vulkan:%s%s%s yok)\n", (missing & MARLIN_GPU_NEEDS_FLOAT64) ? " float64" : "",
+                (missing & MARLIN_GPU_NEEDS_INT64) ? " int64" : "",
+                (missing & MARLIN_GPU_NEEDS_WIDE_GROUP) ? " 256'lik blok" : "");
 }
-
-static const uint32_t NEEDS = MARLIN_GPU_NEEDS_FLOAT64 | MARLIN_GPU_NEEDS_INT64 | MARLIN_GPU_NEEDS_WIDE_GROUP;
 
 int32_t marlin_gpu_usable(int32_t requirements) {
     const uint32_t r = (uint32_t)requirements;
     const int a = allowed_backends();
-    int chosen = BACKEND_NONE;
+    int chosen = BACKEND_NONE, key = 0;
+    uint32_t missing = 0;
     if ((a & ALLOW_CUDA) && !(r & MARLIN_GPU_NO_CUDA) && cuda_available()) {
         chosen = BACKEND_CUDA; // NVIDIA: f64, i64 ve 256'lık bloklar her kartta var
-    } else if ((a & ALLOW_VULKAN) && !(r & MARLIN_GPU_NO_VULKAN) && vk_backend_available() &&
-               (r & NEEDS & ~vk_backend_supported()) == 0) {
-        chosen = BACKEND_VULKAN;
+        key = 9;
+    } else if ((a & ALLOW_VULKAN) && vk_backend_available()) {
+        missing = r & NEEDS & ~vk_backend_supported();
+        if (r & MARLIN_GPU_NO_VULKAN) {
+            key = 8;
+        } else if (missing) {
+            // (bitler 1, 2, 8 → anahtar 1-7)
+            key = ((missing & MARLIN_GPU_NEEDS_FLOAT64) ? 1 : 0) | ((missing & MARLIN_GPU_NEEDS_INT64) ? 2 : 0) |
+                  ((missing & MARLIN_GPU_NEEDS_WIDE_GROUP) ? 4 : 0);
+        } else {
+            chosen = BACKEND_VULKAN;
+            key = 10;
+        }
     }
     backend = chosen;
-    report_choice(chosen);
+    report_choice(key, missing);
     return chosen != BACKEND_NONE;
 }
 

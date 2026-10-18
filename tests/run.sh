@@ -40,8 +40,10 @@
 # varsa CUDA'da), MARLIN_GPU=vulkan ile (Vulkan aygıtı varsa onda) ve
 # MARLIN_GPU=cpu ile (@GPU fonksiyonların CPU ikizleriyle); hepsi aynı çıktıyı
 # vermelidir. GPU'su olmayan makinede hepsi CPU'da çalışır.
-# MARLIN_TEST_VULKAN=1: makinede Vulkan aygıtı vardır (ör. CI'da lavapipe);
-# "@vulkan" çalışmasının gerçekten Vulkan'da olduğu da denetlenir.
+# MARLIN_TEST_VULKAN=1: makinede Vulkan aygıtı vardır (ör. CI'da lavapipe,
+# macOS'ta MoltenVK); "@vulkan" çalışmasında Vulkan'ın kullanılabildiği de
+# denetlenir. (Aygıtın yapamadığı iş — ör. Apple'da float64 — sebebiyle
+# CPU'ya düşebilir; sebepsiz "cpu" hatadır.)
 #
 # Kullanım: tests/run.sh [marlin_lang yolu]
 
@@ -150,8 +152,9 @@ for src in *.marl; do
             # GPU çalışma zamanı hatayı yalnızca stderr'e yazar, programı durdurmaz.
             bad "$src $opt" "GPU hatasi: $(head -2 "$TMP/stderr")"
         elif [ "$gpu_env" = vulkan ] && [ "${MARLIN_TEST_VULKAN:-}" = 1 ] &&
-             ! grep -q '^marlin gpu: vulkan' "$TMP/stderr"; then
-            bad "$src $opt" "Vulkan kullanilmadi: $(grep '^marlin gpu:' "$TMP/stderr" | head -2)"
+             grep -q '^marlin gpu: cpu$' "$TMP/stderr"; then
+            # (Sebepli "cpu (vulkan: float64 yok)" meşrudur: ör. Apple GPU'ları.)
+            bad "$src $opt" "Vulkan kullanilamadi: $(grep '^marlin gpu:' "$TMP/stderr" | head -3)"
         elif ! diff -u "$TMP/expected" "$TMP/actual" > "$TMP/diff"; then
             bad "$src $opt" "cikti farkli:"; sed 's/^/           /' "$TMP/diff"
         elif [ -n "$port" ] && ! diff -u "$TMP/expected_replies" "$TMP/replies" > "$TMP/diff"; then

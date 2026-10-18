@@ -234,14 +234,28 @@ static int has_extension(const VkExtensionProperties* list, uint32_t count, cons
     return 0;
 }
 
+// Vulkan kütüphanesi. MARLIN_VULKAN_LIBRARY (dosya yolu) her şeyden önce
+// gelir. macOS'ta önce programın yanı: derleyici GPU kullanan programın
+// yanına MoltenVK'yi koyar (bkz. LLVMBackend/NativeCodegen.cpp); sonra Vulkan
+// SDK / Homebrew yükleyicisi, en son sisteme kurulu MoltenVK. MoltenVK
+// yükleyici olmadan da kullanılabilir: Vulkan'ın giriş fonksiyonlarını
+// kendisi dışa açar.
 static void* open_loader(void) {
+    char* chosen = mr_getenv("MARLIN_VULKAN_LIBRARY");
+    if (chosen && *chosen) {
+        void* library = mr_library_open(chosen);
+        free(chosen);
+        return library;
+    }
+    free(chosen);
 #if defined(_WIN32)
     static const char* const names[] = {"vulkan-1.dll"};
 #elif defined(__APPLE__)
-    // Vulkan SDK / Homebrew yükleyicisi; yoksa doğrudan MoltenVK.
-    static const char* const names[] = {"libvulkan.1.dylib", "/usr/local/lib/libvulkan.1.dylib",
-                                        "/opt/homebrew/lib/libvulkan.1.dylib", "libMoltenVK.dylib",
-                                        "/usr/local/lib/libMoltenVK.dylib", "/opt/homebrew/lib/libMoltenVK.dylib"};
+    static const char* const names[] = {
+        "@executable_path/libMoltenVK.dylib", "@executable_path/libvulkan.1.dylib",
+        "libvulkan.1.dylib",                  "/usr/local/lib/libvulkan.1.dylib",
+        "/opt/homebrew/lib/libvulkan.1.dylib", "libMoltenVK.dylib",
+        "/usr/local/lib/libMoltenVK.dylib",   "/opt/homebrew/lib/libMoltenVK.dylib"};
 #else
     static const char* const names[] = {"libvulkan.so.1", "libvulkan.so"};
 #endif
