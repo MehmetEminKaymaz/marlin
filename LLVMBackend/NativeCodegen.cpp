@@ -334,6 +334,8 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
         // dlopen (GPU sürücüsünü yüklemek için): glibc 2.34'ten önce ayrı
         // kütüphanedeydi. macOS'ta libSystem'dedir.
         if (triple.isOSLinux()) args.push_back("-ldl");
+        // macOS: çalışma zamanının Objective-C parçası (platform_apple.m).
+        if (triple.isOSDarwin()) args.push_back("-lobjc");
     }
 
     std::vector<llvm::StringRef> argRefs(args.begin(), args.end());

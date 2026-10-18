@@ -83,6 +83,10 @@ void vk_synchronize(void) {}
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan_core.h>
 
+#ifdef __APPLE__
+int setenv(const char* name, const char* value, int overwrite); // (POSIX; -std=c11 gizleyebilir)
+#endif
+
 // ---------------------------------------------------------------------------
 // Vulkan fonksiyonları (çalışırken yüklenir)
 // ---------------------------------------------------------------------------
@@ -516,9 +520,19 @@ static int create_submission_state(void) {
     return 1;
 }
 
+static int detect_unguarded(void) {
+    return create_instance() && pick_device() && create_device() && create_submission_state();
+}
+
 static int detect(void) {
     mr_mutex_init(&g.lock);
-    return create_instance() && pick_device() && create_device() && create_submission_state();
+#ifdef __APPLE__
+    // MoltenVK varsayılan olarak her açılışta stderr'e onlarca bilgi satırı
+    // yazar; kullanıcı istemedikçe yalnızca hatalar.
+    setenv("MVK_CONFIG_LOG_LEVEL", "1", /*overwrite=*/0);
+#endif
+    // Sürücünün başlatılırken çökmesi programı düşürmesin (bkz. platform.h).
+    return mr_call_guarded(detect_unguarded);
 }
 
 // 0 bilinmiyor, 1 karar veriliyor, 2 yok, 3 var (marlin_gpu.c'deki gibi).

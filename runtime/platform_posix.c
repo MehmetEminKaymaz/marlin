@@ -44,6 +44,10 @@ _Noreturn void mr_exit_now(int code) { _Exit(code); }
 void* mr_library_open(const char* name) { return dlopen(name, RTLD_NOW | RTLD_LOCAL); }
 void* mr_library_symbol(void* library, const char* name) { return dlsym(library, name); }
 
+#ifndef __APPLE__ // (macOS: platform_apple.m)
+int mr_call_guarded(int (*fn)(void)) { return fn(); }
+#endif
+
 int mr_arg_count(void) { return saved_argc; }
 const char* mr_arg(int index) { return saved_argv[index]; }
 

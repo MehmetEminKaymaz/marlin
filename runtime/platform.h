@@ -54,6 +54,12 @@ void* mr_library_open(const char* name);
 // Kütüphanedeki sembolün adresi; yoksa NULL.
 void* mr_library_symbol(void* library, const char* name);
 
+// Yüklenen kütüphanenin başlatma kodunu çağırır. macOS'ta kütüphane
+// Objective-C istisnası fırlatırsa (ör. MoltenVK, sanal makinelerin desteği
+// eksik Metal aygıtında) program çökmez, 0 döner (platform_apple.m). Diğer
+// platformlarda fn() doğrudan çağrılır.
+int mr_call_guarded(int (*fn)(void));
+
 // ---------------------------------------------------------------------------
 // Standart akışlar
 // ---------------------------------------------------------------------------

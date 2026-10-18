@@ -163,6 +163,10 @@ jobs:
             echo "::error::lavapipe kurulu ama Vulkan calismadi"; exit 1
           else
             echo "::notice::Vulkan aygiti yok; @GPU testleri CPU'da calisacak"
+            if [ "$RUNNER_OS" = macOS ]; then
+              # (Bilgi için: sanal Metal aygıtı argüman tamponları olmadan çalışır mı?)
+              MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0 MARLIN_GPU=vulkan MARLIN_GPU_REPORT=1 MVK_CONFIG_LOG_LEVEL=2 ./yoklama 2>&1 || true
+            fi
           fi
 
       - name: PostgreSQL test sunucusu

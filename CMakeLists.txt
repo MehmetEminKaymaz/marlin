@@ -262,6 +262,11 @@ add_library(marlinrt STATIC
         runtime/std_json.c
         runtime/json_parser.c
         runtime/json_parser.h)
+# macOS: sürücülerin (MoltenVK) Objective-C istisnalarını yakalayan küçük parça.
+if(APPLE)
+    enable_language(OBJC)
+    target_sources(marlinrt PRIVATE runtime/platform_apple.m)
+endif()
 add_dependencies(marlin_lang marlinrt)
 target_compile_definitions(marlin_lang PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE:marlinrt>")
 

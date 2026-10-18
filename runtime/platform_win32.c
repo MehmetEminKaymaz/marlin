@@ -114,6 +114,8 @@ void* mr_library_symbol(void* library, const char* name) {
     return (void*)GetProcAddress((HMODULE)library, name);
 }
 
+int mr_call_guarded(int (*fn)(void)) { return fn(); }
+
 int mr_arg_count(void) { return saved_argc; }
 const char* mr_arg(int index) { return saved_argv[index]; }
 
