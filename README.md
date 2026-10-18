@@ -4,6 +4,31 @@ MLIR ve LLVM üzerine kurulu küçük bir programlama dili ve derleyicisi. Uzun 
 
 Bu dosya projeyi nasıl derleyeceğini, kendi programlarını nasıl çalıştıracağını ve nasıl test edeceğini anlatır.
 
+Lisans: MIT (bkz. `LICENSE`).
+
+---
+
+## 0. Hazır paket (derleyiciyi derlemeden kullanmak)
+
+Her CI çalışması Linux, macOS ve Windows için hazır bir paket üretir (GitHub → Actions → çalışma → *Artifacts*: `marlin-<sürüm>-<sistem>-<mimari>.tar.gz` / `.zip`). Paketi istediğin dizine aç; içindeki düzen:
+
+```
+bin/marlin_lang          derleyici (VS Code'un dil sunucusu da bu)
+lib/marlin/              çalışma zamanı, standart kütüphane (std/), gerekli paylaşımlı kütüphaneler
+```
+
+`bin` dizinini PATH'e ekle ve `marlin_lang --version` ile dene. Derleyici programı bağlamak için sistemin C derleyicisini kullanır:
+
+| Sistem | Gereken |
+|---|---|
+| Linux | `cc` (Debian/Ubuntu: `sudo apt install build-essential`) |
+| macOS | Xcode Command Line Tools (`xcode-select --install`) |
+| Windows | Visual Studio Build Tools ("C++ ile masaüstü geliştirme") ve PATH'te `clang` (LLVM) |
+
+Henüz pakette olmayanlar: `std.postgres`, `std.sqlite`, `std.http.client` (dış kütüphane ister). Paralel döngü ya da görev kullanan programlar paketteki bir kütüphaneye bağlıdır; derlenen programı başka makineye taşırken şimdilik paket de orada olmalı.
+
+Paketi kendin üretmek için: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMARLIN_DEV_PATHS=OFF`, `cmake --build build`, sonra `cd build && cpack`. Kurulu paketin başka makinede çalışacağını `bash tests/paket_denetle.sh <paket dizini>` denetler.
+
 ---
 
 ## 1. En önemli bilgi: her şey WSL içinde çalışır

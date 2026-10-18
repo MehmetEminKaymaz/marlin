@@ -51,9 +51,15 @@ public:
                      const std::vector<std::string>& extraLibs, std::string& error);
 
     /// Çalışma zamanı kütüphanesinin yolunu bulur: önce MARLIN_RUNTIME ortam
-    /// değişkeni, sonra derleyicinin yanındaki dosya, en son derleme sırasında
+    /// değişkeni, sonra derleyicinin yanındaki dosya, sonra kurulu paket
+    /// (packageLibraryDir), en son (geliştirme derlemesinde) derleme sırasında
     /// gömülen yol. Bulunamazsa boş döner.
     static std::string findRuntimeLibrary(const char* argv0);
+
+    /// Derleyici kurulu bir paketten çalışıyorsa paketin kütüphane dizini:
+    /// derleyici <önek>/bin içindeyse <önek>/lib/marlin (çalışma zamanı, std,
+    /// programlara bağlanan paylaşımlı kütüphaneler). Yoksa boş döner.
+    static std::string packageLibraryDir();
 
     /// Çalışma zamanı kütüphanesinin dosya adı: libmarlinrt.a (Linux, macOS,
     /// MinGW), marlinrt.lib (Windows / MSVC).

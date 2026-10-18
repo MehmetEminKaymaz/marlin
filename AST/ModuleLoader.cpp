@@ -68,8 +68,13 @@ std::string ModuleLoader::findStdDir(const std::string& compilerPath) {
     if (const char* fromEnv = std::getenv("MARLIN_STD"))
         return fs::is_directory(fromEnv, ec) ? fromEnv : "";
 
-    const fs::path beside = fs::path(compilerPath).parent_path() / "std";
+    const fs::path compilerDir = fs::path(compilerPath).parent_path();
+    const fs::path beside = compilerDir / "std";
     if (fs::is_directory(beside, ec)) return beside.string();
+
+    // Kurulu paket: <önek>/bin/marlin_lang, <önek>/lib/marlin/std
+    const fs::path package = compilerDir.parent_path() / "lib" / "marlin" / "std";
+    if (fs::is_directory(package, ec)) return package.generic_string();
 
 #ifdef MARLIN_STD_DIR
     if (fs::is_directory(MARLIN_STD_DIR, ec)) return MARLIN_STD_DIR;

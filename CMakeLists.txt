@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(MLIRWorkspace)
+project(marlin VERSION 0.1.0 LANGUAGES C CXX)
 
 # Projeyi C++20 standardına ayarlıyoruz
 set(CMAKE_CXX_STANDARD 20)
@@ -268,7 +268,16 @@ if(APPLE)
     target_sources(marlinrt PRIVATE runtime/platform_apple.m)
 endif()
 add_dependencies(marlin_lang marlinrt)
-target_compile_definitions(marlin_lang PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE:marlinrt>")
+target_compile_definitions(marlin_lang PRIVATE MARLIN_VERSION="${PROJECT_VERSION}")
+
+# Geliştirme kolaylığı: derleyiciye kaynak ve derleme dizinlerindeki yollar
+# (std/, libmarlinrt.a, LLVM'in kütüphane dizini) gömülür; derleme dizinindeki
+# marlin_lang kurulmadan çalışır. Dağıtılan pakette KAPALI olmalıdır: açıkken
+# paketteki bir eksik derleme makinesinde fark edilmez (bkz. KURULUM aşağıda).
+option(MARLIN_DEV_PATHS "Derleyiciye kaynak/derleme dizini yollarini gom (gelistirme)" ON)
+if(MARLIN_DEV_PATHS)
+    target_compile_definitions(marlin_lang PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE:marlinrt>")
+endif()
 
 # Veritabanı sürücüleri (isteğe bağlı). Kütüphanesi bulunan sürücü derlenir;
 # bulunmayanı import eden program açık bir hatayla durur. Önce sistem paketleri
@@ -326,15 +335,17 @@ else()
     message(STATUS "GPU: Vulkan basliklari bulunamadi (libvulkan-dev); Vulkan arka ucu derlenmeyecek")
 endif()
 
-# Standart kütüphanenin marlin dosyaları (import std.file → std/file.marl).
-# marlin_lang önce yanındaki `std` dizinine, sonra buraya bakar.
-target_compile_definitions(marlin_lang PRIVATE MARLIN_STD_DIR="${CMAKE_CURRENT_SOURCE_DIR}/std")
+if(MARLIN_DEV_PATHS)
+    # Standart kütüphanenin marlin dosyaları (import std.file → std/file.marl).
+    # marlin_lang önce kurulu paketteki `std` dizinine, sonra buraya bakar.
+    target_compile_definitions(marlin_lang PRIVATE MARLIN_STD_DIR="${CMAKE_CURRENT_SOURCE_DIR}/std")
 
-# Paralel döngü içeren programlar MLIR'in iş parçacığı havuzuna
-# (libmlir_async_runtime.so) bağlanır; marlin_lang onu bu dizinde arar.
-# Windows'ta DLL'ler bin dizinindedir; program derlenince yanına kopyalanır.
-target_compile_definitions(marlin_lang PRIVATE MARLIN_LLVM_LIB_DIR="${LLVM_LIBRARY_DIR}"
-        MARLIN_LLVM_BIN_DIR="${LLVM_TOOLS_BINARY_DIR}")
+    # Paralel döngü içeren programlar MLIR'in iş parçacığı havuzuna
+    # (libmlir_async_runtime.so) bağlanır; marlin_lang onu bu dizinde arar.
+    # Windows'ta DLL'ler bin dizinindedir; program derlenince yanına kopyalanır.
+    target_compile_definitions(marlin_lang PRIVATE MARLIN_LLVM_LIB_DIR="${LLVM_LIBRARY_DIR}"
+            MARLIN_LLVM_BIN_DIR="${LLVM_TOOLS_BINARY_DIR}")
+endif()
 
 # 8. ANTLR'ın ürettiği dosyaların ve bulduğumuz sistem başlıklarının yolunu projeye tanıt
 target_include_directories(marlin_lang PRIVATE
@@ -431,3 +442,106 @@ target_link_libraries(marlin_lang PRIVATE
 
         ${ANTLR4_LIBRARY}
 )
+
+# ==============================================================================
+# KURULUM VE PAKET
+#
+# Kurulu düzen (önek = kurulum dizini; paket bu dizinin arşividir):
+#   bin/marlin_lang          derleyici (dil sunucusu da aynı dosya)
+#   lib/marlin/libmarlinrt.a çalışma zamanı (Windows: marlinrt.lib)
+#   lib/marlin/std/          standart kütüphanenin marlin dosyaları
+#   lib/marlin/              paylaşımlı kütüphaneler: derleyicinin kendi
+#                            bağımlılıkları (LLVM/MLIR ...) ve programlara
+#                            bağlananlar (MLIR async runtime, MoltenVK).
+#                            Windows'ta DLL'ler bin/ içindedir (Windows DLL'i
+#                            çalıştırılabilir dosyanın yanında arar).
+#   LICENSE, README.md
+# Derleyici bunların hepsini kendi konumuna göre bulur
+# (NativeCodegen::packageLibraryDir), paket istenen dizine açılabilir.
+#
+#   cmake --install <derleme> --prefix <dizin>   kurar
+#   cd <derleme> && cpack                        paketi (tar.gz / zip) üretir
+# ==============================================================================
+set(MARLIN_PKG_LIB lib/marlin)
+if(WIN32)
+    set(MARLIN_PKG_SHARED bin)
+else()
+    set(MARLIN_PKG_SHARED ${MARLIN_PKG_LIB})
+endif()
+
+if(APPLE)
+    set_target_properties(marlin_lang PROPERTIES INSTALL_RPATH "@loader_path/../${MARLIN_PKG_LIB}")
+elseif(UNIX)
+    set_target_properties(marlin_lang PROPERTIES INSTALL_RPATH "\$ORIGIN/../${MARLIN_PKG_LIB}")
+endif()
+
+install(TARGETS marlin_lang RUNTIME DESTINATION bin)
+install(TARGETS marlinrt ARCHIVE DESTINATION ${MARLIN_PKG_LIB})
+install(DIRECTORY std/ DESTINATION ${MARLIN_PKG_LIB}/std)
+install(FILES LICENSE README.md DESTINATION .)
+
+# Programlara bağlanan MLIR iş parçacığı çalışma zamanı. POSIX'te sürümlü
+# adları da (libX.so.19.1: programa yazılan ad) dosya olarak kopyalanır.
+set(MARLIN_BUNDLE_LIBRARIES "")
+if(WIN32)
+    if(EXISTS "${LLVM_LIBRARY_DIR}/mlir_async_runtime.lib")
+        install(FILES "${LLVM_LIBRARY_DIR}/mlir_async_runtime.lib" DESTINATION ${MARLIN_PKG_LIB})
+        list(APPEND MARLIN_BUNDLE_LIBRARIES "${LLVM_TOOLS_BINARY_DIR}/mlir_async_runtime.dll")
+    endif()
+else()
+    file(GLOB MARLIN_ASYNC_RUNTIME_FILES "${LLVM_LIBRARY_DIR}/libmlir_async_runtime.*")
+    list(FILTER MARLIN_ASYNC_RUNTIME_FILES EXCLUDE REGEX "\\.a$")
+    list(APPEND MARLIN_BUNDLE_LIBRARIES ${MARLIN_ASYNC_RUNTIME_FILES})
+endif()
+if(NOT MARLIN_BUNDLE_LIBRARIES)
+    message(WARNING "MLIR async runtime bulunamadi (${LLVM_LIBRARY_DIR}); paralel donguler paketten derlenemez")
+endif()
+
+# macOS: Vulkan'ı Metal üzerinde gerçekleştiren MoltenVK (GPU kullanan
+# programların yanına kopyalanır; bkz. NativeCodegen.cpp).
+if(APPLE)
+    find_library(MARLIN_MOLTENVK_LIB NAMES MoltenVK
+            PATHS $ENV{VULKAN_SDK}/lib ${LLVM_LIBRARY_DIR} /opt/homebrew/lib /usr/local/lib NO_DEFAULT_PATH)
+    if(MARLIN_MOLTENVK_LIB)
+        message(STATUS "Paket: MoltenVK ${MARLIN_MOLTENVK_LIB}")
+        list(APPEND MARLIN_BUNDLE_LIBRARIES "${MARLIN_MOLTENVK_LIB}")
+    else()
+        message(STATUS "Paket: MoltenVK bulunamadi; paketten derlenen GPU programlari macOS'ta CPU'da calisir")
+    endif()
+endif()
+
+# Derleyicinin ve yukarıdaki kütüphanelerin sisteme ait olmayan bağımlılıkları
+# pakete kopyalanır (cmake/BundleDependencies.cmake). Kurulumun en sonunda
+# çalışmalı: macOS'ta değiştirilen dosyaları yeniden imzalar.
+install(CODE "
+    set(MARLIN_BUNDLE_EXECUTABLES \"$<TARGET_FILE:marlin_lang>\")
+    set(MARLIN_BUNDLE_LIBRARIES \"${MARLIN_BUNDLE_LIBRARIES}\")
+    set(MARLIN_BUNDLE_DIRS \"${LLVM_LIBRARY_DIR};${LLVM_TOOLS_BINARY_DIR}\")
+    set(MARLIN_BUNDLE_DEST \"${MARLIN_PKG_SHARED}\")
+")
+install(SCRIPT cmake/BundleDependencies.cmake)
+
+# Paket adı: marlin-<sürüm>-<işletim sistemi>-<mimari>
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" MARLIN_ARCH)
+if(MARLIN_ARCH MATCHES "^(amd64|x86_64|x64)$")
+    set(MARLIN_ARCH x86_64)
+elseif(MARLIN_ARCH MATCHES "^(arm64|aarch64)$")
+    set(MARLIN_ARCH arm64)
+endif()
+if(WIN32)
+    set(MARLIN_OS windows)
+    set(CPACK_GENERATOR ZIP)
+elseif(APPLE)
+    set(MARLIN_OS macos)
+    set(CPACK_GENERATOR TGZ)
+else()
+    set(MARLIN_OS linux)
+    set(CPACK_GENERATOR TGZ)
+endif()
+set(CPACK_PACKAGE_NAME marlin)
+set(CPACK_PACKAGE_VENDOR "Mehmet Emin Kaymaz")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "marlin programlama dili derleyicisi (CPU + GPU)")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGE_FILE_NAME "marlin-${PROJECT_VERSION}-${MARLIN_OS}-${MARLIN_ARCH}")
+set(CPACK_ARCHIVE_THREADS 0)
+include(CPack)

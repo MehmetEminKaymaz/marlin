@@ -34,7 +34,8 @@ public:
         : searchDirs(std::move(searchDirs)), stdDir(std::move(stdDir)) {}
 
     // Derleyiciyle gelen std dizinini bulur: MARLIN_STD ortam değişkeni,
-    // derleyicinin yanındaki `std`, sonra derleme sırasında gömülen yol.
+    // derleyicinin yanındaki `std`, kurulu paketteki `lib/marlin/std`, sonra
+    // (geliştirme derlemesinde) derleme sırasında gömülen yol.
     static std::string findStdDir(const std::string& compilerPath);
 
     // Kök dosyayı ve import ettiklerini yükler. Hata varsa nullptr döner.

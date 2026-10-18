@@ -11,8 +11,10 @@
 #include "Lsp/MarlinLsp.h"
 
 #include "llvm/ADT/SmallString.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Host.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -116,7 +118,8 @@ static const char* const kUsage =
     "  --gpu=on       auto gibi; CUDA arac takimi yoksa uyarir\n"
     "  --gpu=off      @GPU fonksiyonlari yalnizca CPU icin derler\n"
     "  --print-ast    semantik analizden gecmis AST'yi yazdirir\n"
-    "  --lsp          dil sunucusu olarak calisir (editor eklentisi icin; tek basina kullanilir)\n";
+    "  --lsp          dil sunucusu olarak calisir (editor eklentisi icin; tek basina kullanilir)\n"
+    "  --version      derleyicinin surumunu yazar\n";
 
 enum class EmitKind { MLIR, GpuMLIR, LLVMDialect, LLVMIR, Object, Executable };
 
@@ -169,6 +172,11 @@ int main(int argc, char** argv) {
         else if (arg == "--emit=obj") emit = EmitKind::Object;
         else if (arg == "--emit=exe") emit = EmitKind::Executable;
         else if (arg == "-h" || arg == "--help") { std::cout << kUsage; return 0; }
+        else if (arg == "--version") {
+            std::cout << "marlin " << MARLIN_VERSION << " (LLVM " << LLVM_VERSION_STRING << ", "
+                      << llvm::sys::getDefaultTargetTriple() << ")\n";
+            return 0;
+        }
         else if (arg[0] == '-') { std::cerr << "Bilinmeyen secenek: " << arg << "\n" << kUsage; return 1; }
         else inputPath = arg;
     }
@@ -214,6 +222,12 @@ int main(int argc, char** argv) {
         if (missing) {
             std::cerr << module.name << " kullanilamiyor: derleyici " << missing
                       << " olmadan derlenmis; kutuphaneyi kurup derleyiciyi yeniden derleyin\n";
+            return 1;
+        }
+        // (Yol derleyicinin derlendiği makinededir; hazır paket henüz bu
+        // kütüphaneleri taşımıyor.)
+        if (lib && !llvm::sys::fs::exists(lib)) {
+            std::cerr << module.name << " kullanilamiyor: kutuphane bulunamadi (" << lib << ")\n";
             return 1;
         }
         if (lib) extraLibs.push_back(lib);

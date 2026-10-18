@@ -1,4 +1,8 @@
-# Derleyiciyi üç platformda derler ve test takımını çalıştırır.
+# Derleyiciyi üç platformda derler, paketler ve test takımını PAKETTEN
+# çalıştırır: paket derleme dizininden uzak bir yere açılır, derleyiciye
+# kaynak/derleme yolları gömülmez (MARLIN_DEV_PATHS=OFF), Windows'ta conda
+# dizinleri PATH'ten çıkarılır. Böylece paketteki bir eksik test hatası olur.
+# Paket, çalışmanın çıktısı (artifact) olarak indirilebilir.
 #
 # LLVM/MLIR 19.1.7 her seferinde derlenmez: conda-forge'un hazır paketleri
 # kullanılır (micromamba; indirilen paketler önbellekte kalır). ANTLR C++
@@ -91,6 +95,12 @@ jobs:
             echo "::notice::libdevice bulunamadi; @GPU kodu yalnizca CPU icin derlenecek"
           fi
 
+      # macOS: Vulkan, Metal üzerinde MoltenVK ile. Pakete girer; derleyici
+      # GPU kullanan programın yanına onu kopyalar.
+      - name: Vulkan (MoltenVK)
+        if: runner.os == 'macOS'
+        run: micromamba install -y -n marlin -c conda-forge moltenvk
+
       - name: Derleme ayarları
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
@@ -109,10 +119,38 @@ jobs:
             -DMLIR_DIR="$MARLIN_PREFIX/lib/cmake/mlir" \
             -DCMAKE_PREFIX_PATH="$MARLIN_PREFIX" \
             -DMARLIN_ANTLR_FROM_SOURCE=ON \
+            -DMARLIN_DEV_PATHS=OFF \
             $MARLIN_CMAKE_EXTRA
 
       - name: Derle
         run: cmake --build build --parallel
+
+      # Paket üretilir ve derleme dizininden bağımsız bir yere açılır; bundan
+      # sonraki her adım o derleyiciyi kullanır.
+      - name: Paketle
+        run: |
+          (cd build && cpack)
+          pkg=$(ls build/marlin-*.tar.gz build/marlin-*.zip 2>/dev/null | head -1)
+          echo "paket: $pkg ($(du -h "$pkg" | cut -f1))"
+          mkdir -p "$RUNNER_TEMP/paket"
+          (cd "$RUNNER_TEMP/paket" && cmake -E tar xf "$GITHUB_WORKSPACE/$pkg")
+          root="$RUNNER_TEMP/paket/$(basename "${pkg%.tar.gz}" .zip)"
+          [ "$RUNNER_OS" = Windows ] && root="$(cygpath -u "$root")"
+          find "$root" -maxdepth 3 -not -path '*/std/*' | sort
+          echo "MARLIN_PACKAGE=$pkg" >> "$GITHUB_ENV"
+          echo "MARLIN_COMPILER=$root/bin/marlin_lang$MARLIN_EXE" >> "$GITHUB_ENV"
+          "$root/bin/marlin_lang$MARLIN_EXE" --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marlin-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ env.MARLIN_PACKAGE }}
+          if-no-files-found: error
+
+      # Paketteki derleyici ve kütüphaneler derleme makinesindeki bir yola
+      # (conda ortamı, derleme dizini) bağlı kalmamalı.
+      - name: Paket bağımlılıkları
+        run: bash tests/paket_denetle.sh "$(dirname "$(dirname "$MARLIN_COMPILER")")"
 
       # macOS'ta timeout komutu yok; testler takılan programı onunla durdurur.
       - name: coreutils (gtimeout)
@@ -127,12 +165,6 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libvulkan1 mesa-vulkan-drivers
-
-      # macOS: Vulkan, Metal üzerinde MoltenVK ile. Derleyici GPU kullanan
-      # programın yanına onu kopyalar (conda ortamının lib dizininden).
-      - name: Vulkan (MoltenVK)
-        if: runner.os == 'macOS'
-        run: micromamba install -y -n marlin -c conda-forge moltenvk
 
       # Vulkan gerçekten çalışıyor mu? Küçük bir @GPU program Vulkan'da
       # çalıştırılır. macOS'ta makinenin Metal aygıtı olup olmadığı belli
@@ -154,7 +186,7 @@ jobs:
               print(sum(ikiyle(1000)));
           }
           EOF
-          ../build/marlin_lang yoklama.marl -o yoklama
+          "$MARLIN_COMPILER" yoklama.marl -o yoklama
           ls -la
           MARLIN_GPU=vulkan MARLIN_GPU_REPORT=1 ./yoklama 2>&1 | tee cikti.txt
           if grep -q '^marlin gpu: vulkan' cikti.txt && grep -q '^999000$' cikti.txt; then
@@ -177,8 +209,14 @@ jobs:
           sudo -u postgres psql -c "CREATE DATABASE marlin_test OWNER marlin;"
           echo "MARLIN_PG_TEST=host=localhost port=5432 dbname=marlin_test user=marlin password=marlin" >> "$GITHUB_ENV"
 
+      # Windows'ta DLL'ler PATH'te de aranır: conda ortamı PATH'te kalırsa
+      # pakette eksik bir DLL fark edilmez.
       - name: Testler
-        run: bash tests/run.sh "../build/marlin_lang$MARLIN_EXE"
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            PATH="$(echo "$PATH" | tr ':' '\n' | grep -vi micromamba | paste -sd:)"
+          fi
+          bash tests/run.sh "$MARLIN_COMPILER"
 
       # Testler kalırsa: küçük bir programı adım adım derleyip hangi aşamada
       # bozulduğunu gösterir.
@@ -187,7 +225,7 @@ jobs:
         run: |
           set +e   # bir adım kalsa da hepsini göster
           cd tests
-          c="../build/marlin_lang$MARLIN_EXE"
+          c="$MARLIN_COMPILER"
           for emit in mlir llvm-mlir llvm-ir obj exe; do
             echo "=== --emit=$emit"
             "$c" print.marl --emit=$emit -o "out.$emit" > log.txt 2>&1

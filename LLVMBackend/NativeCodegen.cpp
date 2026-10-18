@@ -108,16 +108,33 @@ const char* NativeCodegen::defaultExecutableName() {
     return hostTriple().isOSWindows() ? "a.exe" : "a.out";
 }
 
+// Derleyicinin bulunduğu dizin. (Adresi alınan sembol yalnızca çalışan
+// dosyanın yerini bulmak içindir; argv0 yalnızca işletim sistemi yolu
+// veremezse kullanılır.)
+static std::string compilerDirectory(const char* argv0 = "") {
+    static int anchor;
+    return llvm::sys::path::parent_path(llvm::sys::fs::getMainExecutable(argv0, &anchor)).str();
+}
+
+std::string NativeCodegen::packageLibraryDir() {
+    llvm::SmallString<256> dir(llvm::sys::path::parent_path(compilerDirectory()));
+    llvm::sys::path::append(dir, "lib", "marlin");
+    return llvm::sys::fs::is_directory(dir) ? std::string(dir) : "";
+}
+
 std::string NativeCodegen::findRuntimeLibrary(const char* argv0) {
     if (const char* fromEnv = std::getenv("MARLIN_RUNTIME"))
         return llvm::sys::fs::exists(fromEnv) ? fromEnv : "";
 
-    // Adresi alınan sembol yalnızca çalışan dosyanın yerini bulmak içindir.
-    static int anchor;
-    llvm::SmallString<256> beside(llvm::sys::fs::getMainExecutable(argv0, &anchor));
-    llvm::sys::path::remove_filename(beside);
+    llvm::SmallString<256> beside(compilerDirectory(argv0));
     llvm::sys::path::append(beside, runtimeLibraryName());
     if (llvm::sys::fs::exists(beside)) return std::string(beside);
+
+    if (const std::string package = packageLibraryDir(); !package.empty()) {
+        llvm::SmallString<256> path(package);
+        llvm::sys::path::append(path, runtimeLibraryName());
+        if (llvm::sys::fs::exists(path)) return std::string(path);
+    }
 
 #ifdef MARLIN_RUNTIME_LIB
     if (llvm::sys::fs::exists(MARLIN_RUNTIME_LIB)) return MARLIN_RUNTIME_LIB;
@@ -130,51 +147,70 @@ static bool isSharedLibrary(llvm::StringRef path) {
     return path.contains(".so") || path.ends_with(".dylib");
 }
 
-// MLIR'in çalışma zamanı kütüphanesi (iş parçacığı havuzu, CUDA sarmalayıcısı):
-// paylaşımlı bir kütüphanedir. POSIX'te yolu çalıştırılabilir dosyaya yazılır
-// (rpath); Windows'ta rpath yoktur, DLL çalıştırılabilir dosyanın yanına
-// kopyalanır (Windows DLL'i önce orada arar).
-static bool addMlirRuntime(const llvm::Triple& triple, llvm::StringRef name, const std::string& exePath,
-                           std::vector<std::string>& args, std::string& error) {
+// MLIR'in çalışma zamanı kütüphanelerinin aranacağı yerler: kurulu pakette
+// <önek>/lib/marlin (Windows'ta DLL'ler derleyicinin yanında, <önek>/bin);
+// geliştirme derlemesinde LLVM'in kendi dizinleri.
+struct LibraryDirs {
+    std::string lib; // POSIX: paylaşımlı kütüphane; Windows: içe aktarma kütüphanesi (.lib)
+    std::string bin; // Windows: DLL
+};
+static std::vector<LibraryDirs> mlirRuntimeDirs() {
+    std::vector<LibraryDirs> dirs;
+    if (const std::string package = NativeCodegen::packageLibraryDir(); !package.empty())
+        dirs.push_back({package, compilerDirectory()});
 #ifdef MARLIN_LLVM_LIB_DIR
-    if (triple.isOSWindows()) {
-        args.push_back((llvm::Twine(MARLIN_LLVM_LIB_DIR) + "/" + name + ".lib").str());
-#ifdef MARLIN_LLVM_BIN_DIR
-        const std::string dll = (llvm::Twine(MARLIN_LLVM_BIN_DIR) + "/" + name + ".dll").str();
-        llvm::SmallString<256> target(exePath);
-        llvm::sys::path::remove_filename(target);
-        llvm::sys::path::append(target, name + ".dll");
-        if (std::error_code ec = llvm::sys::fs::copy_file(dll, target)) {
-            error = dll + " kopyalanamadi: " + ec.message();
-            return false;
-        }
+    dirs.push_back({MARLIN_LLVM_LIB_DIR, MARLIN_LLVM_BIN_DIR});
 #endif
-        return true;
-    }
-    // Dosya tam yoluyla verilir: bazı dağıtımlarda (conda) yalnızca sürüm
-    // numaralı adı vardır (libmlir_async_runtime.so.19.1, .19.1.dylib) ve
-    // -lmlir_async_runtime onu bulamaz.
+    return dirs;
+}
+
+// Dizindeki libX.so / libX.so.N / libX.dylib / libX.N.dylib. Bazı
+// dağıtımlarda (conda) yalnızca sürüm numaralı ad vardır ve -lX onu
+// bulamaz; bu yüzden dosya tam yoluyla verilir. Sürümsüz ad tercih edilir.
+static std::string findSharedLibrary(const std::string& dir, llvm::StringRef name) {
     const std::string prefix = ("lib" + name).str();
     std::string found;
     std::error_code ec;
-    for (llvm::sys::fs::directory_iterator it(MARLIN_LLVM_LIB_DIR, ec), end; it != end && !ec; it.increment(ec)) {
+    for (llvm::sys::fs::directory_iterator it(dir, ec), end; it != end && !ec; it.increment(ec)) {
         llvm::StringRef file = llvm::sys::path::filename(it->path());
         if (!file.starts_with(prefix + ".") || !isSharedLibrary(file)) continue;
-        // Sürümsüz ad (libX.so, libX.dylib) varsa o tercih edilir.
         if (found.empty() || file == prefix + ".so" || file == prefix + ".dylib") found = it->path();
     }
-    if (found.empty()) {
-        error = (name + " bulunamadi (" + MARLIN_LLVM_LIB_DIR + ")").str();
-        return false;
+    return found;
+}
+
+// MLIR'in çalışma zamanı kütüphanesi (iş parçacığı havuzu): paylaşımlı bir
+// kütüphanedir. POSIX'te dizini çalıştırılabilir dosyaya yazılır (rpath);
+// Windows'ta rpath yoktur, DLL çalıştırılabilir dosyanın yanına kopyalanır
+// (Windows DLL'i önce orada arar).
+static bool addMlirRuntime(const llvm::Triple& triple, llvm::StringRef name, const std::string& exePath,
+                           std::vector<std::string>& args, std::string& error) {
+    for (const LibraryDirs& dirs : mlirRuntimeDirs()) {
+        if (triple.isOSWindows()) {
+            const std::string importLib = (llvm::Twine(dirs.lib) + "/" + name + ".lib").str();
+            const std::string dll = (llvm::Twine(dirs.bin) + "/" + name + ".dll").str();
+            if (!llvm::sys::fs::exists(importLib) || !llvm::sys::fs::exists(dll)) continue;
+            args.push_back(importLib);
+            llvm::SmallString<256> target(exePath);
+            llvm::sys::path::remove_filename(target);
+            llvm::sys::path::append(target, name + ".dll");
+            // (Program derleyicinin dizinine üretiliyorsa DLL zaten oradadır;
+            // dosyayı kendi üstüne kopyalamak onu boşaltırdı.)
+            if (llvm::sys::fs::equivalent(dll, target)) return true;
+            if (std::error_code ec = llvm::sys::fs::copy_file(dll, target)) {
+                error = dll + " kopyalanamadi: " + ec.message();
+                return false;
+            }
+            return true;
+        }
+        const std::string found = findSharedLibrary(dirs.lib, name);
+        if (found.empty()) continue;
+        args.push_back(found);
+        args.push_back("-Wl,-rpath," + dirs.lib);
+        return true;
     }
-    args.push_back(found);
-    args.push_back(std::string("-Wl,-rpath,") + MARLIN_LLVM_LIB_DIR);
-    return true;
-#else
-    (void)triple, (void)exePath, (void)args;
-    error = (name + " bulunamadi: derleyici MARLIN_LLVM_LIB_DIR olmadan derlenmis").str();
+    error = (name + " bulunamadi (derleyici paketinde lib/marlin dizini eksik ya da bozuk)").str();
     return false;
-#endif
 }
 
 // MACOS'TA VULKAN: MoltenVK
@@ -183,9 +219,10 @@ static bool addMlirRuntime(const llvm::Triple& triple, llvm::StringRef name, con
 // gerçekleştiren bir kütüphanedir (libMoltenVK.dylib). Sisteme kurulu
 // olması beklenmez: GPU kullanan programın yanına kopyalanır, çalışma
 // zamanı onu orada arar (runtime/marlin_gpu_vulkan.c). Kütüphane derleme
-// makinesinde şuralarda aranır: MARLIN_MOLTENVK (dosya yolu), Vulkan SDK
-// ($VULKAN_SDK/lib), MLIR'in kütüphane dizini (conda ortamı: `moltenvk`
-// paketi), Homebrew (`molten-vk`). Bulunamazsa kopyalanmaz; program
+// makinesinde şuralarda aranır: MARLIN_MOLTENVK (dosya yolu), derleyici
+// paketi (lib/marlin), Vulkan SDK ($VULKAN_SDK/lib), MLIR'in kütüphane dizini
+// (geliştirme derlemesi; conda ortamı: `moltenvk` paketi), Homebrew
+// (`molten-vk`). Bulunamazsa kopyalanmaz; program
 // sisteme kurulu Vulkan'ı kullanır, o da yoksa CPU'da çalışır.
 //
 // Kütüphanenin kendi yanında aradığı bağımlılıkları (@rpath/..., ör.
@@ -195,6 +232,7 @@ static std::string findMoltenVK() {
     if (const char* fromEnv = std::getenv("MARLIN_MOLTENVK"))
         return llvm::sys::fs::exists(fromEnv) ? fromEnv : "";
     std::vector<std::string> dirs;
+    if (const std::string package = NativeCodegen::packageLibraryDir(); !package.empty()) dirs.push_back(package);
     if (const char* sdk = std::getenv("VULKAN_SDK")) dirs.push_back(std::string(sdk) + "/lib");
 #ifdef MARLIN_LLVM_LIB_DIR
     dirs.push_back(MARLIN_LLVM_LIB_DIR);
