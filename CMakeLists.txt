@@ -264,6 +264,16 @@ add_library(marlinrt STATIC
         runtime/std_json.c
         runtime/json_parser.c
         runtime/json_parser.h)
+# Linux x86-64: çalışma zamanı, programı derleyen kullanıcının bağlayıcısıyla
+# (sistemin ld'si; sürümü belirsiz) bağlanır. Yeni assembler'lar GOT
+# erişimleri için "gevşetilebilir" yer değiştirmeler (R_X86_64_GOTPCRELX)
+# üretir; eski bir ld bunlardan tanımadığını yanlış gevşetebilir. Görüldü:
+# conda'nın gcc 14'üyle derlenen SQLite'taki `push foo@GOTPCREL(%rip)`'i
+# Ubuntu 24.04'ün ld 2.42'si bir çağrıya çevirdi; yığın kaydı, program çöktü.
+# Gevşetme kapalı derlenen nesne her bağlayıcıda doğru bağlanır.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    target_compile_options(marlinrt PRIVATE -Wa,-mrelax-relocations=no)
+endif()
 # macOS: sürücülerin (MoltenVK) Objective-C istisnalarını yakalayan küçük parça.
 if(APPLE)
     enable_language(OBJC)
