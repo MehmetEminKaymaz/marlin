@@ -2,6 +2,7 @@
 
 #include "GpuOffload.h"
 #include "GpuSpirv.h"
+#include "../runtime/gpu_package.h"
 #include "NestedParallel.h"
 #include "ParallelMatmul.h"
 
@@ -264,7 +265,7 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, const GpuToolchain* gpu, bool sto
     GpuPackages gpuPackages;
     if (usesGpu) {
         gpuPackages = buildGpuPackages(module, /*noCuda=*/!cuda);
-        resolveGpuRequirements(module, gpuPackages);
+        resolveGpuRequirements(module, gpuPackages, cuda ? 0u : MARLIN_GPU_NO_CUDA);
         if (!cuda) packGpuBinaries(module, gpuPackages);
     }
     pm.clear();

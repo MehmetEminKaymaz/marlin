@@ -54,8 +54,10 @@ GpuPackages buildGpuPackages(mlir::ModuleOp module, bool noCuda);
 /// @GPU fonksiyon çağrılarındaki kararı (marlin_gpu_usable) tamamlar: her
 /// çağrının GPU sürümünün başlattığı çekirdeklerin (çağırdığı fonksiyonlar
 /// dahil) gereksinimleri birleştirilip argüman olarak yazılır. Çağrılar kod
-/// üretiminde `marlin.gpu_entry` işaretiyle üretilir.
-void resolveGpuRequirements(mlir::ModuleOp module, const GpuPackages& packages);
+/// üretiminde `marlin.gpu_entry` işaretiyle üretilir. `always`: her çağrıya
+/// eklenen bitler (CUDA'sız derlemede NO_CUDA: çekirdeksiz fonksiyon da
+/// diğerleriyle aynı arka ucu seçsin).
+void resolveGpuRequirements(mlir::ModuleOp module, const GpuPackages& packages, uint32_t always);
 
 /// gpu.module'lerin yerine paketleri koyar:
 ///   * gpu-module-to-binary'den sonra (CUDA var): gpu.binary'deki PTX alınır,

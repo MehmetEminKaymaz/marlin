@@ -448,7 +448,7 @@ GpuPackages buildGpuPackages(mlir::ModuleOp module, bool noCuda) {
     return packages;
 }
 
-void resolveGpuRequirements(mlir::ModuleOp module, const GpuPackages& packages) {
+void resolveGpuRequirements(mlir::ModuleOp module, const GpuPackages& packages, uint32_t always) {
     llvm::DenseMap<Operation*, uint32_t> known;
     llvm::DenseSet<Operation*> visiting;
     std::function<uint32_t(func::FuncOp)> requirementsOf = [&](func::FuncOp function) -> uint32_t {
@@ -475,8 +475,8 @@ void resolveGpuRequirements(mlir::ModuleOp module, const GpuPackages& packages) 
     });
     for (func::CallOp call : decisions) {
         auto entry = call->getAttrOfType<FlatSymbolRefAttr>("marlin.gpu_entry");
-        uint32_t requirements = 0;
-        if (auto function = module.lookupSymbol<func::FuncOp>(entry)) requirements = requirementsOf(function);
+        uint32_t requirements = always;
+        if (auto function = module.lookupSymbol<func::FuncOp>(entry)) requirements |= requirementsOf(function);
         OpBuilder builder(call);
         Value value = builder.create<arith::ConstantIntOp>(call.getLoc(), requirements, 32);
         call->setOperand(0, value);
@@ -507,7 +507,8 @@ void packGpuBinaries(mlir::ModuleOp module, const GpuPackages& packages) {
 
     // CUDA olmadan: gpu.module doğrudan pakete. (Nesnenin hedef etiketi
     // gömme biçimini etkilemez; paket hangi arka uçları içerdiğini kendi
-    // başlığında söyler.)
+    // başlığında söyler. NVVM dialect'ini bu yolda başka bir şey yüklemez.)
+    context->getOrLoadDialect<NVVM::NVVMDialect>();
     for (auto gpuModule : llvm::make_early_inc_range(module.getOps<gpu::GPUModuleOp>())) {
         auto it = packages.find(gpuModule.getName().str());
         if (it == packages.end()) continue;
