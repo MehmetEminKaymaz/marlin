@@ -317,6 +317,12 @@ MLIRGenerator::Values MLIRGenerator::emitCallOp(FunctionCallExpr* node, mlir::Va
             // varsa GPU sürümüne (matris alan/döndüren fonksiyonda veriyi
             // GPU'ya ve geri kopyalayan giriş fonksiyonuna), yoksa CPU ikizine
             // (bkz. MLIRGenerator.cpp, "CPU ikizi").
+            //
+            // Karar fonksiyonunun argümanı, GPU sürümünün başlattığı
+            // çekirdeklerin istediği özelliklerdir (f64, ...). Çekirdekler
+            // henüz yok; değeri indirme hattı `marlin.gpu_entry` işaretinden
+            // bulup yazar (bkz. LLVMBackend/GpuSpirv.h,
+            // resolveGpuRequirements).
             auto twin = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(cpuTwinName(ident->name));
             if (ctx.cpuTwin) {
                 auto call = ctx.builder.create<mlir::func::CallOp>(loc, twin, mlir::ValueRange(args));
@@ -324,9 +330,11 @@ MLIRGenerator::Values MLIRGenerator::emitCallOp(FunctionCallExpr* node, mlir::Va
             } else {
                 auto onGpu = ctx.theModule.lookupSymbol<mlir::func::FuncOp>(
                     decl->hasMatrixSignature() ? hostEntryName(ident->name) : ident->name);
-                mlir::Value available = runtime.callValue("marlin_gpu_available", {},
-                                                          ctx.builder.getI32Type(), loc);
                 mlir::Value zero = arithManager.buildIntConstant(0, ctx.builder.getI32Type(), loc);
+                mlir::Value available = runtime.callValue("marlin_gpu_usable", {zero},
+                                                          ctx.builder.getI32Type(), loc);
+                available.getDefiningOp()->setAttr(
+                    "marlin.gpu_entry", mlir::FlatSymbolRefAttr::get(onGpu.getNameAttr()));
                 mlir::Value useGpu = ctx.builder.create<mlir::arith::CmpIOp>(
                     loc, mlir::arith::CmpIPredicate::ne, available, zero);
                 // (Bloklar sonlandırıcısız oluşturulur; yield aşağıda eklenir.)

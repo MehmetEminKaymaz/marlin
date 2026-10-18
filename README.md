@@ -142,8 +142,8 @@ marlin_lang [kaynak.marl] [secenekler]
 | `--emit=...` | Derlemeyi hangi aşamada durduracağını seçer (aşağıya bak) |
 | `-I dizin` | `import` edilen modüllerin aranacağı ek dizin (birden çok kez verilebilir) |
 | `--print-ast` | Programın ağaç yapısını (AST) ekrana yazar |
-| `--gpu=auto` | (Varsayılan) `@GPU` fonksiyonlar GPU için de derlenir; program çalışırken GPU varsa onu, yoksa aynı fonksiyonun CPU kopyasını kullanır. Derleme makinesinde CUDA araç takımı yoksa yalnızca CPU için derlenir. |
-| `--gpu=on` | `auto` gibi, ama CUDA araç takımı bulunamazsa hata verir. |
+| `--gpu=auto` | (Varsayılan) `@GPU` fonksiyonlar GPU için de derlenir; program çalışırken GPU varsa onu (NVIDIA'da CUDA, diğerlerinde Vulkan), yoksa aynı fonksiyonun CPU kopyasını kullanır. Vulkan çekirdekleri her zaman, NVIDIA çekirdekleri derleme makinesinde CUDA araç takımı varsa üretilir. |
+| `--gpu=on` | `auto` gibi; CUDA araç takımı bulunamazsa uyarır (sebebiyle). |
 | `--gpu=off` | `@GPU` fonksiyonları yalnızca CPU için derler. |
 | `--help` | Kısa yardım |
 
@@ -239,6 +239,7 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 | `zaman.marl` | `time()` ile süre ölçme; çekirdeklere dağıtılan `matmul` |
 | `gpu.marl` | `@GPU` fonksiyonlar: GPU'da `parallel for`, matris işlemleri, `matmul`, `sum`, CPU ↔ GPU kopyalama |
 | `gpu_matmul.marl` | GPU'daki döşemeli `matmul`: döşeme boyutunun katı olmayan boyutlar, tamsayı / `float` / `float64` |
+| `gpu_buyuk.marl` | Aygıtın tek seferde başlatabileceğinden fazla bloklu `parallel for` (17 milyon eleman; Vulkan'da parçalı başlatma) |
 | `hatalar_gpu.marl` | `@GPU` fonksiyonlarda izin verilmeyen kullanımlar |
 | `stringler.marl` | Stringler: birleştirme, karşılaştırma, indeksleme, `str` / `to_int` / `to_float`, string listesi ve dizisi |
 | `string_bellek.marl` | Stringlerin belleğinin kendiliğinden bırakılması: ara değerler, yeniden atama, liste / dizi / struct alanı, fonksiyonlar, döngüler; program bitince bırakılmamış string kalmamalı |
@@ -279,7 +280,7 @@ wsl -e bash -lc "cd '/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace' && bash 
 
 `tests/moduller/` dizinindeki dosyalar test değil, bu testlerin import ettiği modüllerdir (`run.sh` yalnızca `tests/` içindeki `.marl` dosyalarını çalıştırır).
 
-`@GPU` içeren testler iki kez çalıştırılır: olduğu gibi (ekran kartı varsa onda) ve `MARLIN_GPU=cpu` ile (`@GPU` fonksiyonların CPU kopyalarıyla). İkisi de aynı çıktıyı vermelidir. Ekran kartı olmayan makinede ikisi de CPU'da çalışır.
+`@GPU` içeren testler üç biçimde çalıştırılır: olduğu gibi (NVIDIA kart varsa CUDA'da), `MARLIN_GPU=vulkan` ile (Vulkan aygıtı varsa onda) ve `MARLIN_GPU=cpu` ile (`@GPU` fonksiyonların CPU kopyalarıyla). Hepsi aynı çıktıyı vermelidir. Ekran kartı olmayan makinede hepsi CPU'da çalışır. Ekran kartı olmadan Vulkan yolunu sınamak için Mesa'nın yazılımla çalışan sürücüsü (lavapipe: `mesa-vulkan-drivers`) yeterlidir; `MARLIN_TEST_VULKAN=1 bash tests/run.sh` Vulkan çalışmasının gerçekten Vulkan'da olduğunu da denetler (CI'da Linux böyle çalışır).
 
 ---
 
@@ -1108,8 +1109,11 @@ Kurallar (derleyici denetler):
 
 Bilinmesi gerekenler:
 
-- **GPU'su olmayan makinede de çalışır.** Derleyici her `@GPU` fonksiyonun bir de CPU kopyasını üretir. Program açılırken NVIDIA sürücüsünü arar: bulursa GPU'yu, bulamazsa (Mac, NVIDIA'sız Windows / Linux, sürücüsüz sunucu) CPU kopyalarını kullanır; sonuç aynıdır. `MARLIN_GPU=cpu` ortam değişkeni GPU olsa da CPU'yu kullandırır (karşılaştırmak ve hata ayıklamak için).
-- **GPU çekirdeklerini derlemek için derleme makinesinde CUDA araç takımı gerekir** (libdevice; `CUDA_PATH` / `CUDA_HOME` / `CUDA_ROOT`). Yoksa `@GPU` fonksiyonlar yalnızca CPU için derlenir (`--gpu=on` ise hata verir). Programı çalıştıracak makinede araç takımı gerekmez, yalnızca NVIDIA sürücüsü (o da yoksa CPU kullanılır).
+- **Her GPU'da, GPU'su olmayan makinede de çalışır.** Derleyici her `@GPU` fonksiyonun çekirdeklerini iki biçimde programa gömer: NVIDIA kartlar için PTX (CUDA), diğerleri için SPIR-V (Vulkan: AMD, Intel; macOS'ta MoltenVK). Ayrıca fonksiyonun bir de CPU kopyasını üretir. Program `@GPU` fonksiyonu çağırırken sırayla NVIDIA sürücüsünü, sonra Vulkan'ı dener; uygun GPU yoksa CPU kopyasını kullanır. Sonuç her durumda aynıdır.
+- **GPU'nun yapamadığı iş CPU'da çalışır.** Bazı GPU'lar çift duyarlıklı (`float64`) hesap yapamaz (Apple GPU'ları, bazı Intel kartlar). Böyle bir GPU'da `float64` kullanan `@GPU` fonksiyon CPU kopyasıyla çalışır, `float` (32 bit) kullanan fonksiyon GPU'da çalışır. Karar her fonksiyon için ayrı verilir.
+- Ortam değişkenleri: `MARLIN_GPU=cpu` GPU olsa da CPU'yu kullandırır (karşılaştırmak ve hata ayıklamak için). `MARLIN_GPU=cuda` / `MARLIN_GPU=vulkan` yalnızca o arka ucu kullandırır. `MARLIN_GPU_REPORT=1` hangi arka ucun ve hangi aygıtın kullanıldığını yazar.
+- **NVIDIA çekirdeklerini derlemek için derleme makinesinde CUDA araç takımı gerekir** (libdevice; `CUDA_PATH` / `CUDA_HOME` / `CUDA_ROOT`). Yoksa yalnızca Vulkan çekirdekleri üretilir: program NVIDIA kartta da Vulkan'la çalışır (sürücü Vulkan'ı destekliyorsa). Programı çalıştıracak makinede araç takımı gerekmez; yalnızca ekran kartının sürücüsü gerekir.
+- **Vulkan'da büyük tampon sınırı:** aygıtın tek tamponda izin verdiği boyuttan büyük matris (kartlarda genelde 1-4 GB, yazılımla çalışan lavapipe'ta 128 MB) program durdurulur. Vulkan arka ucunda veri, CPU'nun da görebildiği bellekte durur. Bu, tümleşik GPU'larda ve Apple'da en hızlı yoldur; ayrık kartlarda kopyalama CUDA'daki kadar hızlı değildir.
 - **GPU'da çalışan `parallel for` içinde indeks sınırı denetlenmez.** CPU'da sınır dışı indeks programı mesajla durdurur; GPU'da durdurmaz, sonuç tanımsızdır. Emin olmak için programı önce `MARLIN_GPU=cpu` ile çalıştır: orada denetim vardır.
 - **Kayan noktalı toplamlar son basamaklarda farklı çıkabilir.** `sum` GPU'da elemanları CPU'dakinden farklı sırayla toplar. Özellikle `float` (32 bit) ile milyonlarca eleman toplanınca fark belirginleşir. GPU'da `a * b + c` ayrıca tek komutla (FMA, ara yuvarlama yapmadan) hesaplanabilir; CUDA derleyicisinin de varsayılanı budur.
 - **GPU her işte hızlı değildir.** Program GPU'yu ilk kullandığında yarım saniye kadar bir başlatma süresi vardır ve her kopyalamanın bir maliyeti olur. Küçük işlerde CPU daha hızlıdır; kazanç büyük matrislerde ve veri GPU'da kalırken yapılan çok sayıda işlemde gelir.
@@ -1164,7 +1168,8 @@ print("sure:", time() - once, "saniye");
 | `Calisma zamani kutuphanesi (libmarlinrt.a) bulunamadi` | Derleyiciyi `cmake-build-debug` dışına kopyaladıysan kütüphaneyi bulamaz. Yolunu ver: `export MARLIN_RUNTIME=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/cmake-build-debug/libmarlinrt.a` |
 | `error while loading shared libraries: libmlir_async_runtime.so` | `parallel for` içeren programlar LLVM derlemendeki bir kütüphaneyi kullanır ve yolunu içlerinde taşır. LLVM dizinini taşıdıysan ya da programı başka bir makineye kopyaladıysan bulunamaz; derleyiciyi yeniden derleyip programı yeniden üret. |
 | Program çalışırken `... failed with 'CUDA_ERROR_...'` yazıyor | GPU'da hata oldu. GPU belleği yetmiyor olabilir; ya da `parallel for` içinde sınır dışı indeks vardır. `MARLIN_GPU=cpu` ile çalıştırıp dene. |
-| `@GPU` program GPU'yu kullanmıyor (CPU kadar yavaş) | Derleme makinesinde CUDA araç takımı bulunamamış olabilir (`--gpu=on` ile derle: sebebi yazar) ya da çalışan makinede NVIDIA sürücüsü yoktur (`nvidia-smi`). |
+| `@GPU` program GPU'yu kullanmıyor (CPU kadar yavaş) | `MARLIN_GPU_REPORT=1` ile çalıştır: hangi arka ucun seçildiğini yazar. `cpu` yazıyorsa makinede NVIDIA sürücüsü (`nvidia-smi`) ve Vulkan sürücüsü bulunamamıştır, ya da GPU fonksiyonun istediğini (ör. `float64`) yapamıyordur. NVIDIA kartta `vulkan` yazıyorsa derleme makinesinde CUDA araç takımı yoktu (`--gpu=on` ile derle: sebebi yazar). |
+| `Vulkan: ... baytlik GPU tamponu aygitin sinirini asiyor` | Matris, Vulkan aygıtının tek tamponda izin verdiği boyuttan büyük. Daha küçük parçalarla çalış ya da `MARLIN_GPU=cpu` kullan. |
 | `... hata: sozdizimi hatasi: ...` | Yazım hatası. Mesajın başında dosya, satır ve sütun yazar (`deneme.marl:3:6`); açıklaması ANTLR'dan geldiği için İngilizcedir. |
 | `'std.x' adinda bir standart modul yok` | Modül adı yanlış ya da derleyici `std/` dizinini bulamıyor. Derleyiciyi başka yere kopyaladıysan yolunu ver: `export MARLIN_STD=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/std` |
 | `modul bulunamadi: 'a.b'` | `a/b.marl` dosyası import eden dosyanın dizininde yok. Yolu denetle ya da dizini `-I` ile ver. |
@@ -1209,6 +1214,7 @@ MLIRBackend/        AST → MLIR
 LLVMBackend/        MLIR → çalıştırılabilir dosya
   LLVMLowering.*      MLIR'i LLVM IR'a indirir
   GpuOffload.*        @GPU fonksiyonlardaki paralel işleri GPU çekirdeğine çevirir
+  GpuSpirv.*          çekirdeklerin Vulkan (SPIR-V) sürümü; PTX ile birlikte programa gömülen paket
   ParallelMatmul.*    CPU'da matris çarpımını çekirdeklere dağıtır
   NativeCodegen.*     Optimizasyon, nesne dosyası, bağlama
 
@@ -1223,13 +1229,16 @@ runtime/            Derlenen programlara eklenen C kütüphanesi (libmarlinrt.a)
   std_*.c             standart kütüphane modüllerinin C ile yazılmış kısmı
   http_parser.*       HTTP/1.1 istek ayrıştırıcısı (soket kullanmaz; std_http.c kullanır)
   marlin_task.c       görev handle'ı (task<T>): MLIR async çalışma zamanının değerini sarar
+  marlin_gpu.c        @GPU çalışma zamanı: arka ucu seçer (CUDA / Vulkan / CPU), CUDA arka ucu
+  marlin_gpu_vulkan.c Vulkan arka ucu (bellek, çekirdek hatları, başlatma)
+  gpu_package.h       derleyicinin gömdüğü çekirdek paketinin biçimi
   std_postgres.c      PostgreSQL sürücüsü (libpq), bağlantı havuzu
   std_sqlite.c        SQLite sürücüsü
 std/                Standart kütüphane modülleri (import std.file → std/file.marl)
 tests/              Test programları ve run.sh
 ```
 
-**Gereksinimler** (WSL içinde kurulu olanlar): LLVM/MLIR 19.1.7 (`/home/emin/llvm-project/build-gpu`; X86 ve NVPTX hedefleriyle derlenmiş), ANTLR 4.10 (`/home/emin/antlr-4.10-complete.jar` ve `libantlr4-runtime-dev`), Java, CMake, bir C/C++ derleyicisi. `@GPU` için ayrıca bir NVIDIA ekran kartı ve CUDA araç takımı (`/usr/local/cuda-12.9`). Veritabanı sürücüleri için `libpq-dev` ve `libsqlite3-dev` (isteğe bağlı; yoksa CMake bunları `~/marlin-deps` altında da arar, bkz. `tests/pg_test_sunucu.sh`). Bu yollar `CMakeLists.txt` içinde sabit yazılıdır; başka bir makinede derlemek için orada değiştirmek gerekir.
+**Gereksinimler** (WSL içinde kurulu olanlar): LLVM/MLIR 19.1.7 (`/home/emin/llvm-project/build-gpu`; X86 ve NVPTX hedefleriyle derlenmiş), ANTLR 4.10 (`/home/emin/antlr-4.10-complete.jar` ve `libantlr4-runtime-dev`), Java, CMake, bir C/C++ derleyicisi. `@GPU` için: NVIDIA çekirdekleri CUDA araç takımıyla (`/usr/local/cuda-12.9`) derlenir; Vulkan arka ucu için Vulkan başlıkları gerekir (`libvulkan-dev`; yoksa CMake `~/marlin-deps` altında da arar). Vulkan yolunu ekran kartı olmadan denemek için `mesa-vulkan-drivers` (lavapipe). Veritabanı sürücüleri için `libpq-dev` ve `libsqlite3-dev` (isteğe bağlı; yoksa CMake bunları `~/marlin-deps` altında da arar, bkz. `tests/pg_test_sunucu.sh`). Bu yollar `CMakeLists.txt` içinde sabit yazılıdır; başka bir makinede derlemek için orada değiştirmek gerekir.
 
 
 

@@ -165,6 +165,8 @@ set(PROJECT_SOURCES
         LLVMBackend/NativeCodegen.h
         LLVMBackend/GpuOffload.cpp
         LLVMBackend/GpuOffload.h
+        LLVMBackend/GpuSpirv.cpp
+        LLVMBackend/GpuSpirv.h
         LLVMBackend/ParallelMatmul.cpp
         LLVMBackend/ParallelMatmul.h
         LLVMBackend/NestedParallel.cpp
@@ -223,7 +225,7 @@ add_executable(marlin_lang
 # kullanır (AST üzerinde dynamic_cast, ANTLR).
 set(MARLIN_NO_RTTI "$<IF:$<CXX_COMPILER_ID:MSVC>,/GR-,-fno-rtti>")
 set_source_files_properties(LLVMBackend/GpuOffload.cpp LLVMBackend/ParallelMatmul.cpp
-        LLVMBackend/NestedParallel.cpp PROPERTIES COMPILE_OPTIONS "${MARLIN_NO_RTTI}")
+        LLVMBackend/NestedParallel.cpp LLVMBackend/GpuSpirv.cpp PROPERTIES COMPILE_OPTIONS "${MARLIN_NO_RTTI}")
 # Dil sunucusu da MLIR'in LSP kütüphanesinin sınıflarını (llvm::ErrorInfo ...)
 # kullanır; aynı sebeple RTTI'siz derlenir. AST'ye dokunan kısmı ayrı bir
 # dosyadadır (Lsp/MarlinCheck.cpp).
@@ -253,6 +255,9 @@ add_library(marlinrt STATIC
         runtime/marlin_task.c
         runtime/marlin_map.c
         runtime/marlin_gpu.c
+        runtime/marlin_gpu_vulkan.c
+        runtime/marlin_gpu_internal.h
+        runtime/gpu_package.h
         runtime/std_json.c
         runtime/json_parser.c
         runtime/json_parser.h)
@@ -298,6 +303,21 @@ if(MARLIN_CURL_INCLUDE AND MARLIN_CURL_LIB)
     target_compile_definitions(marlin_lang PRIVATE MARLIN_CURL_LIB="${MARLIN_CURL_LIB}")
 else()
     message(STATUS "std.http.client: libcurl bulunamadi (libcurl4-openssl-dev); istemci derlenmeyecek")
+endif()
+
+# GPU'nun Vulkan arka ucu (runtime/marlin_gpu_vulkan.c): yalnızca başlıklar
+# gerekir (Vulkan-Headers; Debian/Ubuntu: libvulkan-dev, conda:
+# libvulkan-headers). Kütüphanenin kendisi program çalışırken yüklenir.
+# Başlıklar yoksa arka uç derlenmez; @GPU fonksiyonlar NVIDIA dışındaki
+# makinelerde CPU'da çalışır.
+find_path(MARLIN_VULKAN_INCLUDE vulkan/vulkan_core.h
+        PATHS ${MARLIN_DEPS_DIR}/include $ENV{VULKAN_SDK}/include)
+if(MARLIN_VULKAN_INCLUDE)
+    message(STATUS "GPU: Vulkan basliklari ${MARLIN_VULKAN_INCLUDE}")
+    set_source_files_properties(runtime/marlin_gpu_vulkan.c PROPERTIES
+            INCLUDE_DIRECTORIES "${MARLIN_VULKAN_INCLUDE}" COMPILE_DEFINITIONS MARLIN_HAVE_VULKAN)
+else()
+    message(STATUS "GPU: Vulkan basliklari bulunamadi (libvulkan-dev); Vulkan arka ucu derlenmeyecek")
 endif()
 
 # Standart kütüphanenin marlin dosyaları (import std.file → std/file.marl).
@@ -384,6 +404,21 @@ target_link_libraries(marlin_lang PRIVATE
         MLIRUBToLLVM
         MLIRIndexToLLVM
         MLIRComplexToLLVM
+
+        # GPU: Vulkan (SPIR-V) çekirdekleri
+        MLIRSPIRVDialect
+        MLIRSPIRVConversion
+        MLIRSPIRVTransforms
+        MLIRSPIRVSerialization
+        MLIRGPUToSPIRV
+        MLIRArithToSPIRV
+        MLIRFuncToSPIRV
+        MLIRMathToSPIRV
+        MLIRMemRefToSPIRV
+        MLIRSCFToSPIRV
+        MLIRVectorToSPIRV
+        MLIRUBToSPIRV
+        MLIRControlFlowToSCF
 
         MLIRPass
         MLIRTransforms

@@ -36,9 +36,12 @@
 #
 # Çalıştırılan her test hem -O0 hem -O2 ile derlenir.
 #
-# @GPU fonksiyon içeren testler iki kez çalıştırılır: olduğu gibi (GPU varsa
-# GPU'da) ve MARLIN_GPU=cpu ile (@GPU fonksiyonların CPU ikizleriyle); ikisi de
-# aynı çıktıyı vermelidir. GPU'su olmayan makinede ikisi de CPU'da çalışır.
+# @GPU fonksiyon içeren testler üç biçimde çalıştırılır: olduğu gibi (NVIDIA
+# varsa CUDA'da), MARLIN_GPU=vulkan ile (Vulkan aygıtı varsa onda) ve
+# MARLIN_GPU=cpu ile (@GPU fonksiyonların CPU ikizleriyle); hepsi aynı çıktıyı
+# vermelidir. GPU'su olmayan makinede hepsi CPU'da çalışır.
+# MARLIN_TEST_VULKAN=1: makinede Vulkan aygıtı vardır (ör. CI'da lavapipe);
+# "@vulkan" çalışmasının gerçekten Vulkan'da olduğu da denetlenir.
 #
 # Kullanım: tests/run.sh [marlin_lang yolu]
 
@@ -92,14 +95,14 @@ for src in *.marl; do
 
     configs=("-O0" "-O2")
     if grep -q '^@GPU' "$src"; then
-        configs=("-O0" "-O2" "-O0 @cpu" "-O2 @cpu")
+        configs=("-O0" "-O2" "-O0 @vulkan" "-O2 @vulkan" "-O0 @cpu" "-O2 @cpu")
     fi
 
     for opt in "${configs[@]}"; do
-        # "@cpu": program MARLIN_GPU=cpu ile çalıştırılır (GPU olsa da CPU ikizleri)
+        # "@cpu" / "@vulkan": program MARLIN_GPU=cpu / vulkan ile çalıştırılır
         gpu_env=""
         copt="$opt" # derleyicinin seçenekleri ($opt raporlarda etiket olarak kalır)
-        case "$opt" in *" @cpu") gpu_env="cpu"; copt="${opt% @cpu}" ;; esac
+        case "$opt" in *" @"*) gpu_env="${opt##* @}"; copt="${opt% @*}" ;; esac
         # ($opt bilerek tırnaksız: birden çok seçenek içerebilir)
         $TIMEOUT "$COMPILER" "$src" $copt -o "$PROG" > "$TMP/err" 2>&1
         rc=$?
@@ -114,7 +117,7 @@ for src in *.marl; do
         fi
         : > "$TMP/replies"
         if [ -n "$port" ]; then
-            MARLIN_STRING_CHECK=1 MARLIN_GPU="$gpu_env" $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr" &
+            MARLIN_STRING_CHECK=1 MARLIN_GPU="$gpu_env" MARLIN_GPU_REPORT=1 $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr" &
             server=$!
             while IFS= read -r request; do
                 $PY http_gonder.py "$port" "$request" >> "$TMP/replies" 2>&1
@@ -122,7 +125,7 @@ for src in *.marl; do
             wait "$server"
             code=$?
         else
-            MARLIN_STRING_CHECK=1 MARLIN_GPU="$gpu_env" $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr"
+            MARLIN_STRING_CHECK=1 MARLIN_GPU="$gpu_env" MARLIN_GPU_REPORT=1 $TIMEOUT "$PROG" > "$TMP/actual" 2> "$TMP/stderr"
             code=$?
         fi
         if [ -n "$TIMEOUT" ] && [ "$code" = 124 ]; then
@@ -146,6 +149,9 @@ for src in *.marl; do
         elif grep -q "failed with 'CUDA" "$TMP/stderr"; then
             # GPU çalışma zamanı hatayı yalnızca stderr'e yazar, programı durdurmaz.
             bad "$src $opt" "GPU hatasi: $(head -2 "$TMP/stderr")"
+        elif [ "$gpu_env" = vulkan ] && [ "${MARLIN_TEST_VULKAN:-}" = 1 ] &&
+             ! grep -q '^marlin gpu: vulkan' "$TMP/stderr"; then
+            bad "$src $opt" "Vulkan kullanilmadi: $(grep '^marlin gpu:' "$TMP/stderr" | head -2)"
         elif ! diff -u "$TMP/expected" "$TMP/actual" > "$TMP/diff"; then
             bad "$src $opt" "cikti farkli:"; sed 's/^/           /' "$TMP/diff"
         elif [ -n "$port" ] && ! diff -u "$TMP/expected_replies" "$TMP/replies" > "$TMP/diff"; then

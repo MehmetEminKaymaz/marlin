@@ -4,9 +4,11 @@
 # kullanılır (micromamba; indirilen paketler önbellekte kalır). ANTLR C++
 # runtime'ı ise projeyle birlikte kaynaktan derlenir (MARLIN_ANTLR_FROM_SOURCE).
 #
-# Makinelerde GPU yoktur: @GPU testleri yalnızca --gpu=off ile çalışır
-# (bkz. tests/run.sh). PostgreSQL sunucusu yalnızca Linux'ta açılabildiği için
-# postgres testi diğer platformlarda atlanır.
+# Makinelerde ekran kartı yoktur. @GPU kodu yine GPU için derlenir; Linux'ta
+# yazılımla çalışan Vulkan sürücüsü (Mesa lavapipe) kurulur ve Vulkan
+# çekirdekleri gerçekten çalıştırılır. Diğer platformlarda program GPU
+# bulamaz ve CPU kopyasına geçer (bkz. tests/run.sh). PostgreSQL sunucusu
+# yalnızca Linux'ta açılabildiği için postgres testi diğerlerinde atlanır.
 
 name: CI
 
@@ -61,6 +63,7 @@ jobs:
             libpq
             sqlite
             libcurl
+            libvulkan-headers
             cmake
             ninja
           init-shell: bash
@@ -115,6 +118,16 @@ jobs:
       - name: coreutils (gtimeout)
         if: runner.os == 'macOS'
         run: brew install coreutils
+
+      # Linux: Vulkan yükleyicisi + Mesa'nın yazılımla çalışan sürücüsü
+      # (lavapipe). @GPU testlerinin "@vulkan" çalışmaları bununla gerçekten
+      # Vulkan'da olur (MARLIN_TEST_VULKAN=1 bunu denetler).
+      - name: Vulkan (lavapipe)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libvulkan1 mesa-vulkan-drivers
+          echo "MARLIN_TEST_VULKAN=1" >> "$GITHUB_ENV"
 
       - name: PostgreSQL test sunucusu
         if: runner.os == 'Linux'

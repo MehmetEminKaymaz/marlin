@@ -28,13 +28,14 @@ namespace marlin {
 /// oluşturulmadan önce çağrılmalıdır.
 void registerLoweringInterfaces(mlir::DialectRegistry& registry);
 
-/// GPU çekirdeklerini derleyecek araçlar (NVIDIA: CUDA araç takımının
-/// libdevice'ı). Derleyicinin çalıştığı makinede aranır: CUDA_ROOT /
-/// CUDA_HOME / CUDA_PATH ya da MLIR derlenirken bulunan yol.
+/// GPU çekirdeklerini derleyecek araçlar. Vulkan (SPIR-V) çekirdekleri
+/// MLIR'in kendisiyle her zaman üretilir. NVIDIA (PTX) çekirdekleri için CUDA
+/// araç takımının libdevice'ı gerekir; derleyicinin çalıştığı makinede
+/// aranır: CUDA_ROOT / CUDA_HOME / CUDA_PATH ya da MLIR derlenirken bulunan
+/// yol. Yoksa program NVIDIA kartta da Vulkan'la çalışır.
 struct GpuToolchain {
-    bool available = false;
+    bool cuda = false;
     std::string toolkit;   // CUDA araç takımının dizini
-    std::string format;    // gömülen çekirdeğin biçimi: "isa" (PTX; sürücü derler)
     std::string missing;   // bulunamadıysa sebebi
 };
 GpuToolchain findGpuToolchain();

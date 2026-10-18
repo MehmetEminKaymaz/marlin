@@ -1,0 +1,30 @@
+// Çok büyük paralel döngü: GPU'da tek seferde başlatılabilecek blok sayısının
+// (Vulkan'da en az 65535) üstünde iş parçacığı. 17 milyon eleman, 256'lık
+// bloklarla 66407 blok eder; Vulkan arka ucu başlatmayı parçalara böler.
+
+@GPU
+func doldur(int n) -> matrix<int, 1> {
+    matrix<int, 1> m = zeros(n);
+    parallel for i in 0 .. n {
+        m[i] = i % 7;
+    }
+    return m;
+}
+
+func main() -> void {
+    int n = 17000000;
+    matrix<int, 1> m = doldur(n);
+    print(sum(m));
+    // Son blokların da çalıştığını görmek için uçtaki elemanlar ayrıca
+    // (65535 * 256: ilk parçadan sonraki ilk eleman).
+    print(m[0]);
+    print(m[65535 * 256]);
+    print(m[n - 7]);
+    print(m[n - 1]);
+}
+
+// output: 50999994
+// output: 0
+// output: 4
+// output: 3
+// output: 2

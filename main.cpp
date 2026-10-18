@@ -110,9 +110,10 @@ static const char* const kUsage =
     "                   exe        calistirilabilir dosya (varsayilan)\n"
     "  -O0 .. -O3     LLVM optimizasyon seviyesi (varsayilan: -O0)\n"
     "  --gpu=auto     (varsayilan) @GPU fonksiyonlar GPU icin de derlenir; program\n"
-    "                 calisirken GPU varsa onu, yoksa CPU kopyasini kullanir.\n"
-    "                 Derleme makinesinde CUDA arac takimi yoksa yalnizca CPU icin.\n"
-    "  --gpu=on       auto gibi, ama CUDA arac takimi yoksa hata verir\n"
+    "                 calisirken GPU varsa onu (NVIDIA: CUDA, diger: Vulkan), yoksa\n"
+    "                 CPU kopyasini kullanir. NVIDIA cekirdekleri derleme\n"
+    "                 makinesinde CUDA arac takimi varsa uretilir.\n"
+    "  --gpu=on       auto gibi; CUDA arac takimi yoksa uyarir\n"
     "  --gpu=off      @GPU fonksiyonlari yalnizca CPU icin derler\n"
     "  --print-ast    semantik analizden gecmis AST'yi yazdirir\n"
     "  --lsp          dil sunucusu olarak calisir (editor eklentisi icin; tek basina kullanilir)\n";
@@ -270,19 +271,18 @@ int main(int argc, char** argv) {
     mlir::OpBuilder mlirBuilder(&mlirCtx);
     mlir::ModuleOp moduleOp = mlir::ModuleOp::create(mlirBuilder.getUnknownLoc());
 
-    // GPU çekirdekleri ancak derleme makinesinde araçları (CUDA araç takımı)
-    // varsa derlenebilir. Yoksa @GPU fonksiyonlar yalnızca CPU için derlenir
-    // (--gpu=on'da hata). Derlenen program her durumda her makinede çalışır:
-    // GPU yoksa CPU kopyasını kullanır.
+    // @GPU fonksiyonların çekirdekleri Vulkan (SPIR-V) için her zaman,
+    // NVIDIA (PTX) için derleme makinesinde CUDA araç takımı varsa derlenir.
+    // Derlenen program her makinede çalışır: uygun GPU yoksa CPU ikizini
+    // kullanır. --gpu=off: yalnızca CPU.
     const marlin::GpuToolchain gpuToolchain =
         gpuMode == GpuMode::Off ? marlin::GpuToolchain{} : marlin::findGpuToolchain();
-    if (gpuMode == GpuMode::On && !gpuToolchain.available) {
-        std::cerr << "--gpu=on: GPU cekirdekleri derlenemiyor: " << gpuToolchain.missing << "\n";
-        return 1;
-    }
+    if (gpuMode == GpuMode::On && !gpuToolchain.cuda)
+        std::cerr << "uyari: NVIDIA cekirdekleri derlenmeyecek (" << gpuToolchain.missing
+                  << "); NVIDIA kartta da Vulkan kullanilacak\n";
 
     MLIRGenerator generator(mlirCtx, mlirBuilder, moduleOp);
-    generator.setGpuEnabled(gpuToolchain.available);
+    generator.setGpuEnabled(gpuMode != GpuMode::Off);
     astRoot->accept(generator);
 
     // Üretilen modülü doğrula: kod üretimindeki hatalar (eksik terminator, tip

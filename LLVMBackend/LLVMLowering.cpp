@@ -1,6 +1,7 @@
 #include "LLVMLowering.h"
 
 #include "GpuOffload.h"
+#include "GpuSpirv.h"
 #include "NestedParallel.h"
 #include "ParallelMatmul.h"
 
@@ -167,7 +168,10 @@ static void bindTaskBridges(mlir::ModuleOp module) {
 //                              içinde gpu.func (çekirdek); yerinde
 //                              gpu.launch_func çağrısı kalır. Çekirdeğin
 //                              çağırdığı fonksiyonlar da modüle kopyalanır.
-//   G3  gpu-async-region       CPU tarafındaki gpu işlemlerini (alloc, memcpy,
+//   G2b SPIR-V                 her gpu.module'ün Vulkan sürümü (GpuSpirv.h);
+//                              @GPU çağrılarına çekirdeklerin gereksinimleri
+//                              yazılır.
+//   G3  gpu-async-region      CPU tarafındaki gpu işlemlerini (alloc, memcpy,
 //                              launch_func) birbirine sıralı bağlar ve CPU'nun
 //                              sonucu okumadan önce GPU'yu beklemesini sağlar.
 //   G4  convert-gpu-to-nvvm    gpu.module'ün içi → NVIDIA'ya özgü llvm
@@ -177,8 +181,12 @@ static void bindTaskBridges(mlir::ModuleOp module) {
 //   G6  gpu-module-to-binary   gpu.module → PTX (NVPTX kod üretici; bkz.
 //                              findGpuToolchain); programın içine gömülür,
 //                              sürücü çalışırken derler.
-// Çekirdeklerin matematik fonksiyonları (sin, exp ...) CUDA araç takımındaki
-// libdevice'tan gelir: o yoksa çekirdek derlenemez.
+//   G7  paket                  PTX + SPIR-V + çekirdek tablosu tek nesnede
+//                              (runtime/gpu_package.h); çalışma zamanı
+//                              makinedeki GPU'ya göre birini kullanır.
+// G4 ve G6 yalnızca CUDA araç takımı varsa çalışır: NVIDIA çekirdeklerinin
+// matematik fonksiyonları (sin, exp ...) onun libdevice'ından gelir. Yoksa
+// paket yalnızca SPIR-V içerir.
 //
 // Çekirdek her zaman PTX metni olarak gömülür; NVIDIA sürücüsü onu program
 // çalışırken o makinedeki kartın makine koduna çevirir (ve ön belleğinde
@@ -200,9 +208,8 @@ GpuToolchain findGpuToolchain() {
         result.missing = "CUDA arac takiminda libdevice yok (" + std::string(libdevice) + ")";
         return result;
     }
-    result.available = true;
+    result.cuda = true;
     result.toolkit = toolkit;
-    result.format = "isa"; // PTX
     return result;
 }
 
@@ -244,9 +251,23 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, const GpuToolchain* gpu, bool sto
         pm.addPass(createGpuKernelPreparePass());
         pm.addPass(mlir::createGpuKernelOutliningPass());
     }
+    if (mlir::failed(pm.run(module))) return false;
     // (--emit=gpu-mlir burada durur: CPU kodu ve GPU çekirdekleri ayrılmış,
     // ikisi de hâlâ okunabilir üst seviye MLIR.)
-    if (stopAfterGpuSplit) return mlir::succeeded(pm.run(module));
+    if (stopAfterGpuSplit) return true;
+
+    // G2b — çekirdeklerin Vulkan sürümü (SPIR-V) ve her @GPU çağrısının
+    //       gereksinimleri (bkz. GpuSpirv.h). CUDA araç takımı yoksa
+    //       çekirdekler şimdiden pakete konur; aşağıdaki NVIDIA adımları
+    //       (G4, G6) atlanır.
+    const bool cuda = usesGpu && gpu->cuda;
+    GpuPackages gpuPackages;
+    if (usesGpu) {
+        gpuPackages = buildGpuPackages(module, /*noCuda=*/!cuda);
+        resolveGpuRequirements(module, gpuPackages);
+        if (!cuda) packGpuBinaries(module, gpuPackages);
+    }
+    pm.clear();
 
     // C) Paralel döngüler (scf.parallel) → iş parçacıkları.
     //    async-parallel-for, yineleme aralığını parçalara böler ve her parçayı
@@ -309,6 +330,8 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, const GpuToolchain* gpu, bool sto
     if (usesGpu) {
         // G3 — yalnızca CPU fonksiyonlarında.
         pm.addNestedPass<mlir::func::FuncOp>(mlir::createGpuAsyncRegionPass());
+    }
+    if (cuda) {
         // G4 — yalnızca GPU modüllerinde. Aşağıdaki matematik dönüşümlerinden
         //      ÖNCE gelmeli: GPU'da sin/cos gibi işlemlerin karşılığı libm
         //      değil libdevice'tır.
@@ -335,14 +358,16 @@ bool lowerToLLVMDialect(mlir::ModuleOp module, const GpuToolchain* gpu, bool sto
     pm.addPass(mlir::createConvertFuncToLLVMPass());
     pm.addPass(mlir::createConvertControlFlowToLLVMPass());
 
-    if (usesGpu) {
-        pm.addPass(mlir::createGpuToLLVMConversionPass()); // G5
-        mlir::GpuModuleToBinaryPassOptions binary;          // G6
+    if (usesGpu) pm.addPass(mlir::createGpuToLLVMConversionPass()); // G5
+    if (cuda) {
+        mlir::GpuModuleToBinaryPassOptions binary; // G6
         binary.toolkitPath = gpu->toolkit;
-        binary.compilationTarget = gpu->format;
+        binary.compilationTarget = "isa"; // PTX
         pm.addPass(mlir::createGpuModuleToBinaryPass(binary));
     }
     if (mlir::failed(pm.run(module))) return false;
+    // G7 — PTX, SPIR-V ile birlikte pakete (gpu_package.h).
+    if (cuda) packGpuBinaries(module, gpuPackages);
 
     // 5) Fonksiyon adreslerinin tip köprüleri → ptrtoint / inttoptr; görevlerin
     //    tipli runtime köprüleri → tek C fonksiyonu.
