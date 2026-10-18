@@ -7,12 +7,13 @@
 #ifndef _WIN32
 
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE  // glibc: accept4, flockfile
+#define _GNU_SOURCE  // glibc: accept4, flockfile, sched_getaffinity
 #endif
 
 #include "platform.h"
 
 #include <dlfcn.h>
+#include <sched.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -93,6 +94,50 @@ void mr_sleep_seconds(double seconds) {
 }
 
 // ---------------------------------------------------------------------------
+// İş parçacıkları
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    void (*fn)(void*);
+    void* arg;
+} ThreadStart;
+
+static void* thread_main(void* argument) {
+    ThreadStart start = *(ThreadStart*)argument;
+    free(argument);
+    start.fn(start.arg);
+    return NULL;
+}
+
+int mr_thread_start(void (*fn)(void*), void* arg) {
+    ThreadStart* start = malloc(sizeof *start);
+    if (!start) return 0;
+    start->fn = fn;
+    start->arg = arg;
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    pthread_attr_setstacksize(&attributes, 8u << 20);
+    pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+    pthread_t thread;
+    const int rc = pthread_create(&thread, &attributes, thread_main, start);
+    pthread_attr_destroy(&attributes);
+    if (rc != 0) free(start);
+    return rc == 0;
+}
+
+int mr_cpu_count(void) {
+#ifdef __linux__
+    cpu_set_t set;
+    if (sched_getaffinity(0, sizeof set, &set) == 0) {
+        const int n = CPU_COUNT(&set);
+        if (n > 0) return n;
+    }
+#endif
+    const long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (int)n : 1;
+}
+
+// ---------------------------------------------------------------------------
 // Kilit ve koşul değişkeni
 // ---------------------------------------------------------------------------
 
@@ -105,6 +150,7 @@ void mr_cond_init(mr_cond* c) { pthread_cond_init(c, NULL); }
 void mr_cond_destroy(mr_cond* c) { pthread_cond_destroy(c); }
 void mr_cond_wait(mr_cond* c, mr_mutex* m) { pthread_cond_wait(c, m); }
 void mr_cond_signal(mr_cond* c) { pthread_cond_signal(c); }
+void mr_cond_broadcast(mr_cond* c) { pthread_cond_broadcast(c); }
 
 // ---------------------------------------------------------------------------
 // TCP soketleri

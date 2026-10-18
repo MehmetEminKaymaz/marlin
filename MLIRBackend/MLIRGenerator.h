@@ -108,7 +108,6 @@ class MLIRGenerator : public ASTVisitor {
     mlir::Value lastValue; // son ziyaret edilen ifadenin değeri
     int         stringLiteralCount = 0;
     int         lambdaCounter      = 0;
-    bool        usesParallel       = false;
     bool        usesGpu            = false;
     bool        usesTasks          = false;
     // Üretilmekte olan fonksiyon bir coroutine (async.func) mu? main mi?
@@ -152,10 +151,6 @@ public:
           listManager(ctx, runtime),
           matrixManager(ctx, runtime) {}
 
-    /// Program CPU'da paralel çalışan kod (`parallel for` ya da matris çarpımı)
-    /// içeriyor mu? (İçeriyorsa çalıştırılabilir dosyaya iş parçacığı çalışma
-    /// zamanı da bağlanmalıdır.)
-    bool usesParallelLoops() const { return usesParallel || usesTasks; }
     /// Program `marl` ile görev başlatıyor mu? (Başlatıyorsa main bittiğinde
     /// süreç, çalışan görevleri beklemeden kapanmalıdır; bkz. LLVMLowering.)
     bool usesTaskCode() const { return usesTasks; }

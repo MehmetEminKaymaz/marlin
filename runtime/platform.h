@@ -37,9 +37,9 @@ const char* mr_arg(int index);
 char* mr_getenv(const char* name);
 
 // Süreci HEMEN bitirir: kapanış kodları (atexit, kütüphanelerin yıkıcıları)
-// çalışmaz. Çalışan görevler beklenmez; MLIR'in iş parçacığı havuzunun
-// yıkıcısı bütün görevlerin bitmesini bekler ve bitmeyen bir görev (ör. HTTP
-// sunucusu) varsa sonsuza dek beklerdi. POSIX'te _Exit; Windows'ta _Exit bile
+// çalışmaz. Çalışan görevler beklenmez (görev başlatan program main bitince
+// böyle kapanır; bitmeyen bir görev, ör. HTTP sunucusu, kapanışı
+// bekletmemeli). POSIX'te _Exit; Windows'ta _Exit bile
 // DLL'lerin kapanış kodunu çalıştırdığı için TerminateProcess. Açık akışları
 // çağıran boşaltmalıdır (fflush).
 _Noreturn void mr_exit_now(int code);
@@ -87,7 +87,20 @@ double mr_wall_seconds(void);
 void mr_sleep_seconds(double seconds);
 
 // ---------------------------------------------------------------------------
-// İş parçacıkları: kilit ve koşul değişkeni
+// İş parçacıkları
+// ---------------------------------------------------------------------------
+
+// fn(arg)'ı yeni bir iş parçacığında çalıştırır. İş parçacığı beklenmez
+// (detached); fn dönünce kendiliğinden biter. Yığın 8 MB'tır (macOS'un
+// varsayılanı 512 KB'tır; ana iş parçacığıyla aynı olsun). Başarılıysa 1.
+int mr_thread_start(void (*fn)(void*), void* arg);
+
+// Sürecin kullanabileceği işlemci (donanım iş parçacığı) sayısı, en az 1.
+// Linux'ta sürecin işlemci kısıtına (taskset, konteyner) uyar.
+int mr_cpu_count(void);
+
+// ---------------------------------------------------------------------------
+// Kilit ve koşul değişkeni
 // ---------------------------------------------------------------------------
 
 #ifdef _WIN32
@@ -107,6 +120,7 @@ void mr_cond_init(mr_cond* c);
 void mr_cond_destroy(mr_cond* c);
 void mr_cond_wait(mr_cond* c, mr_mutex* m);
 void mr_cond_signal(mr_cond* c);
+void mr_cond_broadcast(mr_cond* c);
 
 // ---------------------------------------------------------------------------
 // TCP soketleri

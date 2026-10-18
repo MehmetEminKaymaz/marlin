@@ -40,14 +40,12 @@ public:
     /// clang) ile bağlayıp çalıştırılabilir dosya üretir; C çalışma zamanı ve
     /// platformun sistem kütüphaneleri böylece otomatik eklenir.
     /// `runtimeLib`: marlin çalışma zamanı kütüphanesi (runtimeLibraryName()).
-    /// `needsThreads`: program paralel döngü içeriyor; iş parçacığı çalışma
-    /// zamanı da bağlanır.
-    /// `needsGpu`: program GPU'da çalışan kod içeriyor; GPU çalışma zamanı da
-    /// bağlanır.
+    /// `needsGpu`: program GPU'da çalışan kod içeriyor (macOS'ta MoltenVK
+    /// programın yanına kopyalanır).
     /// `extraLibs`: programın kullandığı standart kütüphane modüllerinin dış C
     /// kütüphaneleri (tam yol; ör. libpq).
     static bool link(const std::string& objectPath, const std::string& runtimeLib,
-                     const std::string& exePath, bool needsThreads, bool needsGpu,
+                     const std::string& exePath, bool needsGpu,
                      const std::vector<std::string>& extraLibs, std::string& error);
 
     /// Çalışma zamanı kütüphanesinin yolunu bulur: önce MARLIN_RUNTIME ortam

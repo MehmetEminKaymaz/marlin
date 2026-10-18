@@ -31,13 +31,24 @@ Linux)
                 esac ;;
             esac
         done < <(ldd "$f" 2>&1)
+        # Arama yolları (RPATH / RUNPATH) yalnızca pakete göreli olmalı: mutlak
+        # bir yol derleme makinesinde var olduğu için ldd'de hata görünmez.
+        while read -r entry; do
+            case "$entry" in
+            '$ORIGIN'*) ;;
+            *) bad "$(basename "$f"): paket disi arama yolu $entry" ;;
+            esac
+        done < <(readelf -d "$f" | sed -n 's/.*(R[UN]*PATH).*\[\(.*\)\]$/\1/p' | tr ':' '\n')
     done
     ;;
 Darwin)
     for f in "$root"/bin/* "$root"/lib/marlin/*.dylib; do
         [ -f "$f" ] && [ ! -L "$f" ] || continue
-        # Bağımlılıklar: sistem ya da pakette bulunan @rpath / @loader_path adları
+        # Bağımlılıklar: sistem ya da pakette bulunan @rpath / @loader_path adları.
+        # (otool -L, kütüphanenin kendi kimliğini de listeler; o atlanır.)
+        id="$(otool -D "$f" | tail -n +2)"
         while read -r dep; do
+            [ "$dep" = "$id" ] && continue
             case "$dep" in
             /usr/lib/*|/System/*) ;;
             @rpath/*|@loader_path/*|@executable_path/*)

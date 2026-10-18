@@ -7,15 +7,17 @@
 #
 # Girdiler (install(CODE) ile verilir):
 #   MARLIN_BUNDLE_EXECUTABLES  derleme dizinindeki marlin_lang
-#   MARLIN_BUNDLE_LIBRARIES    kendisi de pakete giren kütüphaneler
-#                              (MLIR async runtime, MoltenVK)
+#   MARLIN_BUNDLE_LIBRARIES    kendisi de pakete giren kütüphaneler (MoltenVK)
 #   MARLIN_BUNDLE_DIRS         bağımlılıkların aranacağı ek dizinler
 #   MARLIN_BUNDLE_DEST         hedef dizin (önekten göreli)
+#   MARLIN_BUNDLE_RPATH_BIN    bin/'den kütüphane dizinine göreli yol (Linux rpath'i)
+
+# (Kurulum betikleri projenin politikalarını almaz.)
+cmake_policy(VERSION 3.25)
 
 set(dest "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/${MARLIN_BUNDLE_DEST}")
 
 # Kütüphanenin kendisi: bağlantı (symlink) ise içeriği bu adla kopyalanır.
-# (Programa yazılan ad sürümlü bağlantının adı olabilir: libX.so.19.1.)
 foreach(library IN LISTS MARLIN_BUNDLE_LIBRARIES)
     get_filename_component(name "${library}" NAME)
     file(REAL_PATH "${library}" real)
@@ -53,6 +55,32 @@ foreach(dependency IN LISTS resolved)
     # (Linux'ta bulunan yol genellikle sürümlü bağlantıdır; zincir korunur.)
     file(INSTALL "${dependency}" DESTINATION "${dest}" FOLLOW_SYMLINK_CHAIN)
 endforeach()
+
+# Linux: kütüphaneler yalnızca paketin içinde aranmalı. CMake kurulumda
+# derleyicinin rpath'ine araç takımından gelen dizinleri (ör. conda ortamının
+# lib'i) bırakabilir, kopyalanan kütüphanelerde de derlendikleri yerin mutlak
+# yolları olabilir; o dizin derleme makinesinde bulunduğu sürece hata
+# görünmez. Hepsi pakete göreli yazılır. (Rpath'i hiç olmayan dosyaya
+# dokunulmaz: CMake var olmayan kaydı ekleyemez.)
+if(CMAKE_HOST_UNIX AND NOT CMAKE_HOST_APPLE)
+    file(GLOB executables "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/*")
+    file(GLOB libraries "${dest}/*.so*")
+    foreach(file IN LISTS executables libraries)
+        if(IS_SYMLINK "${file}")
+            continue()
+        endif()
+        file(READ_ELF "${file}" RPATH old_rpath RUNPATH old_runpath CAPTURE_ERROR elf_error)
+        if(elf_error OR (NOT old_rpath AND NOT old_runpath))
+            continue()
+        endif()
+        if(file IN_LIST executables)
+            set(new_rpath "\$ORIGIN/${MARLIN_BUNDLE_RPATH_BIN}")
+        else()
+            set(new_rpath "\$ORIGIN")
+        endif()
+        file(RPATH_SET FILE "${file}" NEW_RPATH "${new_rpath}")
+    endforeach()
+endif()
 
 # macOS: kurulumda yolları değiştirilen (rpath) dosyaların imzası bozulur;
 # Apple Silicon imzasız ya da bozuk imzalı kodu çalıştırmaz. Hepsi geçici

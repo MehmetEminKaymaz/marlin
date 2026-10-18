@@ -190,6 +190,41 @@ void mr_sleep_seconds(double seconds) {
 }
 
 // ---------------------------------------------------------------------------
+// İş parçacıkları
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    void (*fn)(void*);
+    void* arg;
+} ThreadStart;
+
+static DWORD WINAPI thread_main(LPVOID argument) {
+    ThreadStart start = *(ThreadStart*)argument;
+    free(argument);
+    start.fn(start.arg);
+    return 0;
+}
+
+int mr_thread_start(void (*fn)(void*), void* arg) {
+    ThreadStart* start = malloc(sizeof *start);
+    if (!start) return 0;
+    start->fn = fn;
+    start->arg = arg;
+    HANDLE thread = CreateThread(NULL, 8u << 20, thread_main, start, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    if (!thread) {
+        free(start);
+        return 0;
+    }
+    CloseHandle(thread); // (beklenmez)
+    return 1;
+}
+
+int mr_cpu_count(void) {
+    const DWORD n = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    return n > 0 ? (int)n : 1;
+}
+
+// ---------------------------------------------------------------------------
 // Kilit ve koşul değişkeni (SRWLOCK ve CONDITION_VARIABLE bırakılmaz)
 // ---------------------------------------------------------------------------
 
@@ -204,6 +239,7 @@ void mr_cond_wait(mr_cond* c, mr_mutex* m) {
     SleepConditionVariableSRW((PCONDITION_VARIABLE)c, (PSRWLOCK)m, INFINITE, 0);
 }
 void mr_cond_signal(mr_cond* c) { WakeConditionVariable((PCONDITION_VARIABLE)c); }
+void mr_cond_broadcast(mr_cond* c) { WakeAllConditionVariable((PCONDITION_VARIABLE)c); }
 
 // ---------------------------------------------------------------------------
 // TCP soketleri (Winsock)

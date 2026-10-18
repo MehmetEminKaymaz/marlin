@@ -1,7 +1,7 @@
 // Görevler (task<T>) — `marl f(x)` ile başlatılan görevin handle'ı.
 //
-// Görevin kendisi MLIR'in async çalışma zamanında yaşar (libmlir_async_runtime:
-// iş parçacığı havuzu, görevlerin bitişini bildiren nesneler). Derleyici
+// Görevin kendisi async çalışma zamanında yaşar (marlin_async.c: iş parçacığı
+// havuzu, görevlerin bitişini bildiren nesneler). Derleyici
 // `marl f(x)` için bir async.execute üretir; onun sonucu bir AsyncValue'dur
 // (sonucu olmayan görevde AsyncToken). marlin tarafında ise görev, string
 // gibi başvuru sayılan bir handle'dır (bkz. MLIRBackend/MLIRGeneratorTask.cpp):
@@ -23,7 +23,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-// MLIR async çalışma zamanının C arayüzü (mlir/ExecutionEngine/AsyncRuntime.h).
+// Async çalışma zamanının C arayüzü (marlin_async.c; MLIR'in
+// mlir/ExecutionEngine/AsyncRuntime.h arayüzüyle aynı).
 extern void mlirAsyncRuntimeAddRef(void* object, int64_t count);
 extern void mlirAsyncRuntimeDropRef(void* object, int64_t count);
 extern int8_t* mlirAsyncRuntimeGetValueStorage(void* value);

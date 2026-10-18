@@ -25,7 +25,7 @@ lib/marlin/              çalışma zamanı, standart kütüphane (std/), gerekl
 | macOS | Xcode Command Line Tools (`xcode-select --install`) |
 | Windows | Visual Studio Build Tools ("C++ ile masaüstü geliştirme") ve PATH'te `clang` (LLVM) |
 
-Henüz pakette olmayanlar: `std.postgres`, `std.sqlite`, `std.http.client` (dış kütüphane ister). Paralel döngü ya da görev kullanan programlar paketteki bir kütüphaneye bağlıdır; derlenen programı başka makineye taşırken şimdilik paket de orada olmalı.
+Derlenen program tek bir dosyadır: başka bir makineye kopyalanıp çalıştırılabilir (paralel döngü, görev ve GPU kodu dahil; macOS'ta GPU kullanan programın yanına `libMoltenVK.dylib` de konur). Henüz pakette olmayanlar: `std.postgres`, `std.sqlite`, `std.http.client` (dış kütüphane ister).
 
 Paketi kendin üretmek için: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMARLIN_DEV_PATHS=OFF`, `cmake --build build`, sonra `cd build && cpack`. Kurulu paketin başka makinede çalışacağını `bash tests/paket_denetle.sh <paket dizini>` denetler.
 
@@ -1204,7 +1204,6 @@ print("sure:", time() - once, "saniye");
 | `bash: ./deneme: cannot execute` ya da Windows'ta açılmıyor | Dosya bir Linux programı. WSL terminalinde `./deneme` ile çalıştır. |
 | `run.sh: $'\r': command not found` | Dosya Windows satır sonlarıyla kaydedilmiş. Düzelt: `sed -i 's/\r$//' tests/run.sh` |
 | `Calisma zamani kutuphanesi (libmarlinrt.a) bulunamadi` | Derleyiciyi `cmake-build-debug` dışına kopyaladıysan kütüphaneyi bulamaz. Yolunu ver: `export MARLIN_RUNTIME=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/cmake-build-debug/libmarlinrt.a` |
-| `error while loading shared libraries: libmlir_async_runtime.so` | `parallel for` içeren programlar LLVM derlemendeki bir kütüphaneyi kullanır ve yolunu içlerinde taşır. LLVM dizinini taşıdıysan ya da programı başka bir makineye kopyaladıysan bulunamaz; derleyiciyi yeniden derleyip programı yeniden üret. |
 | Program çalışırken `... failed with 'CUDA_ERROR_...'` yazıyor | GPU'da hata oldu. GPU belleği yetmiyor olabilir; ya da `parallel for` içinde sınır dışı indeks vardır. `MARLIN_GPU=cpu` ile çalıştırıp dene. |
 | `@GPU` program GPU'yu kullanmıyor (CPU kadar yavaş) | `MARLIN_GPU_REPORT=1` ile çalıştır: hangi arka ucun seçildiğini yazar. `cpu` yazıyorsa makinede NVIDIA sürücüsü (`nvidia-smi`) ve Vulkan sürücüsü bulunamamıştır, ya da GPU fonksiyonun istediğini (ör. `float64`) yapamıyordur. NVIDIA kartta `vulkan` yazıyorsa derleme makinesinde CUDA araç takımı yoktu (`--gpu=on` ile derle: sebebi yazar). |
 | `Vulkan: ... baytlik GPU tamponu aygitin sinirini asiyor` | Matris, Vulkan aygıtının tek tamponda izin verdiği boyuttan büyük. Daha küçük parçalarla çalış ya da `MARLIN_GPU=cpu` kullan. |
@@ -1266,7 +1265,8 @@ runtime/            Derlenen programlara eklenen C kütüphanesi (libmarlinrt.a)
   marlin_rt.c          print, stringler, hata mesajları
   std_*.c             standart kütüphane modüllerinin C ile yazılmış kısmı
   http_parser.*       HTTP/1.1 istek ayrıştırıcısı (soket kullanmaz; std_http.c kullanır)
-  marlin_task.c       görev handle'ı (task<T>): MLIR async çalışma zamanının değerini sarar
+  marlin_task.c       görev handle'ı (task<T>): async çalışma zamanının değerini sarar
+  marlin_async.c      MLIR async dialect'inin çalışma zamanı: iş parçacığı havuzu, token / value / group
   marlin_gpu.c        @GPU çalışma zamanı: arka ucu seçer (CUDA / Vulkan / CPU), CUDA arka ucu
   marlin_gpu_vulkan.c Vulkan arka ucu (bellek, çekirdek hatları, başlatma)
   gpu_package.h       derleyicinin gömdüğü çekirdek paketinin biçimi

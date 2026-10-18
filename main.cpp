@@ -366,7 +366,7 @@ int main(int argc, char** argv) {
               marlin::NativeCodegen::link(objectPath.str().str(), runtimeLib,
                                          outputPath.empty() ? marlin::NativeCodegen::defaultExecutableName()
                                                             : outputPath,
-                                         generator.usesParallelLoops(), generator.usesGpuCode(),
+                                         generator.usesGpuCode(),
                                          extraLibs, error);
     llvm::sys::fs::remove(objectPath);
     if (!ok) {

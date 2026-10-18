@@ -147,72 +147,6 @@ static bool isSharedLibrary(llvm::StringRef path) {
     return path.contains(".so") || path.ends_with(".dylib");
 }
 
-// MLIR'in çalışma zamanı kütüphanelerinin aranacağı yerler: kurulu pakette
-// <önek>/lib/marlin (Windows'ta DLL'ler derleyicinin yanında, <önek>/bin);
-// geliştirme derlemesinde LLVM'in kendi dizinleri.
-struct LibraryDirs {
-    std::string lib; // POSIX: paylaşımlı kütüphane; Windows: içe aktarma kütüphanesi (.lib)
-    std::string bin; // Windows: DLL
-};
-static std::vector<LibraryDirs> mlirRuntimeDirs() {
-    std::vector<LibraryDirs> dirs;
-    if (const std::string package = NativeCodegen::packageLibraryDir(); !package.empty())
-        dirs.push_back({package, compilerDirectory()});
-#ifdef MARLIN_LLVM_LIB_DIR
-    dirs.push_back({MARLIN_LLVM_LIB_DIR, MARLIN_LLVM_BIN_DIR});
-#endif
-    return dirs;
-}
-
-// Dizindeki libX.so / libX.so.N / libX.dylib / libX.N.dylib. Bazı
-// dağıtımlarda (conda) yalnızca sürüm numaralı ad vardır ve -lX onu
-// bulamaz; bu yüzden dosya tam yoluyla verilir. Sürümsüz ad tercih edilir.
-static std::string findSharedLibrary(const std::string& dir, llvm::StringRef name) {
-    const std::string prefix = ("lib" + name).str();
-    std::string found;
-    std::error_code ec;
-    for (llvm::sys::fs::directory_iterator it(dir, ec), end; it != end && !ec; it.increment(ec)) {
-        llvm::StringRef file = llvm::sys::path::filename(it->path());
-        if (!file.starts_with(prefix + ".") || !isSharedLibrary(file)) continue;
-        if (found.empty() || file == prefix + ".so" || file == prefix + ".dylib") found = it->path();
-    }
-    return found;
-}
-
-// MLIR'in çalışma zamanı kütüphanesi (iş parçacığı havuzu): paylaşımlı bir
-// kütüphanedir. POSIX'te dizini çalıştırılabilir dosyaya yazılır (rpath);
-// Windows'ta rpath yoktur, DLL çalıştırılabilir dosyanın yanına kopyalanır
-// (Windows DLL'i önce orada arar).
-static bool addMlirRuntime(const llvm::Triple& triple, llvm::StringRef name, const std::string& exePath,
-                           std::vector<std::string>& args, std::string& error) {
-    for (const LibraryDirs& dirs : mlirRuntimeDirs()) {
-        if (triple.isOSWindows()) {
-            const std::string importLib = (llvm::Twine(dirs.lib) + "/" + name + ".lib").str();
-            const std::string dll = (llvm::Twine(dirs.bin) + "/" + name + ".dll").str();
-            if (!llvm::sys::fs::exists(importLib) || !llvm::sys::fs::exists(dll)) continue;
-            args.push_back(importLib);
-            llvm::SmallString<256> target(exePath);
-            llvm::sys::path::remove_filename(target);
-            llvm::sys::path::append(target, name + ".dll");
-            // (Program derleyicinin dizinine üretiliyorsa DLL zaten oradadır;
-            // dosyayı kendi üstüne kopyalamak onu boşaltırdı.)
-            if (llvm::sys::fs::equivalent(dll, target)) return true;
-            if (std::error_code ec = llvm::sys::fs::copy_file(dll, target)) {
-                error = dll + " kopyalanamadi: " + ec.message();
-                return false;
-            }
-            return true;
-        }
-        const std::string found = findSharedLibrary(dirs.lib, name);
-        if (found.empty()) continue;
-        args.push_back(found);
-        args.push_back("-Wl,-rpath," + dirs.lib);
-        return true;
-    }
-    error = (name + " bulunamadi (derleyici paketinde lib/marlin dizini eksik ya da bozuk)").str();
-    return false;
-}
-
 // MACOS'TA VULKAN: MoltenVK
 //
 // macOS'ta Vulkan sürücüsü yoktur; MoltenVK Vulkan'ı Metal üzerinde
@@ -313,7 +247,7 @@ static bool bundleMoltenVK(const std::string& exePath, std::string& error) {
 // platformun sistem kütüphanelerini ve başlangıç dosyalarını kendisi ekler.
 // Windows'ta clang (MSVC hedefinde lld-link ya da link.exe'yi çağırır).
 bool NativeCodegen::link(const std::string& objectPath, const std::string& runtimeLib,
-                         const std::string& exePath, bool needsThreads, bool needsGpu,
+                         const std::string& exePath, bool needsGpu,
                          const std::vector<std::string>& extraLibs, std::string& error) {
     const llvm::Triple triple = hostTriple();
     const bool windows = triple.isOSWindows();
@@ -345,14 +279,13 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
     }
     args.insert(args.end(), runPaths.begin(), runPaths.end());
 
-    // Paralel döngüler ve görevler MLIR'in iş parçacığı havuzunu kullanır.
-    // GPU'da çalışan kod ayrıca bir kütüphaneye bağlanmaz: GPU katmanı
-    // çalışma zamanı kütüphanesindedir ve sürücüleri (CUDA, Vulkan) program
-    // açıkken kendisi yükler (bkz. runtime/marlin_gpu.c). Böylece program
-    // GPU'su olmayan makinede de açılır. macOS'ta Vulkan'ın kendisi
+    // Paralel döngüler ve görevler (iş parçacığı havuzu) ile GPU katmanı
+    // çalışma zamanı kütüphanesindedir (runtime/marlin_async.c,
+    // runtime/marlin_gpu.c); program başka bir paylaşımlı kütüphaneye
+    // bağlanmaz. GPU sürücüleri (CUDA, Vulkan) program açıkken yüklenir; böylece
+    // program GPU'su olmayan makinede de açılır. macOS'ta Vulkan'ın kendisi
     // (MoltenVK) programın yanına konur.
     if (needsGpu && triple.isOSDarwin() && !bundleMoltenVK(exePath, error)) return false;
-    if (needsThreads && !addMlirRuntime(triple, "mlir_async_runtime", exePath, args, error)) return false;
 
     // Sistem kütüphaneleri en sonda (statik bağlanan dış kütüphaneler de kullanabilir):
     //   POSIX: libm (sin, pow, kayan noktalı % gibi işlemler); macOS'ta libSystem'in
@@ -362,16 +295,20 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
         args.push_back("-lws2_32");
         args.push_back("-lshell32");
         // C kütüphanesinin DLL hali (msvcrt → ucrt, vcruntime): runtime /MD ile
-        // derlenir, MLIR'in DLL'leri de onu kullanır. clang sürücüsü bağlarken
-        // statik libcmt'yi ekler; ikisi karışınca runtime'ın __imp_ sembolleri
-        // çözülemez. Statik olan dışlanır, DLL olan açıkça bağlanır.
+        // derlenir. clang sürücüsü bağlarken statik libcmt'yi ekler; ikisi
+        // karışınca runtime'ın __imp_ sembolleri çözülemez. Statik olan
+        // dışlanır, DLL olan açıkça bağlanır.
         args.push_back("-Wl,/nodefaultlib:libcmt");
         args.push_back("-lmsvcrt");
     } else {
         args.push_back("-lm");
-        // dlopen (GPU sürücüsünü yüklemek için): glibc 2.34'ten önce ayrı
-        // kütüphanedeydi. macOS'ta libSystem'dedir.
-        if (triple.isOSLinux()) args.push_back("-ldl");
+        // dlopen (GPU sürücüsünü yüklemek için) ve pthread (iş parçacığı
+        // havuzu): glibc 2.34'ten önce ayrı kütüphanelerdeydi. macOS'ta
+        // libSystem'dedir.
+        if (triple.isOSLinux()) {
+            args.push_back("-ldl");
+            args.push_back("-pthread");
+        }
         // macOS: çalışma zamanının Objective-C parçası (platform_apple.m).
         if (triple.isOSDarwin()) args.push_back("-lobjc");
     }

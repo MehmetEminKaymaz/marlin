@@ -303,7 +303,6 @@ void MLIRGenerator::emitParallelFor(ForRangeStmt* node, mlir::Value start, mlir:
     const SemType& iterType = node->iterType;
     // @GPU fonksiyonda döngü GPU'da çalışır; aksi halde iş parçacıklarında.
     const bool onDevice = ctx.onDevice;
-    if (!onDevice) usesParallel = true;
 
     cfManager.buildParallelLoop(
         loc, toIndex(start, iterType, loc), toIndex(end, iterType, loc),
