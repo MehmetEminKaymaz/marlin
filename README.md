@@ -25,7 +25,7 @@ lib/marlin/              çalışma zamanı, standart kütüphane (std/), gerekl
 | macOS | Xcode Command Line Tools (`xcode-select --install`) |
 | Windows | Visual Studio Build Tools ("C++ ile masaüstü geliştirme") ve PATH'te `clang` (LLVM) |
 
-Derlenen program tek bir dosyadır: başka bir makineye kopyalanıp çalıştırılabilir (paralel döngü, görev ve GPU kodu dahil; macOS'ta GPU kullanan programın yanına `libMoltenVK.dylib` de konur). Henüz pakette olmayanlar: `std.postgres`, `std.sqlite`, `std.http.client` (dış kütüphane ister).
+Derlenen program tek bir dosyadır: başka bir makineye kopyalanıp çalıştırılabilir (paralel döngü, görev, GPU kodu ve SQLite dahil). İstisnalar: macOS'ta GPU kullanan programın yanına `libMoltenVK.dylib`, Windows'ta `std.postgres` / `std.http.client` kullanan programın yanına `libpq.dll` / `libcurl.dll` (ve bağımlılıkları) konur. Linux ve macOS'ta bu iki modül sistemin libpq / libcurl kütüphanesini çalışırken yükler.
 
 Paketi kendin üretmek için: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMARLIN_DEV_PATHS=OFF`, `cmake --build build`, sonra `cd build && cpack`. Kurulu paketin başka makinede çalışacağını `bash tests/paket_denetle.sh <paket dizini>` denetler.
 
@@ -940,7 +940,7 @@ web.Reply z = web.request_timeout("GET", url, [], "", 2.0);   // 2 saniye
 - `ok` yanıtın geldiğini söyler; sunucu 404 ya da 500 dese de `ok` doğrudur, kod `status`'tadır. Ağ hataları programı durdurmaz: `ok` yanlış, sebebi `error`'da.
 - HTTPS sertifikası doğrulanır (süresi geçmiş ya da sahte sertifika reddedilir). Yalnızca `http://` ve `https://` adresleri kabul edilir. Yönlendirmeler en fazla 10 kez izlenir; sıkıştırılmış ve parçalı yanıtlar kendiliğinden açılır. Varsayılan zaman aşımı 30 saniye, yanıt en fazla 64 MB.
 - Yanıtın başlık listesi çağıranındır: `free(r.headers)`. İstek gönderen fonksiyon yanıtı bekler; birçok isteği aynı anda göndermek için görevler (`marl`) kullanılır.
-- libcurl ile çalışır: derleyici libcurl bulunarak derlenmelidir (Linux: `libcurl4-openssl-dev`). Bulunamazsa yalnızca `std.http.client` import eden programlar derlenemez.
+- libcurl ile çalışır. Program ona bağlanmaz, ilk istekte yükler: libcurl'ü olmayan makinede de açılır, istekler `ok` yanlış ve sebebiyle döner. Linux'ta sistemin `libcurl.so.4`'ü (`libcurl4` paketi), macOS'ta sistemin libcurl'ü kullanılır; Windows'ta derleyici `libcurl.dll`'i programın yanına koyar. Başka bir kopyayı kullanmak için: `MARLIN_CURL_LIBRARY=<dosya yolu>`.
 - Ayrıştırıcının kaynağı `runtime/http_parser.c`'dir: soket kullanmaz, her kuralın yanında ilgili RFC maddesi yazar.
 
 **JSON (`std.json`, `from_json`, `to_json`)**
@@ -1035,7 +1035,8 @@ func main() -> void {
   ```
 
   İşlem (transaction) için havuzdan bir bağlantı ayrılır: `pg.Conn c = pg.acquire(havuz); ... pg.release(havuz, c);`
-- Sürücüler PostgreSQL'in resmi C kütüphanesi **libpq**'yu ve **SQLite**'ı kullanır (kurulum: `sudo apt install libpq-dev libsqlite3-dev`). Derleyici bu kütüphaneleri bulamadan derlenmişse `import std.postgres` açık bir hata verir. Programa yalnızca kullandığı sürücü bağlanır.
+- **SQLite** derleyicinin çalışma zamanına gömülüdür; hiçbir şey kurmak gerekmez.
+- PostgreSQL sürücüsü PostgreSQL'in resmi C kütüphanesi **libpq**'yu kullanır. Program ona bağlanmaz, ilk bağlantıda yükler: bulunamazsa `connect` / `pool` başarısız olur ve sebebi (kurulum önerisiyle) `error`'dadır. Kurulum: Linux `sudo apt install libpq5`, macOS `brew install libpq`; Windows'ta derleyici `libpq.dll`'i programın yanına koyar. Başka bir kopyayı kullanmak için: `MARLIN_PQ_LIBRARY=<dosya yolu>`.
 
 Kütüphanenin kaynağı `std/` dizinindedir ve okunabilir. Her modül, C ile yazılmış küçük bir çekirdeğin (`runtime/std_*.c`) üzerine marlin ile yazılmıştır; C fonksiyonları `extern func` ile bildirilir. `extern` yalnızca bu dizindeki dosyalarda yazılabilir.
 
@@ -1277,7 +1278,7 @@ tests/              Test programları ve run.sh
 bench/              GPU ölçüm programları ve olc.sh (bkz. "GPU ölçümleri")
 ```
 
-**Gereksinimler** (WSL içinde kurulu olanlar): LLVM/MLIR 19.1.7 (`/home/emin/llvm-project/build-gpu`; X86 ve NVPTX hedefleriyle derlenmiş), ANTLR 4.10 (`/home/emin/antlr-4.10-complete.jar` ve `libantlr4-runtime-dev`), Java, CMake, bir C/C++ derleyicisi. `@GPU` için: NVIDIA çekirdekleri CUDA araç takımıyla (`/usr/local/cuda-12.9`) derlenir; Vulkan arka ucu için Vulkan başlıkları gerekir (`libvulkan-dev`; yoksa CMake `~/marlin-deps` altında da arar). Vulkan yolunu ekran kartı olmadan denemek için `mesa-vulkan-drivers` (lavapipe). Veritabanı sürücüleri için `libpq-dev` ve `libsqlite3-dev` (isteğe bağlı; yoksa CMake bunları `~/marlin-deps` altında da arar, bkz. `tests/pg_test_sunucu.sh`). Bu yollar `CMakeLists.txt` içinde sabit yazılıdır; başka bir makinede derlemek için orada değiştirmek gerekir.
+**Gereksinimler** (WSL içinde kurulu olanlar): LLVM/MLIR 19.1.7 (`/home/emin/llvm-project/build-gpu`; X86 ve NVPTX hedefleriyle derlenmiş), ANTLR 4.10 (`/home/emin/antlr-4.10-complete.jar` ve `libantlr4-runtime-dev`), Java, CMake, bir C/C++ derleyicisi. `@GPU` için: NVIDIA çekirdekleri CUDA araç takımıyla (`/usr/local/cuda-12.9`) derlenir; Vulkan arka ucu için Vulkan başlıkları gerekir (`libvulkan-dev`; yoksa CMake `~/marlin-deps` altında da arar). Vulkan yolunu ekran kartı olmadan denemek için `mesa-vulkan-drivers` (lavapipe). `std.postgres` ve `std.http.client` için yalnızca başlıklar: `libpq-dev`, `libcurl4-openssl-dev` (isteğe bağlı; yoksa CMake bunları `~/marlin-deps` altında da arar, bkz. `tests/pg_test_sunucu.sh`). SQLite'ın kaynağı CMake yapılandırılırken indirilir. Bu yollar `CMakeLists.txt` içinde sabit yazılıdır; başka bir makinede derlemek için orada değiştirmek gerekir.
 
 
 

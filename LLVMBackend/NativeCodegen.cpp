@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cstdlib>
 
+#include "llvm/ADT/StringSet.h"
 #include "llvm/BinaryFormat/MachO.h"
+#include "llvm/Object/COFF.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -142,11 +144,6 @@ std::string NativeCodegen::findRuntimeLibrary(const char* argv0) {
     return "";
 }
 
-// Paylaşımlı kütüphane mi? (Linux .so / .so.N, macOS .dylib)
-static bool isSharedLibrary(llvm::StringRef path) {
-    return path.contains(".so") || path.ends_with(".dylib");
-}
-
 // MACOS'TA VULKAN: MoltenVK
 //
 // macOS'ta Vulkan sürücüsü yoktur; MoltenVK Vulkan'ı Metal üzerinde
@@ -243,12 +240,55 @@ static bool bundleMoltenVK(const std::string& exePath, std::string& error) {
     return true;
 }
 
+// WINDOWS'TA DIŞ KÜTÜPHANELER (libpq, libcurl)
+//
+// Program bu DLL'leri çalışırken yükler (runtime/marlin_library.c) ve
+// Windows onları programın yanında ve sistem dizinlerinde arar. Sistemde
+// bulunmadıkları için derleyicinin yanındaki (paketin bin/ dizinindeki)
+// kopyaları programın yanına konur; DLL'in import tablosundan okunan ve aynı
+// dizinde bulunan bağımlılıkları da (OpenSSL, zlib ...). Derleyicinin
+// yanında olmayan bağımlılık sistemindir (kernel32 ...) ve kopyalanmaz.
+static bool copyDllWithDependencies(llvm::StringRef name, const std::string& fromDir, const std::string& toDir,
+                                    llvm::StringSet<>& copied, std::string& error) {
+    if (!copied.insert(name.lower()).second) return true;
+    llvm::SmallString<256> source(fromDir);
+    llvm::sys::path::append(source, name);
+    if (!llvm::sys::fs::exists(source)) return true;
+    llvm::SmallString<256> target(toDir);
+    llvm::sys::path::append(target, name);
+    // (Program derleyicinin dizinine üretiliyorsa DLL zaten oradadır;
+    // dosyayı kendi üstüne kopyalamak onu boşaltırdı.)
+    if (!llvm::sys::fs::equivalent(source, target)) {
+        if (std::error_code ec = llvm::sys::fs::copy_file(source, target)) {
+            error = std::string(source) + " kopyalanamadi: " + ec.message();
+            return false;
+        }
+    }
+    llvm::Expected<llvm::object::OwningBinary<llvm::object::Binary>> binary =
+        llvm::object::createBinary(source);
+    if (!binary) {
+        llvm::consumeError(binary.takeError());
+        return true;
+    }
+    auto* coff = llvm::dyn_cast<llvm::object::COFFObjectFile>(binary->getBinary());
+    if (!coff) return true;
+    std::vector<std::string> dependencies;
+    for (const llvm::object::ImportDirectoryEntryRef& entry : coff->import_directories()) {
+        llvm::StringRef dependency;
+        if (llvm::Error e = entry.getName(dependency)) llvm::consumeError(std::move(e));
+        else dependencies.push_back(dependency.str());
+    }
+    for (const std::string& dependency : dependencies)
+        if (!copyDllWithDependencies(dependency, fromDir, toDir, copied, error)) return false;
+    return true;
+}
+
 // Bağlayıcı olarak C derleyicisinin sürücüsü çağrılır (cc / clang / gcc): o,
 // platformun sistem kütüphanelerini ve başlangıç dosyalarını kendisi ekler.
 // Windows'ta clang (MSVC hedefinde lld-link ya da link.exe'yi çağırır).
 bool NativeCodegen::link(const std::string& objectPath, const std::string& runtimeLib,
                          const std::string& exePath, bool needsGpu,
-                         const std::vector<std::string>& extraLibs, std::string& error) {
+                         const std::vector<std::string>& sideLibraries, std::string& error) {
     const llvm::Triple triple = hostTriple();
     const bool windows = triple.isOSWindows();
 
@@ -268,16 +308,14 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
     // Sıra önemli: kütüphaneler, onları kullanan nesne dosyasından sonra gelir.
     std::vector<std::string> args = {*linker, objectPath, runtimeLib, "-o", exePath};
 
-    // Standart kütüphanenin dış C kütüphaneleri (veritabanı sürücüleri), tam
-    // yollarıyla. Paylaşımlı kütüphanenin dizini çalışırken de aranır (rpath):
-    // sisteme kurulmadan açılmış bir kütüphane de bulunabilsin.
-    std::vector<std::string> runPaths;
-    for (const std::string& lib : extraLibs) {
-        args.push_back(lib);
-        if (!windows && isSharedLibrary(lib))
-            runPaths.push_back("-Wl,-rpath," + llvm::sys::path::parent_path(lib).str());
+    if (windows) {
+        llvm::SmallString<256> exeDir(exePath);
+        llvm::sys::path::remove_filename(exeDir);
+        if (exeDir.empty()) exeDir = ".";
+        llvm::StringSet<> copied;
+        for (const std::string& dll : sideLibraries)
+            if (!copyDllWithDependencies(dll, compilerDirectory(), std::string(exeDir), copied, error)) return false;
     }
-    args.insert(args.end(), runPaths.begin(), runPaths.end());
 
     // Paralel döngüler ve görevler (iş parçacığı havuzu) ile GPU katmanı
     // çalışma zamanı kütüphanesindedir (runtime/marlin_async.c,

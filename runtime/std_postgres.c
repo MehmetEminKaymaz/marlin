@@ -19,6 +19,9 @@
 // özel). Sorgu hataları (sözdizimi, kısıt ihlali ...) programı durdurmaz;
 // sonucun ok / error / code (SQLSTATE) alanlarındadır. Programı yalnızca
 // kullanım hataları durdurur (sınır dışı satır / sütun).
+//
+// libpq programa bağlanmaz, ilk bağlantıda yüklenir (marlin_rt_load_library):
+// yüklenemezse bağlantı kurulamamış sayılır ve sebebi c_error'dadır.
 
 #include "marlin_rt.h"
 
@@ -26,6 +29,50 @@
 #include "platform.h"
 #include <stdlib.h>
 #include <string.h>
+
+// Kullanılan libpq fonksiyonları (tipleri libpq-fe.h'deki bildirimlerinden).
+#define PQ_FUNCTIONS(X)                                                        \
+    X(connectdb) X(status) X(errorMessage) X(finish) X(setNoticeProcessor)     \
+    X(exec) X(execParams) X(resultStatus) X(clear) X(resultErrorMessage)       \
+    X(resultErrorField) X(ntuples) X(nfields) X(cmdTuples) X(fnumber)          \
+    X(fname) X(getisnull) X(getvalue) X(getlength)
+
+static struct {
+#define PQ_FIELD(name) __typeof__(PQ##name)* name;
+    PQ_FUNCTIONS(PQ_FIELD)
+#undef PQ_FIELD
+} pq;
+
+static MarlinLibrary libpq;
+
+static int load_libpq(void) {
+    static const char* const candidates[] = {
+#if defined(_WIN32)
+        "libpq.dll",
+#elif defined(__APPLE__)
+        // (Homebrew'un libpq'su sistemin arama yollarında değildir.)
+        "libpq.5.dylib", "/opt/homebrew/opt/libpq/lib/libpq.5.dylib", "/usr/local/opt/libpq/lib/libpq.5.dylib",
+        "/opt/homebrew/lib/libpq.5.dylib", "/usr/local/lib/libpq.5.dylib",
+        "/Applications/Postgres.app/Contents/Versions/latest/lib/libpq.5.dylib",
+#else
+        "libpq.so.5",
+#endif
+        NULL};
+    static const MarlinSymbol symbols[] = {
+#define PQ_SYMBOL(name) {"PQ" #name, &pq.name},
+        PQ_FUNCTIONS(PQ_SYMBOL)
+#undef PQ_SYMBOL
+        {NULL, NULL}};
+#if defined(__APPLE__)
+    const char* hint = "kurulum: brew install libpq";
+#elif defined(_WIN32)
+    const char* hint = "libpq.dll programin yaninda olmali";
+#else
+    const char* hint = "kurulum: Debian/Ubuntu 'sudo apt install libpq5', Fedora 'sudo dnf install libpq'";
+#endif
+    return marlin_rt_load_library(&libpq, "libpq (PostgreSQL istemci kutuphanesi)", "MARLIN_PQ_LIBRARY",
+                                  candidates, symbols, hint);
+}
 
 typedef struct {
     PGconn* pg;
@@ -89,13 +136,17 @@ static void ignore_notice(void* argument, const char* message) {
 }
 
 static Conn* open_conn(const char* conninfo) {
-    PGconn* pg = PQconnectdb(conninfo);
-    if (!pg || PQstatus(pg) != CONNECTION_OK) {
-        set_error(pg ? PQerrorMessage(pg) : "bellek yetersiz");
-        PQfinish(pg);
+    if (!load_libpq()) {
+        set_error(libpq.error);
         return NULL;
     }
-    PQsetNoticeProcessor(pg, ignore_notice, NULL);
+    PGconn* pg = pq.connectdb(conninfo);
+    if (!pg || pq.status(pg) != CONNECTION_OK) {
+        set_error(pg ? pq.errorMessage(pg) : "bellek yetersiz");
+        pq.finish(pg);
+        return NULL;
+    }
+    pq.setNoticeProcessor(pg, ignore_notice, NULL);
     Conn* conn = malloc(sizeof *conn);
     conn->pg = pg;
     mr_mutex_init(&conn->lock);
@@ -103,7 +154,7 @@ static Conn* open_conn(const char* conninfo) {
 }
 
 static void close_conn(Conn* conn) {
-    PQfinish(conn->pg);
+    pq.finish(conn->pg);
     mr_mutex_destroy(&conn->lock);
     free(conn);
 }
@@ -123,7 +174,7 @@ void marlin_postgres_close(int64_t handle) {
 int64_t marlin_postgres_conn_error(int64_t handle) {
     Conn* conn = conn_of(handle, "error");
     mr_mutex_lock(&conn->lock);
-    set_error(PQerrorMessage(conn->pg));
+    set_error(pq.errorMessage(conn->pg));
     mr_mutex_unlock(&conn->lock);
     return marlin_rt_str_from_text(last_error);
 }
@@ -220,7 +271,7 @@ static void params_free(Params* p) {
 // SQL injection olmaz.
 static int64_t run_query(Conn* conn, const char* sql, Params* params) {
     mr_mutex_lock(&conn->lock);
-    PGresult* res = PQexecParams(conn->pg, sql, params->count, NULL,
+    PGresult* res = pq.execParams(conn->pg, sql, params->count, NULL,
                                  (const char* const*)params->values, NULL, NULL, /*text*/ 0);
     mr_mutex_unlock(&conn->lock);
     params_free(params);
@@ -246,10 +297,10 @@ int64_t marlin_postgres_pool_query(int64_t poolHandle, int64_t sql, int64_t para
 int32_t marlin_postgres_command(int64_t connHandle, int64_t sql) {
     Conn* conn = conn_of(connHandle, "command");
     mr_mutex_lock(&conn->lock);
-    PGresult* res = PQexec(conn->pg, marlin_rt_str_data(sql));
+    PGresult* res = pq.exec(conn->pg, marlin_rt_str_data(sql));
     mr_mutex_unlock(&conn->lock);
-    const ExecStatusType status = PQresultStatus(res);
-    PQclear(res);
+    const ExecStatusType status = pq.resultStatus(res);
+    pq.clear(res);
     return status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK;
 }
 
@@ -258,75 +309,75 @@ int32_t marlin_postgres_command(int64_t connHandle, int64_t sql) {
 // ---------------------------------------------------------------------------
 
 int32_t marlin_postgres_result_ok(int64_t r) {
-    const ExecStatusType status = PQresultStatus(result_of(r)->res);
+    const ExecStatusType status = pq.resultStatus(result_of(r)->res);
     return status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK;
 }
 
 int64_t marlin_postgres_result_error(int64_t r) {
     Result* result = result_of(r);
     if (!result->res) return marlin_rt_str_from_text("bellek yetersiz");
-    set_error(PQresultErrorMessage(result->res));
+    set_error(pq.resultErrorMessage(result->res));
     return marlin_rt_str_from_text(last_error);
 }
 
 // SQLSTATE: "23505" tekrarlanan anahtar, "42P01" tablo yok ... Hata yoksa "".
 int64_t marlin_postgres_result_code(int64_t r) {
-    const char* code = PQresultErrorField(result_of(r)->res, PG_DIAG_SQLSTATE);
+    const char* code = pq.resultErrorField(result_of(r)->res, PG_DIAG_SQLSTATE);
     return marlin_rt_str_from_text(code ? code : "");
 }
 
-int64_t marlin_postgres_rows(int64_t r) { return PQntuples(result_of(r)->res); }
-int64_t marlin_postgres_cols(int64_t r) { return PQnfields(result_of(r)->res); }
+int64_t marlin_postgres_rows(int64_t r) { return pq.ntuples(result_of(r)->res); }
+int64_t marlin_postgres_cols(int64_t r) { return pq.nfields(result_of(r)->res); }
 
 // Etkilenen satır sayısı (INSERT / UPDATE / DELETE); yoksa 0.
 int64_t marlin_postgres_affected(int64_t r) {
-    const char* n = PQcmdTuples(result_of(r)->res);
+    const char* n = pq.cmdTuples(result_of(r)->res);
     return n && *n ? atoll(n) : 0;
 }
 
 // Adı verilen sütunun sırası; yoksa -1. (Tırnaksız ad küçük harfe çevrilir:
 // PostgreSQL'in kendi kuralı.)
 int64_t marlin_postgres_column(int64_t r, int64_t name) {
-    return PQfnumber(result_of(r)->res, marlin_rt_str_data(name));
+    return pq.fnumber(result_of(r)->res, marlin_rt_str_data(name));
 }
 
 static void check_cell(PGresult* res, int64_t row, int64_t col) {
-    if (row < 0 || row >= PQntuples(res))
-        marlin_rt_panic("postgres: satir sinir disinda (satir %lld, satir sayisi %d)", (long long)row, PQntuples(res));
-    if (col < 0 || col >= PQnfields(res))
-        marlin_rt_panic("postgres: sutun sinir disinda (sutun %lld, sutun sayisi %d)", (long long)col, PQnfields(res));
+    if (row < 0 || row >= pq.ntuples(res))
+        marlin_rt_panic("postgres: satir sinir disinda (satir %lld, satir sayisi %d)", (long long)row, pq.ntuples(res));
+    if (col < 0 || col >= pq.nfields(res))
+        marlin_rt_panic("postgres: sutun sinir disinda (sutun %lld, sutun sayisi %d)", (long long)col, pq.nfields(res));
 }
 
 int64_t marlin_postgres_column_name(int64_t r, int64_t col) {
     PGresult* res = result_of(r)->res;
-    if (col < 0 || col >= PQnfields(res))
-        marlin_rt_panic("postgres: sutun sinir disinda (sutun %lld, sutun sayisi %d)", (long long)col, PQnfields(res));
-    return marlin_rt_str_from_text(PQfname(res, (int)col));
+    if (col < 0 || col >= pq.nfields(res))
+        marlin_rt_panic("postgres: sutun sinir disinda (sutun %lld, sutun sayisi %d)", (long long)col, pq.nfields(res));
+    return marlin_rt_str_from_text(pq.fname(res, (int)col));
 }
 
 int32_t marlin_postgres_is_null(int64_t r, int64_t row, int64_t col) {
     PGresult* res = result_of(r)->res;
     check_cell(res, row, col);
-    return PQgetisnull(res, (int)row, (int)col);
+    return pq.getisnull(res, (int)row, (int)col);
 }
 
 // Değerin metni (PostgreSQL'in metin biçimi); NULL ise "".
 int64_t marlin_postgres_text(int64_t r, int64_t row, int64_t col) {
     PGresult* res = result_of(r)->res;
     check_cell(res, row, col);
-    return marlin_rt_str_new(PQgetvalue(res, (int)row, (int)col), PQgetlength(res, (int)row, (int)col));
+    return marlin_rt_str_new(pq.getvalue(res, (int)row, (int)col), pq.getlength(res, (int)row, (int)col));
 }
 
 // NULL bir değer sayı / bool olarak okunmak istendi.
 void marlin_postgres_null_value(int64_t r, int64_t row, int64_t col) {
     PGresult* res = result_of(r)->res;
     marlin_rt_panic("postgres: satir %lld, '%s' sutunu NULL; sayi olarak okunamaz (once is_null ile bakin)",
-                    (long long)row, PQfname(res, (int)col));
+                    (long long)row, pq.fname(res, (int)col));
 }
 
 void marlin_postgres_clear(int64_t r) {
     if (!r) return;
     Result* result = (Result*)(intptr_t)r;
-    PQclear(result->res);
+    pq.clear(result->res);
     free(result);
 }

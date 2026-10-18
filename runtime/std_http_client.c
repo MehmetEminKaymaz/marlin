@@ -18,14 +18,57 @@
 // Global durum yoktur (libcurl'ün bir kez yapılan genel hazırlığı dışında).
 // Her istek kendi curl tanıtıcısını kullanır; görevler aynı anda istek
 // gönderebilir.
+//
+// libcurl programa bağlanmaz, ilk istekte yüklenir (marlin_rt_load_library):
+// yüklenemezse istekler ok = yanlış ile döner, error sebebi söyler. Kütüphane
+// derlerken kullanılan başlıklardan eski olabilir; yeni seçenekler
+// reddedilirse eskisine dönülür.
 
 #include "marlin_rt.h"
 #include "http_parser.h"
 #include "platform.h"
 
+// (Eski sürümlerle uyum için kullanılan seçeneklerin "deprecated" uyarıları kapalı.)
+#define CURL_DISABLE_DEPRECATION
 #include <curl/curl.h>
 #include <stdlib.h>
 #include <string.h>
+
+// Kullanılan libcurl fonksiyonları (tipleri curl.h'deki bildirimlerinden).
+#define CURL_FUNCTIONS(X)                                                              \
+    X(global_init) X(easy_init) X(easy_setopt) X(easy_perform) X(easy_getinfo)         \
+    X(easy_cleanup) X(easy_strerror) X(slist_append) X(slist_free_all)
+
+static struct {
+#define CURL_FIELD(name) __typeof__(curl_##name)* name;
+    CURL_FUNCTIONS(CURL_FIELD)
+#undef CURL_FIELD
+} curl_api;
+
+static MarlinLibrary libcurl;
+
+static int load_libcurl(void) {
+    static const char* const candidates[] = {
+#if defined(_WIN32)
+        "libcurl.dll", "libcurl-x64.dll", "libcurl-4.dll",
+#elif defined(__APPLE__)
+        "libcurl.4.dylib", "/usr/lib/libcurl.4.dylib",
+#else
+        "libcurl.so.4", "libcurl-gnutls.so.4",
+#endif
+        NULL};
+    static const MarlinSymbol symbols[] = {
+#define CURL_SYMBOL(name) {"curl_" #name, &curl_api.name},
+        CURL_FUNCTIONS(CURL_SYMBOL)
+#undef CURL_SYMBOL
+        {NULL, NULL}};
+#if defined(_WIN32)
+    const char* hint = "libcurl.dll programin yaninda olmali";
+#else
+    const char* hint = "kurulum: Debian/Ubuntu 'sudo apt install libcurl4', Fedora 'sudo dnf install libcurl'";
+#endif
+    return marlin_rt_load_library(&libcurl, "libcurl", "MARLIN_CURL_LIBRARY", candidates, symbols, hint);
+}
 
 enum {
     MAX_RESPONSE_BYTES = 64 * 1024 * 1024,  // daha büyük yanıt hatadır
@@ -44,10 +87,11 @@ typedef struct {
     char* url;
     struct curl_slist* request_headers;
     int has_expect;            // kullanıcı Expect başlığını kendisi verdi mi?
+    int no_library;            // libcurl yüklenemedi: istek gönderilmez (error'da sebebi)
     long timeout_ms;
     // Yanıt
     int ok;
-    char error[CURL_ERROR_SIZE + 64];
+    char error[CURL_ERROR_SIZE + 512];  // (MarlinLibrary.error da sığar)
     long status;
     char* body;
     size_t body_length, body_capacity;
@@ -69,18 +113,21 @@ static char* copy_text(const char* text, size_t length) {
     return copy;
 }
 
-// libcurl'ün genel hazırlığı programda bir kez yapılır (iş parçacıkları
-// başlamadan önce olması gerekmez: 0 → 1 → 2 geçişi atomiktir).
-static void global_init(void) {
+// libcurl yüklenir ve genel hazırlığı programda bir kez yapılır (iş
+// parçacıkları başlamadan önce olması gerekmez: 0 → 1 → 2 geçişi atomiktir).
+// Kütüphane yüklenemezse 0.
+static int global_init(void) {
+    if (!load_libcurl()) return 0;
     static int state = 0; // 0 yapılmadı, 1 yapılıyor, 2 hazır
-    if (__atomic_load_n(&state, __ATOMIC_ACQUIRE) == 2) return;
+    if (__atomic_load_n(&state, __ATOMIC_ACQUIRE) == 2) return 1;
     int expected = 0;
     if (__atomic_compare_exchange_n(&state, &expected, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) marlin_rt_panic("http.client: libcurl baslatilamadi");
+        if (curl_api.global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) marlin_rt_panic("http.client: libcurl baslatilamadi");
         __atomic_store_n(&state, 2, __ATOMIC_RELEASE);
-        return;
+        return 1;
     }
     while (__atomic_load_n(&state, __ATOMIC_ACQUIRE) != 2) mr_sleep_seconds(0.001);
+    return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,9 +199,12 @@ static size_t on_header(char* data, size_t size, size_t count, void* user) {
 // ---------------------------------------------------------------------------
 
 int64_t marlin_http_client_begin(int64_t method, int64_t url) {
-    global_init();
     Exchange* ex = calloc(1, sizeof *ex);
     if (!ex) marlin_rt_panic("http.client: bellek yetersiz");
+    if (!global_init()) {
+        ex->no_library = 1;
+        snprintf(ex->error, sizeof ex->error, "%s", libcurl.error);
+    }
     const char* m = marlin_rt_str_data(method);
     if (!http_is_token(m, (size_t)marlin_str_len(method)))
         marlin_rt_panic("http.client: gecersiz yontem: \"%s\"", m);
@@ -176,6 +226,7 @@ void marlin_http_client_add_header(int64_t handle, int64_t name, int64_t value) 
         marlin_rt_panic("http.client: '%s' basliginin degeri gecersiz karakter (satir sonu gibi) iceriyor", n);
     HttpSlice slice = {n, nl};
     if (http_equals_ignore_case(slice, "expect")) ex->has_expect = 1;
+    if (ex->no_library) return;
 
     char* line = malloc(nl + vl + 3);
     if (!line) marlin_rt_panic("http.client: bellek yetersiz");
@@ -190,7 +241,7 @@ void marlin_http_client_add_header(int64_t handle, int64_t name, int64_t value) 
         memcpy(line + nl + 2, v, vl);
         line[nl + 2 + vl] = '\0';
     }
-    struct curl_slist* list = curl_slist_append(ex->request_headers, line);
+    struct curl_slist* list = curl_api.slist_append(ex->request_headers, line);
     free(line);
     if (!list) marlin_rt_panic("http.client: bellek yetersiz");
     ex->request_headers = list;
@@ -204,7 +255,8 @@ void marlin_http_client_set_timeout(int64_t handle, double seconds) {
 // İsteği gönderir ve yanıtı okur (yanıt gelene ya da zaman aşımına kadar bekler).
 void marlin_http_client_perform(int64_t handle, int64_t body) {
     Exchange* ex = exchange_of(handle);
-    CURL* curl = curl_easy_init();
+    if (ex->no_library) return;
+    CURL* curl = curl_api.easy_init();
     if (!curl) {
         snprintf(ex->error, sizeof ex->error, "libcurl istegi hazirlayamadi");
         return;
@@ -213,60 +265,64 @@ void marlin_http_client_perform(int64_t handle, int64_t body) {
     // libcurl büyük gövdelerde "Expect: 100-continue" ekler ve sunucunun
     // cevabını bekler; desteklemeyen sunucuda bu bir saniyelik gecikmedir.
     if (!ex->has_expect) {
-        struct curl_slist* list = curl_slist_append(ex->request_headers, "Expect:");
+        struct curl_slist* list = curl_api.slist_append(ex->request_headers, "Expect:");
         if (list) ex->request_headers = list;
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, ex->url);
-    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curlError);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);  // iş parçacıklarında sinyal kullanılmaz
+    curl_api.easy_setopt(curl, CURLOPT_URL, ex->url);
+    curl_api.easy_setopt(curl, CURLOPT_ERRORBUFFER, curlError);
+    curl_api.easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);  // iş parçacıklarında sinyal kullanılmaz
     // Yalnızca http ve https (file://, ftp:// ... değil), yönlendirmede de.
+    // Metin biçimli seçenek libcurl 7.85'te geldi; çalışan kütüphane daha
+    // eskiyse onu tanımaz ve eski (sayı biçimli) seçenek kullanılır.
+    CURLcode protocols = CURLE_UNKNOWN_OPTION;
 #if LIBCURL_VERSION_NUM >= 0x075500
-    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
-    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
-#else
-    curl_easy_setopt(curl, CURLOPT_PROTOCOLS, (long)(CURLPROTO_HTTP | CURLPROTO_HTTPS));
-    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, (long)(CURLPROTO_HTTP | CURLPROTO_HTTPS));
+    protocols = curl_api.easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+    if (protocols == CURLE_OK) curl_api.easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
 #endif
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, (long)MAX_REDIRECTS);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)CONNECT_TIMEOUT_MS);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, ex->timeout_ms);
-    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");  // desteklenen bütün sıkıştırmalar
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "marlin");
+    if (protocols != CURLE_OK) {
+        curl_api.easy_setopt(curl, CURLOPT_PROTOCOLS, (long)(CURLPROTO_HTTP | CURLPROTO_HTTPS));
+        curl_api.easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, (long)(CURLPROTO_HTTP | CURLPROTO_HTTPS));
+    }
+    curl_api.easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_api.easy_setopt(curl, CURLOPT_MAXREDIRS, (long)MAX_REDIRECTS);
+    curl_api.easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)CONNECT_TIMEOUT_MS);
+    curl_api.easy_setopt(curl, CURLOPT_TIMEOUT_MS, ex->timeout_ms);
+    curl_api.easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");  // desteklenen bütün sıkıştırmalar
+    curl_api.easy_setopt(curl, CURLOPT_USERAGENT, "marlin");
 #ifdef _WIN32
     // OpenSSL ile derlenmiş libcurl da Windows'un sertifika deposunu kullansın.
-    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, (long)CURLSSLOPT_NATIVE_CA);
+    curl_api.easy_setopt(curl, CURLOPT_SSL_OPTIONS, (long)CURLSSLOPT_NATIVE_CA);
 #endif
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, ex->request_headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, on_body);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, ex);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, on_header);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, ex);
+    curl_api.easy_setopt(curl, CURLOPT_HTTPHEADER, ex->request_headers);
+    curl_api.easy_setopt(curl, CURLOPT_WRITEFUNCTION, on_body);
+    curl_api.easy_setopt(curl, CURLOPT_WRITEDATA, ex);
+    curl_api.easy_setopt(curl, CURLOPT_HEADERFUNCTION, on_header);
+    curl_api.easy_setopt(curl, CURLOPT_HEADERDATA, ex);
 
     // Yöntem: GET ve HEAD gövdesizdir; diğerleri gövdeyle (boş da olabilir).
     if (strcmp(ex->method, "HEAD") == 0) {
-        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+        curl_api.easy_setopt(curl, CURLOPT_NOBODY, 1L);
     } else if (strcmp(ex->method, "GET") != 0 || marlin_str_len(body) > 0) {
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, marlin_rt_str_data(body));
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)marlin_str_len(body));
-        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, ex->method);
+        curl_api.easy_setopt(curl, CURLOPT_POSTFIELDS, marlin_rt_str_data(body));
+        curl_api.easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)marlin_str_len(body));
+        curl_api.easy_setopt(curl, CURLOPT_CUSTOMREQUEST, ex->method);
     }
 
-    const CURLcode result = curl_easy_perform(curl);
+    const CURLcode result = curl_api.easy_perform(curl);
     if (result == CURLE_OK) {
         ex->ok = 1;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &ex->status);
+        curl_api.easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &ex->status);
     } else if (ex->too_large) {
         snprintf(ex->error, sizeof ex->error, "yanit cok buyuk (en fazla %d MB)", MAX_RESPONSE_BYTES / (1024 * 1024));
     } else {
-        snprintf(ex->error, sizeof ex->error, "%s", curlError[0] ? curlError : curl_easy_strerror(result));
+        snprintf(ex->error, sizeof ex->error, "%s", curlError[0] ? curlError : curl_api.easy_strerror(result));
     }
     if (!ex->ok) {
         clear_headers(ex);
         ex->body_length = 0;
     }
-    curl_easy_cleanup(curl);
+    curl_api.easy_cleanup(curl);
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +362,6 @@ void marlin_http_client_free(int64_t h) {
     free(ex->body);
     free(ex->method);
     free(ex->url);
-    curl_slist_free_all(ex->request_headers);
+    if (ex->request_headers) curl_api.slist_free_all(ex->request_headers);
     free(ex);
 }

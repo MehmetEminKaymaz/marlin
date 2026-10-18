@@ -46,4 +46,27 @@ int64_t marlin_rt_read_line(FILE* stream);
 // Okunacak veri kalmadı mı? (Bir sonraki okuma boş dönecekse doğru.)
 int32_t marlin_rt_at_eof(FILE* stream);
 
+// --- dış C kütüphanesini çalışırken yükleme (marlin_library.c) ---
+// std.postgres (libpq) ve std.http.client (libcurl) bu kütüphanelere
+// bağlanmaz: program kütüphanesi olmayan makinede de açılır, yalnızca modülü
+// kullanınca açıklayıcı bir hata alır.
+
+typedef struct {
+    const char* name;  // sembolün adı; dizinin sonu NULL
+    void* slot;        // adresin yazılacağı fonksiyon işaretçisinin adresi
+} MarlinSymbol;
+
+typedef struct {
+    int state;         // 0 denenmedi, 1 deneniyor, 2 yüklendi, 3 yüklenemedi
+    char error[512];
+} MarlinLibrary;
+
+// İlk çağrıda kütüphaneyi yükleyip sembolleri doldurur (aynı anda çağıran iş
+// parçacıkları sonucu bekler); sonraki çağrılar yalnızca sonucu verir.
+// Başarılıysa 1; değilse 0 ve sebep lib->error'dadır. Aranan yerler: `env`
+// ortam değişkenindeki dosya yolu (verilmişse yalnızca o), sonra sırayla
+// `candidates` (NULL ile biter). `hint`: bulunamazsa önerilen kurulum.
+int marlin_rt_load_library(MarlinLibrary* lib, const char* what, const char* env,
+                           const char* const* candidates, const MarlinSymbol* symbols, const char* hint);
+
 #endif // MARLIN_RT_H

@@ -194,43 +194,33 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Veritabanı sürücüleri dış bir C kütüphanesi kullanır; program yalnızca
-    // o modülü import ediyorsa bağlanır (bkz. CMakeLists.txt).
-    std::vector<std::string> extraLibs;
+    // PostgreSQL sürücüsü ve HTTP istemcisi dış bir C kütüphanesi kullanır.
+    // Program ona bağlanmaz, çalışırken yükler (runtime/marlin_library.c);
+    // Windows'ta kütüphane sistemde bulunmadığı için DLL'i programın yanına
+    // konur (bkz. NativeCodegen::link).
+    std::vector<std::string> sideLibraries;
     for (const Module& module : astRoot->modules) {
-        const char* lib = nullptr;
+        const char* dll = nullptr;
         const char* missing = nullptr;
         if (module.name == "std.postgres") {
-#ifdef MARLIN_PQ_LIB
-            lib = MARLIN_PQ_LIB;
+#ifdef MARLIN_HAVE_POSTGRES
+            dll = "libpq.dll";
 #else
             missing = "libpq (paket: libpq-dev)";
 #endif
-        } else if (module.name == "std.sqlite") {
-#ifdef MARLIN_SQLITE_LIB
-            lib = MARLIN_SQLITE_LIB;
-#else
-            missing = "sqlite3 (paket: libsqlite3-dev)";
-#endif
         } else if (module.name == "std.http.client") {
-#ifdef MARLIN_CURL_LIB
-            lib = MARLIN_CURL_LIB;
+#ifdef MARLIN_HAVE_CURL
+            dll = "libcurl.dll";
 #else
             missing = "libcurl (paket: libcurl4-openssl-dev)";
 #endif
         }
         if (missing) {
             std::cerr << module.name << " kullanilamiyor: derleyici " << missing
-                      << " olmadan derlenmis; kutuphaneyi kurup derleyiciyi yeniden derleyin\n";
+                      << " basliklari olmadan derlenmis; kutuphaneyi kurup derleyiciyi yeniden derleyin\n";
             return 1;
         }
-        // (Yol derleyicinin derlendiği makinededir; hazır paket henüz bu
-        // kütüphaneleri taşımıyor.)
-        if (lib && !llvm::sys::fs::exists(lib)) {
-            std::cerr << module.name << " kullanilamiyor: kutuphane bulunamadi (" << lib << ")\n";
-            return 1;
-        }
-        if (lib) extraLibs.push_back(lib);
+        if (dll) sideLibraries.push_back(dll);
     }
 
     // --- Semantik analiz ---
@@ -367,7 +357,7 @@ int main(int argc, char** argv) {
                                          outputPath.empty() ? marlin::NativeCodegen::defaultExecutableName()
                                                             : outputPath,
                                          generator.usesGpuCode(),
-                                         extraLibs, error);
+                                         sideLibraries, error);
     llvm::sys::fs::remove(objectPath);
     if (!ok) {
         llvm::errs() << error << "\n";

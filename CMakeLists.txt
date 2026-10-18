@@ -255,6 +255,7 @@ add_library(marlinrt STATIC
         runtime/http_parser.h
         runtime/marlin_task.c
         runtime/marlin_async.c
+        runtime/marlin_library.c
         runtime/marlin_map.c
         runtime/marlin_gpu.c
         runtime/marlin_gpu_vulkan.c
@@ -280,45 +281,58 @@ if(MARLIN_DEV_PATHS)
     target_compile_definitions(marlin_lang PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE:marlinrt>")
 endif()
 
-# Veritabanı sürücüleri (isteğe bağlı). Kütüphanesi bulunan sürücü derlenir;
-# bulunmayanı import eden program açık bir hatayla durur. Önce sistem paketleri
-# (libpq-dev, libsqlite3-dev), sonra MARLIN_DEPS_DIR altına yönetici izni
-# olmadan açılmış paketler aranır (apt-get download + dpkg -x).
+# İsteğe bağlı parçalar (aşağıda): başlıkları bulunamayan parça derlenmez.
+# Paket derlemesinde (MARLIN_DEV_PATHS=OFF) eksik parça hatadır: dağıtılan
+# derleyici her zaman eksiksiz olmalı.
+function(marlin_optional_missing what)
+    if(MARLIN_DEV_PATHS)
+        message(STATUS "${what}")
+    else()
+        message(FATAL_ERROR "Paket derlemesi: ${what}")
+    endif()
+endfunction()
+
+# SQLite (std.sqlite): resmi tek dosyalık kaynağı (amalgamation) indirilip
+# çalışma zamanına gömülür; programın dış kütüphaneye ihtiyacı yoktur.
+include(FetchContent)
+set(MARLIN_SQLITE_URL "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip" CACHE STRING
+    "SQLite amalgamation arsivi")
+FetchContent_Declare(sqlite_amalgamation URL ${MARLIN_SQLITE_URL} DOWNLOAD_EXTRACT_TIMESTAMP ON)
+FetchContent_MakeAvailable(sqlite_amalgamation)
+target_sources(marlinrt PRIVATE runtime/std_sqlite.c ${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c)
+target_include_directories(marlinrt PRIVATE ${sqlite_amalgamation_SOURCE_DIR})
+# (Eklenti yükleme kapalı: dlopen'a ve dosyadan kod çalıştırmaya gerek yok.
+# Başkasının kodu: uyarıları bizim çıktımızı boğmasın.)
+set_source_files_properties(${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c PROPERTIES
+        COMPILE_DEFINITIONS "SQLITE_THREADSAFE=1;SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DQS=0"
+        COMPILE_OPTIONS "$<IF:$<C_COMPILER_ID:MSVC>,/w,-w>")
+
+# PostgreSQL (std.postgres: libpq) ve HTTP istemcisi (std.http.client:
+# libcurl): kütüphaneler program çalışırken yüklenir (runtime/marlin_library.c);
+# derlerken yalnızca başlıkları gerekir. Önce sistemin başlıkları, sonra
+# MARLIN_DEPS_DIR altına yönetici izni olmadan açılmış paketler aranır
+# (apt-get download + dpkg -x). (Debian/Ubuntu'da curl başlıkları çok
+# mimarili dizindedir: include/x86_64-linux-gnu/curl.)
 set(MARLIN_DEPS_DIR "$ENV{HOME}/marlin-deps/root/usr" CACHE PATH
-    "Sisteme kurulmadan acilmis kutuphaneler (libpq, sqlite)")
+    "Sisteme kurulmadan acilmis kutuphaneler (libpq, libcurl basliklari)")
 find_path(MARLIN_PQ_INCLUDE libpq-fe.h PATH_SUFFIXES postgresql PATHS ${MARLIN_DEPS_DIR}/include)
-find_library(MARLIN_PQ_LIB NAMES pq libpq PATHS ${MARLIN_DEPS_DIR}/lib/x86_64-linux-gnu)
-if(MARLIN_PQ_INCLUDE AND MARLIN_PQ_LIB)
-    message(STATUS "std.postgres: libpq ${MARLIN_PQ_LIB}")
+if(MARLIN_PQ_INCLUDE)
+    message(STATUS "std.postgres: libpq basliklari ${MARLIN_PQ_INCLUDE}")
     target_sources(marlinrt PRIVATE runtime/std_postgres.c)
     set_source_files_properties(runtime/std_postgres.c PROPERTIES INCLUDE_DIRECTORIES "${MARLIN_PQ_INCLUDE}")
-    target_compile_definitions(marlin_lang PRIVATE MARLIN_PQ_LIB="${MARLIN_PQ_LIB}")
+    target_compile_definitions(marlin_lang PRIVATE MARLIN_HAVE_POSTGRES)
 else()
-    message(STATUS "std.postgres: libpq bulunamadi (libpq-dev); surucu derlenmeyecek")
+    marlin_optional_missing("std.postgres: libpq basliklari bulunamadi (libpq-dev); surucu derlenmeyecek")
 endif()
-find_path(MARLIN_SQLITE_INCLUDE sqlite3.h PATHS ${MARLIN_DEPS_DIR}/include)
-find_library(MARLIN_SQLITE_LIB NAMES sqlite3 libsqlite3.so.0 PATHS ${MARLIN_DEPS_DIR}/lib/x86_64-linux-gnu)
-if(MARLIN_SQLITE_INCLUDE AND MARLIN_SQLITE_LIB)
-    message(STATUS "std.sqlite: ${MARLIN_SQLITE_LIB}")
-    target_sources(marlinrt PRIVATE runtime/std_sqlite.c)
-    set_source_files_properties(runtime/std_sqlite.c PROPERTIES INCLUDE_DIRECTORIES "${MARLIN_SQLITE_INCLUDE}")
-    target_compile_definitions(marlin_lang PRIVATE MARLIN_SQLITE_LIB="${MARLIN_SQLITE_LIB}")
-else()
-    message(STATUS "std.sqlite: sqlite3 bulunamadi (libsqlite3-dev); surucu derlenmeyecek")
-endif()
-
-# HTTP istemcisi (std.http.client): libcurl. (Debian/Ubuntu'da başlıklar
-# çok mimarili dizindedir: include/x86_64-linux-gnu/curl.)
 find_path(MARLIN_CURL_INCLUDE curl/curl.h
         PATHS ${MARLIN_DEPS_DIR}/include ${MARLIN_DEPS_DIR}/include/x86_64-linux-gnu)
-find_library(MARLIN_CURL_LIB NAMES curl libcurl libcurl_imp PATHS ${MARLIN_DEPS_DIR}/lib/x86_64-linux-gnu)
-if(MARLIN_CURL_INCLUDE AND MARLIN_CURL_LIB)
-    message(STATUS "std.http.client: libcurl ${MARLIN_CURL_LIB}")
+if(MARLIN_CURL_INCLUDE)
+    message(STATUS "std.http.client: libcurl basliklari ${MARLIN_CURL_INCLUDE}")
     target_sources(marlinrt PRIVATE runtime/std_http_client.c)
     set_source_files_properties(runtime/std_http_client.c PROPERTIES INCLUDE_DIRECTORIES "${MARLIN_CURL_INCLUDE}")
-    target_compile_definitions(marlin_lang PRIVATE MARLIN_CURL_LIB="${MARLIN_CURL_LIB}")
+    target_compile_definitions(marlin_lang PRIVATE MARLIN_HAVE_CURL)
 else()
-    message(STATUS "std.http.client: libcurl bulunamadi (libcurl4-openssl-dev); istemci derlenmeyecek")
+    marlin_optional_missing("std.http.client: libcurl basliklari bulunamadi (libcurl4-openssl-dev); istemci derlenmeyecek")
 endif()
 
 # GPU'nun Vulkan arka ucu (runtime/marlin_gpu_vulkan.c): yalnızca başlıklar
@@ -333,7 +347,7 @@ if(MARLIN_VULKAN_INCLUDE)
     set_source_files_properties(runtime/marlin_gpu_vulkan.c PROPERTIES
             INCLUDE_DIRECTORIES "${MARLIN_VULKAN_INCLUDE}" COMPILE_DEFINITIONS MARLIN_HAVE_VULKAN)
 else()
-    message(STATUS "GPU: Vulkan basliklari bulunamadi (libvulkan-dev); Vulkan arka ucu derlenmeyecek")
+    marlin_optional_missing("GPU: Vulkan basliklari bulunamadi (libvulkan-dev); Vulkan arka ucu derlenmeyecek")
 endif()
 
 if(MARLIN_DEV_PATHS)
@@ -483,6 +497,20 @@ install(FILES LICENSE README.md DESTINATION . COMPONENT marlin)
 
 set(MARLIN_BUNDLE_LIBRARIES "")
 
+# Windows: libpq ve libcurl sistemde bulunmaz. Paketle gelir; derleyici, bu
+# modülleri kullanan programın yanına DLL'i bağımlılıklarıyla birlikte kopyalar
+# (NativeCodegen::link).
+if(WIN32)
+    foreach(dll libpq.dll libcurl.dll)
+        find_file(MARLIN_DLL_${dll} ${dll} PATHS ${LLVM_TOOLS_BINARY_DIR} NO_DEFAULT_PATH)
+        if(MARLIN_DLL_${dll})
+            list(APPEND MARLIN_BUNDLE_LIBRARIES "${MARLIN_DLL_${dll}}")
+        else()
+            marlin_optional_missing("Paket: ${dll} bulunamadi (${LLVM_TOOLS_BINARY_DIR})")
+        endif()
+    endforeach()
+endif()
+
 # macOS: Vulkan'ı Metal üzerinde gerçekleştiren MoltenVK (GPU kullanan
 # programların yanına kopyalanır; bkz. NativeCodegen.cpp).
 if(APPLE)
@@ -492,7 +520,7 @@ if(APPLE)
         message(STATUS "Paket: MoltenVK ${MARLIN_MOLTENVK_LIB}")
         list(APPEND MARLIN_BUNDLE_LIBRARIES "${MARLIN_MOLTENVK_LIB}")
     else()
-        message(STATUS "Paket: MoltenVK bulunamadi; paketten derlenen GPU programlari macOS'ta CPU'da calisir")
+        marlin_optional_missing("Paket: MoltenVK bulunamadi; paketten derlenen GPU programlari macOS'ta CPU'da calisir")
     endif()
 endif()
 

@@ -104,8 +104,11 @@ void* mr_library_open(const char* name) {
     wchar_t* wide = utf8_to_wide(name);
     if (!wide) return NULL;
     // (Yalnızca sistem dizinlerinde ve programın yanında aranır; çalışma
-    // dizinindeki aynı adlı bir DLL yüklenmez.)
-    HMODULE module = LoadLibraryExW(wide, NULL, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    // dizinindeki aynı adlı bir DLL yüklenmez. Tam yolla verilen DLL'in
+    // bağımlılıkları kendi dizininde de aranır.)
+    DWORD flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+    if (wcschr(wide, L'\\') || wcschr(wide, L'/')) flags |= LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR;
+    HMODULE module = LoadLibraryExW(wide, NULL, flags);
     free(wide);
     return (void*)module;
 }

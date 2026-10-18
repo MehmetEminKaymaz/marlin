@@ -65,7 +65,6 @@ jobs:
             zstd
             libxml2
             libpq
-            sqlite
             libcurl
             libvulkan-headers
             cmake

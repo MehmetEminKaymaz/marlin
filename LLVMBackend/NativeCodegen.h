@@ -42,11 +42,13 @@ public:
     /// `runtimeLib`: marlin çalışma zamanı kütüphanesi (runtimeLibraryName()).
     /// `needsGpu`: program GPU'da çalışan kod içeriyor (macOS'ta MoltenVK
     /// programın yanına kopyalanır).
-    /// `extraLibs`: programın kullandığı standart kütüphane modüllerinin dış C
-    /// kütüphaneleri (tam yol; ör. libpq).
+    /// `sideLibraries`: programın çalışırken yüklediği dış C kütüphaneleri
+    /// (ör. "libpq.dll"). Yalnızca Windows'ta anlamlıdır: orada sistemde
+    /// bulunmazlar, derleyicinin yanındaki (paketteki) kopyaları
+    /// bağımlılıklarıyla birlikte programın yanına konur.
     static bool link(const std::string& objectPath, const std::string& runtimeLib,
                      const std::string& exePath, bool needsGpu,
-                     const std::vector<std::string>& extraLibs, std::string& error);
+                     const std::vector<std::string>& sideLibraries, std::string& error);
 
     /// Çalışma zamanı kütüphanesinin yolunu bulur: önce MARLIN_RUNTIME ortam
     /// değişkeni, sonra derleyicinin yanındaki dosya, sonra kurulu paket
