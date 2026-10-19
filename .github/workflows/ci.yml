@@ -81,8 +81,12 @@ jobs:
             cmake
             ninja
           init-shell: bash
+          # Ortamın kendisi önbellekten gelmez: paketler (önbellekteki
+          # indirmelerden) her seferinde açılır. Lisans metinleri yalnızca
+          # açılan paketlerde (pkgs/<paket>/info/licenses) bulunur;
+          # THIRD_PARTY_NOTICES.txt onlardan üretilir.
           cache-downloads: true
-          cache-environment: true
+          cache-environment: false
 
       # Windows: MSVC ortamı (link.exe, sistem kütüphaneleri) ve clang-cl.
       - uses: ilammy/msvc-dev-cmd@v1

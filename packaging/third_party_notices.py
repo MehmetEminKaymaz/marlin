@@ -72,7 +72,10 @@ def package_dirs(record, prefix):
     return candidates
 
 
-def license_texts(record, prefix):
+def license_texts(record, prefix, report_missing=False):
+    if report_missing:
+        print("third_party_notices: %s icin bakilan yerler: %s" % (record.get("name"), ", ".join(package_dirs(record, prefix))),
+              file=sys.stderr)
     for directory in package_dirs(record, prefix):
         licenses = os.path.join(directory, "info", "licenses")
         if os.path.isdir(licenses):
@@ -126,6 +129,9 @@ def main():
             record, _ = by_name[name]
             texts = license_texts(record, args.conda_prefix)
             if not texts:
+                # (Yalnızca ilk eksik için: nerelere bakıldığı teşhis içindir.)
+                if not any("lisans metni" in m for m in missing):
+                    license_texts(record, args.conda_prefix, report_missing=True)
                 missing.append("%s: lisans metni bulunamadi" % name)
             entries.append((name, record.get("version", ""), record.get("license", "?"),
                             sorted(owners[name]), texts))
