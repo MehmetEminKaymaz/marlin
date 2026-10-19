@@ -276,6 +276,15 @@ add_library(marlinrt STATIC
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_compile_options(marlinrt PRIVATE -Wa,-mrelax-relocations=no)
 endif()
+# Linux: aynı sebeple thread-local değişkenler (_Thread_local) "initial-exec"
+# modeliyle derlenir. Çalışma zamanı her zaman programın kendisine bağlanır
+# (paylaşımlı kütüphane olarak yüklenmez); bu model __tls_get_addr çağırmaz,
+# her ld'nin bildiği basit bir kalıptır. conda'nın gcc'sinin -fno-plt ile
+# ürettiği local-dynamic kalıbını Ubuntu 20.04'ün ld 2.34'ü dönüştüremedi
+# ("TLS transition from R_X86_64_TLSLD to R_X86_64_TPOFF32 failed").
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_options(marlinrt PRIVATE -ftls-model=initial-exec -fplt)
+endif()
 # macOS: sürücülerin (MoltenVK) Objective-C istisnalarını yakalayan küçük parça.
 if(APPLE)
     enable_language(OBJC)
