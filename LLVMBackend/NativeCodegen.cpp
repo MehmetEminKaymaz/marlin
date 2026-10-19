@@ -283,6 +283,17 @@ static bool copyDllWithDependencies(llvm::StringRef name, const std::string& fro
     return true;
 }
 
+std::string NativeCodegen::findLinker(std::string& error) {
+    const bool windows = hostTriple().isOSWindows();
+    const std::vector<const char*> candidates =
+        windows ? std::vector<const char*>{"clang"} : std::vector<const char*>{"cc", "clang", "gcc"};
+    for (const char* name : candidates)
+        if (llvm::ErrorOr<std::string> path = llvm::sys::findProgramByName(name)) return *path;
+    error = windows ? "baglayici bulunamadi (clang PATH'te olmali)"
+                    : "baglayici bulunamadi (cc, clang ya da gcc PATH'te olmali)";
+    return "";
+}
+
 // Bağlayıcı olarak C derleyicisinin sürücüsü çağrılır (cc / clang / gcc): o,
 // platformun sistem kütüphanelerini ve başlangıç dosyalarını kendisi ekler.
 // Windows'ta clang (MSVC hedefinde lld-link ya da link.exe'yi çağırır).
@@ -292,21 +303,11 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
     const llvm::Triple triple = hostTriple();
     const bool windows = triple.isOSWindows();
 
-    llvm::ErrorOr<std::string> linker = std::make_error_code(std::errc::no_such_file_or_directory);
-    const std::vector<const char*> candidates =
-        windows ? std::vector<const char*>{"clang"} : std::vector<const char*>{"cc", "clang", "gcc"};
-    for (const char* name : candidates) {
-        linker = llvm::sys::findProgramByName(name);
-        if (linker) break;
-    }
-    if (!linker) {
-        error = windows ? "baglayici bulunamadi (clang PATH'te olmali)"
-                        : "baglayici bulunamadi (cc, clang ya da gcc PATH'te olmali)";
-        return false;
-    }
+    const std::string linker = findLinker(error);
+    if (linker.empty()) return false;
 
     // Sıra önemli: kütüphaneler, onları kullanan nesne dosyasından sonra gelir.
-    std::vector<std::string> args = {*linker, objectPath, runtimeLib, "-o", exePath};
+    std::vector<std::string> args = {linker, objectPath, runtimeLib, "-o", exePath};
 
     if (windows) {
         llvm::SmallString<256> exeDir(exePath);
@@ -352,7 +353,7 @@ bool NativeCodegen::link(const std::string& objectPath, const std::string& runti
     }
 
     std::vector<llvm::StringRef> argRefs(args.begin(), args.end());
-    int status = llvm::sys::ExecuteAndWait(*linker, argRefs, std::nullopt, {}, 0, 0, &error);
+    int status = llvm::sys::ExecuteAndWait(linker, argRefs, std::nullopt, {}, 0, 0, &error);
     if (status != 0) {
         if (error.empty()) error = "baglama basarisiz (cikis kodu " + std::to_string(status) + ")";
         return false;

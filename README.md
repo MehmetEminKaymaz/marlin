@@ -17,7 +17,7 @@ bin/marlin_lang          derleyici (VS Code'un dil sunucusu da bu)
 lib/marlin/              çalışma zamanı, standart kütüphane (std/), gerekli paylaşımlı kütüphaneler
 ```
 
-`bin` dizinini PATH'e ekle ve `marlin_lang --version` ile dene. Derleyici programı bağlamak için sistemin C derleyicisini kullanır:
+`bin` dizinini PATH'e ekle ve `marlin_lang doctor` çalıştır: kurulumu denetler (bağlayıcı, GPU, kütüphaneler), küçük programlar derleyip çalıştırır ve eksikleri kurulum komutlarıyla yazar. Derleyici programı bağlamak için sistemin C derleyicisini kullanır:
 
 | Sistem | Gereken |
 |---|---|

@@ -177,5 +177,14 @@ else
     bad "dil sunucusu (lsp_test.py)" "$(cat "$TMP/lsp")"
 fi
 
+# Kurulum denetimi (marlin_lang doctor): hata satırı olmamalı. Çıktısı her
+# zaman gösterilir: hangi GPU arka ucunun ve kütüphanelerin bulunduğunu söyler.
+if $TIMEOUT "$COMPILER" doctor > "$TMP/doctor" 2>&1; then
+    ok "kurulum denetimi (doctor)"
+else
+    bad "kurulum denetimi (doctor)" "hata bildirdi"
+fi
+sed 's/^/           /' "$TMP/doctor"
+
 echo "$pass gecti, $fail kaldi$( [ "$skipped" -gt 0 ] && echo ", $skipped atlandi")"
 [ "$fail" -eq 0 ]

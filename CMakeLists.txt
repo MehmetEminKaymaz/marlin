@@ -146,6 +146,8 @@ set(PROJECT_SOURCES
         Lsp/MarlinLsp.h
         Lsp/MarlinCheck.cpp
         Lsp/MarlinCheck.h
+        Tools/Doctor.cpp
+        Tools/Doctor.h
         MLIRBackend/MLIRListManager.cpp
         MLIRBackend/MLIRListManager.h
         MLIRBackend/MLIRRuntime.h

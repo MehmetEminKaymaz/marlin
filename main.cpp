@@ -9,6 +9,7 @@
 #include "LLVMBackend/LLVMLowering.h"
 #include "LLVMBackend/NativeCodegen.h"
 #include "Lsp/MarlinLsp.h"
+#include "Tools/Doctor.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Config/llvm-config.h"
@@ -98,6 +99,7 @@ static const char* const kSampleSource = R"(
 
 static const char* const kUsage =
     "Kullanim: marlin_lang [kaynak.marl] [secenekler]\n"
+    "          marlin_lang doctor   kurulumu denetler (baglayici, GPU, kutuphaneler)\n"
     "  kaynak.marl   derlenecek dosya (verilmezse gomulu ornek program)\n"
     "  -o <dosya>     cikti dosyasi (varsayilan: exe icin a.out, obj icin a.o,\n"
     "                 metin ciktilari icin ekran)\n"
@@ -148,6 +150,7 @@ int main(int argc, char** argv) {
         static int lspAnchor;
         return marlin::runLanguageServer(llvm::sys::fs::getMainExecutable(argv[0], &lspAnchor));
     }
+    if (argc == 2 && std::string(argv[1]) == "doctor") return marlin::runDoctor(argv[0]);
 
     std::string inputPath, outputPath;
     std::vector<std::string> importDirs;

@@ -61,6 +61,10 @@ public:
     /// programlara bağlanan paylaşımlı kütüphaneler). Yoksa boş döner.
     static std::string packageLibraryDir();
 
+    /// Bağlayıcı olarak kullanılan C derleyicisi sürücüsü (Linux/macOS: cc,
+    /// clang, gcc; Windows: clang). Bulunamazsa boş döner, `error` dolar.
+    static std::string findLinker(std::string& error);
+
     /// Çalışma zamanı kütüphanesinin dosya adı: libmarlinrt.a (Linux, macOS,
     /// MinGW), marlinrt.lib (Windows / MSVC).
     static const char* runtimeLibraryName();
