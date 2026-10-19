@@ -33,6 +33,18 @@ contains the third-party software listed below, each under its own license.
 """
 
 
+# Lisans dosyası taşımayan bilinen conda paketleri: conda-forge'da GCC'nin
+# çalışma zamanı kütüphaneleri ayrı paketlerdir ve info/licenses içermez.
+GCC_RUNTIME = """Part of GCC, the GNU Compiler Collection. Licensed under the GNU General
+Public License version 3 with the GCC Runtime Library Exception, version 3.1:
+  https://www.gnu.org/licenses/gpl-3.0.html
+  https://www.gnu.org/licenses/gcc-exception-3.1.html
+Source code: https://gcc.gnu.org/ (conda-forge build:
+https://github.com/conda-forge/ctng-compilers-feedstock)."""
+KNOWN_LICENSES = {name: GCC_RUNTIME for name in
+                  ("libgcc", "libgcc-ng", "libstdcxx", "libstdcxx-ng", "libgomp")}
+
+
 def read_text(path):
     with open(path, encoding="utf-8", errors="replace") as f:
         return f.read().strip()
@@ -128,6 +140,8 @@ def main():
         for name in sorted(owners):
             record, _ = by_name[name]
             texts = license_texts(record, args.conda_prefix)
+            if not texts and name in KNOWN_LICENSES:
+                texts = [KNOWN_LICENSES[name]]
             if not texts:
                 # (Yalnızca ilk eksik için: nerelere bakıldığı teşhis içindir.)
                 if not any("lisans metni" in m for m in missing):
