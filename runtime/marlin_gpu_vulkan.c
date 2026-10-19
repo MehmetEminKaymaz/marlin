@@ -592,6 +592,12 @@ static int detect(void) {
     // MoltenVK varsayılan olarak her açılışta stderr'e onlarca bilgi satırı
     // yazar; kullanıcı istemedikçe yalnızca hatalar.
     setenv("MVK_CONFIG_LOG_LEVEL", "1", /*overwrite=*/0);
+    // Metal "argument buffer"ları kapalı: Intel Mac'te (GitHub'ın sanal
+    // Metal aygıtı) açıkken MoltenVK çekirdek başlatırken süreci abort ile
+    // durduruyordu; abort yakalanamaz, CPU'ya dönülemez. Kapalıyken aynı
+    // aygıtta doğru çalışıyor. Çekirdeklerimiz birkaç tampon kullanır;
+    // argument buffer'a ihtiyaçları yoktur.
+    setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", /*overwrite=*/0);
 #endif
     // Sürücünün başlatılırken çökmesi programı düşürmesin (bkz. platform.h).
     return mr_call_guarded(detect_unguarded);

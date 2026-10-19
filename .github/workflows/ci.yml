@@ -92,6 +92,14 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
 
+      # Linux: derleyici conda'nın derleyici takımıyla derlenir. Takım eski bir
+      # glibc'yi (sysroot) hedefler; böylece paket eski dağıtımlarda da açılır
+      # (sistemin g++'ı makinenin glibc 2.39'una bağlıyordu: Ubuntu 20.04'te
+      # açılmadı). C ve C++ aynı takımla derlenmeli.
+      - name: Derleyici takımı (conda)
+        if: runner.os == 'Linux'
+        run: micromamba install -y -n marlin -c conda-forge c-compiler cxx-compiler
+
       # Linux: CUDA derleme araçları (libdevice, ptxas). Makinede GPU yoktur;
       # ama @GPU kodu GPU için de derlenir ve program çalışırken CPU
       # kopyasına geçer: GPU'ya geri dönüş mekanizmasının kendisi sınanır.
@@ -121,6 +129,11 @@ jobs:
             prefix="$(cygpath -m "$CONDA_PREFIX")/Library"
             echo "MARLIN_CMAKE_EXTRA=-DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl" >> "$GITHUB_ENV"
             echo "MARLIN_EXE=.exe" >> "$GITHUB_ENV"
+          elif [ "$RUNNER_OS" = macOS ]; then
+            # (Varsayılan, derleyen makinenin macOS sürümüdür; paket daha
+            # eski sürümlerde açılmazdı. conda'nın kütüphaneleri de 11'i hedefler.)
+            prefix="$CONDA_PREFIX"
+            echo "MARLIN_CMAKE_EXTRA=-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
           else
             prefix="$CONDA_PREFIX"
           fi
