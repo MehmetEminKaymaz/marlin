@@ -23,6 +23,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVAttributes.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
@@ -259,6 +260,35 @@ LogicalResult liftControlFlow(gpu::GPUModuleOp module) {
     return failure(result.wasInterrupted());
 }
 
+// MLIR 19'un scf.for → SPIR-V dönüşümündeki açık: döngünün sonuçları ilk
+// değeri verilmemiş bir değişkende (Function sınıfı) tutulur ve ona yalnızca
+// döngü gövdesinin sonunda yazılır. Döngü hiç dönmezse (alt sınır ≥ üst
+// sınır) okunan değer tanımsızdır: lavapipe 0 verir, NVIDIA sürücüsü bir
+// önceki değeri (boş matrisin sum'ı 1 çıkıyordu). Sonuç taşıyan her döngü bir
+// koşulun içine alınır; scf.if'in iki dalı da değişkene yazar:
+//   scf.if (alt < üst) { scf.for ... } else { ilk değerler }
+void guardEmptyLoops(gpu::GPUModuleOp module) {
+    llvm::SmallVector<scf::ForOp, 8> loops;
+    module.walk([&](scf::ForOp loop) {
+        if (loop.getNumResults() > 0) loops.push_back(loop);
+    });
+    for (scf::ForOp loop : loops) {
+        OpBuilder b(loop);
+        const Location loc = loop.getLoc();
+        // (scf.for sınırları işaretli karşılaştırır.)
+        Value runs = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, loop.getLowerBound(),
+                                             loop.getUpperBound());
+        auto guard = b.create<scf::IfOp>(loc, loop.getResultTypes(), runs, /*withElseRegion=*/true);
+        loop->replaceAllUsesWith(guard.getResults());
+        Block* thenBlock = guard.thenBlock();
+        loop->moveBefore(thenBlock, thenBlock->end());
+        b.setInsertionPointToEnd(thenBlock);
+        b.create<scf::YieldOp>(loc, loop.getResults());
+        b.setInsertionPointToEnd(guard.elseBlock());
+        b.create<scf::YieldOp>(loc, loop.getInitArgs());
+    }
+}
+
 // Çekirdeklerin derleneceği Vulkan ortamı. Burada izin verilenler üst
 // sınırdır; spirv-update-vce modülün gerçekten kullandıklarını yazar,
 // çalışma zamanı onları aygıtın özellikleriyle karşılaştırır.
@@ -349,6 +379,7 @@ LogicalResult compileModule(gpu::GPUModuleOp copy, ModuleOp scratch, GpuKernelPa
     nested.addPass(arith::createArithExpandOpsPass());
     nested.addPass(createCanonicalizerPass());
     if (failed(prepare.run(scratch))) return failure();
+    guardEmptyLoops(copy);
 
     if (failed(convertToSpirv(copy))) {
         if (error.empty()) error = "SPIR-V'ye cevrilemedi";

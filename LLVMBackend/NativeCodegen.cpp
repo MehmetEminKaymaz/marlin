@@ -258,8 +258,14 @@ static bool copyDllWithDependencies(llvm::StringRef name, const std::string& fro
     llvm::SmallString<256> target(toDir);
     llvm::sys::path::append(target, name);
     // (Program derleyicinin dizinine üretiliyorsa DLL zaten oradadır;
-    // dosyayı kendi üstüne kopyalamak onu boşaltırdı.)
-    if (!llvm::sys::fs::equivalent(source, target)) {
+    // dosyayı kendi üstüne kopyalamak onu boşaltırdı. Aynı dizine daha önce
+    // derlenmiş bir program DLL'i oraya koymuşsa yeniden kopyalanmaz:
+    // Windows yeni yazılan DLL'i bir süre açık tutabilir (virüs taraması) ve
+    // üzerine yazmaya izin vermez.)
+    uint64_t sourceSize = 0, targetSize = 0;
+    const bool sameFile = !llvm::sys::fs::file_size(source, sourceSize) &&
+                          !llvm::sys::fs::file_size(target, targetSize) && sourceSize == targetSize;
+    if (!sameFile && !llvm::sys::fs::equivalent(source, target)) {
         if (std::error_code ec = llvm::sys::fs::copy_file(source, target)) {
             error = std::string(source) + " kopyalanamadi: " + ec.message();
             return false;
