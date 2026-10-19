@@ -72,7 +72,7 @@ std::string ModuleLoader::findStdDir(const std::string& compilerPath) {
     const fs::path beside = compilerDir / "std";
     if (fs::is_directory(beside, ec)) return beside.string();
 
-    // Kurulu paket: <önek>/bin/marlin_lang, <önek>/lib/marlin/std
+    // Kurulu paket: <önek>/bin/marlin, <önek>/lib/marlin/std
     const fs::path package = compilerDir.parent_path() / "lib" / "marlin" / "std";
     if (fs::is_directory(package, ec)) return package.generic_string();
 

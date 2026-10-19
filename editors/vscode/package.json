@@ -89,7 +89,7 @@
         "marlin.compilerPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "`marlin_lang` derleyicisinin yolu. Boşsa önce çalışma alanındaki `cmake-build-debug/marlin_lang`, sonra `PATH` aranır."
+          "markdownDescription": "`marlin` derleyicisinin yolu. Boşsa önce çalışma alanındaki `cmake-build-debug/marlin`, sonra `PATH` aranır."
         },
         "marlin.runArgs": {
           "type": "array",
@@ -100,7 +100,7 @@
         "marlin.languageServer": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Yazarken hataları göstermek için dil sunucusunu (`marlin_lang --lsp`) çalıştır."
+          "markdownDescription": "Yazarken hataları göstermek için dil sunucusunu (`marlin --lsp`) çalıştır."
         }
       }
     }

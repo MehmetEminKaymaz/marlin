@@ -13,6 +13,7 @@ fail=0
 bad() { echo "  HATA  $1"; fail=1; }
 
 [ -d "$root/lib/marlin/std" ] || bad "lib/marlin/std yok"
+[ -s "$root/THIRD_PARTY_NOTICES.txt" ] || bad "THIRD_PARTY_NOTICES.txt (ucuncu taraf lisanslari) yok"
 [ -e "$root/lib/marlin/libmarlinrt.a" ] || [ -e "$root/lib/marlin/marlinrt.lib" ] || bad "calisma zamani kutuphanesi yok"
 
 case "$(uname -s)" in

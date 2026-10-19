@@ -3,12 +3,12 @@
 # CUDA ve CPU'da (istenirse Vulkan'da) TEKRAR kez çalıştırır, en iyi süreyi
 # yazar. Sağlama satırları arka uçlar arasında aynı olmalıdır.
 #
-# Kullanım: bench/olc.sh [marlin_lang] [arka uçlar, varsayılan "cuda cpu"]
+# Kullanım: bench/olc.sh [marlin] [arka uçlar, varsayılan "cuda cpu"]
 #   TEKRAR=5 bench/olc.sh
-#   bench/olc.sh ../cmake-build-debug/marlin_lang "cuda vulkan cpu"
+#   bench/olc.sh ../cmake-build-debug/marlin "cuda vulkan cpu"
 set -u
 cd "$(dirname "$0")"
-COMPILER=${1:-../cmake-build-debug/marlin_lang}
+COMPILER=${1:-../cmake-build-debug/marlin}
 BACKENDS=${2:-cuda cpu}
 TEKRAR=${TEKRAR:-3}
 TMP=$(mktemp -d)

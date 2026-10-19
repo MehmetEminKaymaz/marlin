@@ -14,6 +14,7 @@
 #include "llvm/Support/CodeGen.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/TargetSelect.h"
@@ -283,13 +284,51 @@ static bool copyDllWithDependencies(llvm::StringRef name, const std::string& fro
     return true;
 }
 
+// Windows: clang PATH'te değilse kurulduğu bilinen yerler. Visual Studio
+// (Build Tools dahil) ve LLVM'in kurucusu clang'ı varsayılan olarak PATH'e
+// eklemez. Sırayla: LLVM'in kurucusu (C:\Program Files\LLVM), Visual
+// Studio'nun "C++ Clang tools" bileşeni (yerini Visual Studio'nun kendi aracı
+// vswhere söyler). clang, MSVC kütüphanelerini ve Windows SDK'yı kendisi bulur.
+static std::string findWindowsClang() {
+    for (const char* variable : {"ProgramFiles", "ProgramW6432"}) {
+        if (const char* root = std::getenv(variable)) {
+            llvm::SmallString<256> path(root);
+            llvm::sys::path::append(path, "LLVM", "bin", "clang.exe");
+            if (llvm::sys::fs::exists(path)) return std::string(path);
+        }
+    }
+    const char* x86 = std::getenv("ProgramFiles(x86)");
+    if (!x86) return "";
+    llvm::SmallString<256> vswhere(x86);
+    llvm::sys::path::append(vswhere, "Microsoft Visual Studio", "Installer", "vswhere.exe");
+    if (!llvm::sys::fs::exists(vswhere)) return "";
+    llvm::SmallString<128> output;
+    if (llvm::sys::fs::createTemporaryFile("marlin-vswhere", "txt", output)) return "";
+    const std::string outputPath(output);
+    const llvm::StringRef args[] = {vswhere, "-latest", "-products", "*", "-find", "VC\\Tools\\Llvm\\x64\\bin\\clang.exe"};
+    const std::optional<llvm::StringRef> redirects[] = {llvm::StringRef(""), llvm::StringRef(outputPath),
+                                                        llvm::StringRef("")};
+    std::string found;
+    if (llvm::sys::ExecuteAndWait(vswhere, args, std::nullopt, redirects, 10) == 0) {
+        if (auto buffer = llvm::MemoryBuffer::getFile(outputPath)) {
+            llvm::StringRef first = (*buffer)->getBuffer().split('\n').first.trim();
+            if (!first.empty() && llvm::sys::fs::exists(first)) found = first.str();
+        }
+    }
+    llvm::sys::fs::remove(outputPath);
+    return found;
+}
+
 std::string NativeCodegen::findLinker(std::string& error) {
     const bool windows = hostTriple().isOSWindows();
     const std::vector<const char*> candidates =
         windows ? std::vector<const char*>{"clang"} : std::vector<const char*>{"cc", "clang", "gcc"};
     for (const char* name : candidates)
         if (llvm::ErrorOr<std::string> path = llvm::sys::findProgramByName(name)) return *path;
-    error = windows ? "baglayici bulunamadi (clang PATH'te olmali)"
+    if (windows)
+        if (std::string clang = findWindowsClang(); !clang.empty()) return clang;
+    error = windows ? "baglayici bulunamadi (clang: PATH'te, C:\\Program Files\\LLVM'de ya da Visual Studio'nun "
+                      "'C++ Clang tools' bileseninde aranir)"
                     : "baglayici bulunamadi (cc, clang ya da gcc PATH'te olmali)";
     return "";
 }

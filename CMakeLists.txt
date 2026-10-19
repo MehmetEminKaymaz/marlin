@@ -215,7 +215,7 @@ add_definitions(${LLVM_DEFINITIONS})
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 7. Üretilen AST (cpp ve h) dosyalarını main.cpp ile birlikte derlemeye ekle
-add_executable(marlin_lang
+add_executable(marlin
         main.cpp
         ${ANTLR_GENERATED_SRC}
         ${PROJECT_SOURCES}
@@ -235,7 +235,7 @@ set_source_files_properties(LLVMBackend/GpuOffload.cpp LLVMBackend/ParallelMatmu
 set_source_files_properties(Lsp/MarlinLsp.cpp PROPERTIES COMPILE_OPTIONS "${MARLIN_NO_RTTI}")
 
 # Çalışma zamanı kütüphanesi: derlenen her marlin programına bağlanır (print vb.).
-# Derleyiciyle aynı dizine üretilir; marlin_lang onu yanında arar, bulamazsa
+# Derleyiciyle aynı dizine üretilir; marlin onu yanında arar, bulamazsa
 # aşağıda gömülen yola bakar.
 # std_*.c: standart kütüphane modüllerinin (std/*.marl) C ile yazılmış kısmı.
 # platform_*.c: işletim sistemine dokunan her şey (platform.h); her dosya
@@ -281,16 +281,16 @@ if(APPLE)
     enable_language(OBJC)
     target_sources(marlinrt PRIVATE runtime/platform_apple.m)
 endif()
-add_dependencies(marlin_lang marlinrt)
-target_compile_definitions(marlin_lang PRIVATE MARLIN_VERSION="${PROJECT_VERSION}")
+add_dependencies(marlin marlinrt)
+target_compile_definitions(marlin PRIVATE MARLIN_VERSION="${PROJECT_VERSION}")
 
 # Geliştirme kolaylığı: derleyiciye kaynak ve derleme dizinlerindeki yollar
 # (std/, libmarlinrt.a, LLVM'in kütüphane dizini) gömülür; derleme dizinindeki
-# marlin_lang kurulmadan çalışır. Dağıtılan pakette KAPALI olmalıdır: açıkken
+# marlin kurulmadan çalışır. Dağıtılan pakette KAPALI olmalıdır: açıkken
 # paketteki bir eksik derleme makinesinde fark edilmez (bkz. KURULUM aşağıda).
 option(MARLIN_DEV_PATHS "Derleyiciye kaynak/derleme dizini yollarini gom (gelistirme)" ON)
 if(MARLIN_DEV_PATHS)
-    target_compile_definitions(marlin_lang PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE:marlinrt>")
+    target_compile_definitions(marlin PRIVATE MARLIN_RUNTIME_LIB="$<TARGET_FILE:marlinrt>")
 endif()
 
 # İsteğe bağlı parçalar (aşağıda): başlıkları bulunamayan parça derlenmez.
@@ -332,7 +332,7 @@ if(MARLIN_PQ_INCLUDE)
     message(STATUS "std.postgres: libpq basliklari ${MARLIN_PQ_INCLUDE}")
     target_sources(marlinrt PRIVATE runtime/std_postgres.c)
     set_source_files_properties(runtime/std_postgres.c PROPERTIES INCLUDE_DIRECTORIES "${MARLIN_PQ_INCLUDE}")
-    target_compile_definitions(marlin_lang PRIVATE MARLIN_HAVE_POSTGRES)
+    target_compile_definitions(marlin PRIVATE MARLIN_HAVE_POSTGRES)
 else()
     marlin_optional_missing("std.postgres: libpq basliklari bulunamadi (libpq-dev); surucu derlenmeyecek")
 endif()
@@ -342,7 +342,7 @@ if(MARLIN_CURL_INCLUDE)
     message(STATUS "std.http.client: libcurl basliklari ${MARLIN_CURL_INCLUDE}")
     target_sources(marlinrt PRIVATE runtime/std_http_client.c)
     set_source_files_properties(runtime/std_http_client.c PROPERTIES INCLUDE_DIRECTORIES "${MARLIN_CURL_INCLUDE}")
-    target_compile_definitions(marlin_lang PRIVATE MARLIN_HAVE_CURL)
+    target_compile_definitions(marlin PRIVATE MARLIN_HAVE_CURL)
 else()
     marlin_optional_missing("std.http.client: libcurl basliklari bulunamadi (libcurl4-openssl-dev); istemci derlenmeyecek")
 endif()
@@ -364,24 +364,24 @@ endif()
 
 if(MARLIN_DEV_PATHS)
     # Standart kütüphanenin marlin dosyaları (import std.file → std/file.marl).
-    # marlin_lang önce kurulu paketteki `std` dizinine, sonra buraya bakar.
-    target_compile_definitions(marlin_lang PRIVATE MARLIN_STD_DIR="${CMAKE_CURRENT_SOURCE_DIR}/std")
+    # marlin önce kurulu paketteki `std` dizinine, sonra buraya bakar.
+    target_compile_definitions(marlin PRIVATE MARLIN_STD_DIR="${CMAKE_CURRENT_SOURCE_DIR}/std")
 
     # macOS: MoltenVK conda ortamında LLVM'in kütüphane dizinindedir.
-    target_compile_definitions(marlin_lang PRIVATE MARLIN_LLVM_LIB_DIR="${LLVM_LIBRARY_DIR}")
+    target_compile_definitions(marlin PRIVATE MARLIN_LLVM_LIB_DIR="${LLVM_LIBRARY_DIR}")
 endif()
 
 # 8. ANTLR'ın ürettiği dosyaların ve bulduğumuz sistem başlıklarının yolunu projeye tanıt
-target_include_directories(marlin_lang PRIVATE
+target_include_directories(marlin PRIVATE
         ${ANTLR_OUT_DIR}
         ${ANTLR4_INCLUDE_DIR}
 )
 if(MARLIN_ANTLR_FROM_SOURCE)
-    target_compile_definitions(marlin_lang PRIVATE ANTLR4CPP_STATIC)
+    target_compile_definitions(marlin PRIVATE ANTLR4CPP_STATIC)
 endif()
 
 # 9. MLIR kütüphanelerini ve bulduğumuz ANTLR kütüphanesini (SO/A dosyası) bağla
-target_link_libraries(marlin_lang PRIVATE
+target_link_libraries(marlin PRIVATE
         MLIRIR
         MLIRParser
         MLIRSupport
@@ -426,7 +426,7 @@ target_link_libraries(marlin_lang PRIVATE
         MLIRControlFlowToLLVM
         MLIRReconcileUnrealizedCasts
 
-        # Dil sunucusu (marlin_lang --lsp): MLIR'in LSP altyapısı
+        # Dil sunucusu (marlin --lsp): MLIR'in LSP altyapısı
         MLIRLspServerSupportLib
 
         # CPU'da matris çarpımı çekirdeği: vektör işlemleri → llvm
@@ -471,7 +471,7 @@ target_link_libraries(marlin_lang PRIVATE
 # KURULUM VE PAKET
 #
 # Kurulu düzen (önek = kurulum dizini; paket bu dizinin arşividir):
-#   bin/marlin_lang          derleyici (dil sunucusu da aynı dosya)
+#   bin/marlin          derleyici (dil sunucusu da aynı dosya)
 #   lib/marlin/libmarlinrt.a çalışma zamanı (Windows: marlinrt.lib)
 #   lib/marlin/std/          standart kütüphanenin marlin dosyaları
 #   lib/marlin/              paylaşımlı kütüphaneler: derleyicinin kendi
@@ -479,7 +479,7 @@ target_link_libraries(marlin_lang PRIVATE
 #                            programlarının yanına kopyalanan MoltenVK.
 #                            Windows'ta DLL'ler bin/ içindedir (Windows DLL'i
 #                            çalıştırılabilir dosyanın yanında arar).
-#   LICENSE, README.md
+#   LICENSE, README.md, THIRD_PARTY_NOTICES.txt (üçüncü taraf lisansları)
 # Derleyici bunların hepsini kendi konumuna göre bulur
 # (NativeCodegen::packageLibraryDir), paket istenen dizine açılabilir.
 #
@@ -497,12 +497,12 @@ else()
 endif()
 
 if(APPLE)
-    set_target_properties(marlin_lang PROPERTIES INSTALL_RPATH "@loader_path/../${MARLIN_PKG_LIB}")
+    set_target_properties(marlin PROPERTIES INSTALL_RPATH "@loader_path/../${MARLIN_PKG_LIB}")
 elseif(UNIX)
-    set_target_properties(marlin_lang PROPERTIES INSTALL_RPATH "\$ORIGIN/../${MARLIN_PKG_LIB}")
+    set_target_properties(marlin PROPERTIES INSTALL_RPATH "\$ORIGIN/../${MARLIN_PKG_LIB}")
 endif()
 
-install(TARGETS marlin_lang RUNTIME DESTINATION bin COMPONENT marlin)
+install(TARGETS marlin RUNTIME DESTINATION bin COMPONENT marlin)
 install(TARGETS marlinrt ARCHIVE DESTINATION ${MARLIN_PKG_LIB} COMPONENT marlin)
 install(DIRECTORY std/ DESTINATION ${MARLIN_PKG_LIB}/std COMPONENT marlin)
 install(FILES LICENSE README.md DESTINATION . COMPONENT marlin)
@@ -536,15 +536,49 @@ if(APPLE)
     endif()
 endif()
 
+# Lisans bildirimi (THIRD_PARTY_NOTICES.txt): paylaşımlı kütüphanelerin
+# lisansları conda ortamının kayıtlarından bulunur; derleyiciye statik giren
+# LLVM/MLIR (conda paketleri) ve ANTLR, çalışma zamanına giren SQLite
+# burada adlandırılır. (Python yoksa bildirim üretilmez; paket derlemesinde
+# hatadır.)
+find_package(Python3 COMPONENTS Interpreter)
+if(NOT Python3_FOUND)
+    marlin_optional_missing("Paket: Python 3 bulunamadi; lisans bildirimi (THIRD_PARTY_NOTICES.txt) uretilmeyecek")
+endif()
+set(MARLIN_NOTICES_CONDA_STATIC mlir llvmdev libllvm19 libmlir19 libmlir)
+set(MARLIN_ANTLR_LICENSE "")
+set(MARLIN_ANTLR_NAME "ANTLR 4 C++ runtime")
+if(MARLIN_ANTLR_FROM_SOURCE)
+    set(MARLIN_ANTLR_NAME "ANTLR 4 C++ runtime ${MARLIN_ANTLR_VERSION}")
+    file(GLOB MARLIN_ANTLR_LICENSES "${antlr4_runtime_SOURCE_DIR}/LICENSE*")
+    if(MARLIN_ANTLR_LICENSES)
+        list(GET MARLIN_ANTLR_LICENSES 0 MARLIN_ANTLR_LICENSE)
+    else()
+        marlin_optional_missing("Paket: ANTLR lisans dosyasi bulunamadi (${antlr4_runtime_SOURCE_DIR})")
+    endif()
+endif()
+set(MARLIN_NOTICES_EXTRA
+    "${MARLIN_ANTLR_NAME}|BSD-3-Clause|${MARLIN_ANTLR_LICENSE}"
+    "SQLite (amalgamation)|blessing (public domain)|@The SQLite source code is in the public domain. See https://www.sqlite.org/copyright.html")
+
 # Derleyicinin ve yukarıdaki kütüphanelerin sisteme ait olmayan bağımlılıkları
 # pakete kopyalanır (cmake/BundleDependencies.cmake). Kurulumun en sonunda
 # çalışmalı: macOS'ta değiştirilen dosyaları yeniden imzalar.
+set(MARLIN_NOTICES_STRICT OFF)
+if(NOT MARLIN_DEV_PATHS)
+    set(MARLIN_NOTICES_STRICT ON)
+endif()
 install(CODE "
-    set(MARLIN_BUNDLE_EXECUTABLES \"$<TARGET_FILE:marlin_lang>\")
+    set(MARLIN_BUNDLE_EXECUTABLES \"$<TARGET_FILE:marlin>\")
     set(MARLIN_BUNDLE_LIBRARIES \"${MARLIN_BUNDLE_LIBRARIES}\")
     set(MARLIN_BUNDLE_DIRS \"${LLVM_LIBRARY_DIR};${LLVM_TOOLS_BINARY_DIR}\")
     set(MARLIN_BUNDLE_DEST \"${MARLIN_PKG_SHARED}\")
     set(MARLIN_BUNDLE_RPATH_BIN \"../${MARLIN_PKG_LIB}\")
+    set(MARLIN_NOTICES_PYTHON \"${Python3_EXECUTABLE}\")
+    set(MARLIN_NOTICES_SCRIPT \"${CMAKE_CURRENT_SOURCE_DIR}/packaging/third_party_notices.py\")
+    set(MARLIN_NOTICES_CONDA_STATIC \"${MARLIN_NOTICES_CONDA_STATIC}\")
+    set(MARLIN_NOTICES_EXTRA \"${MARLIN_NOTICES_EXTRA}\")
+    set(MARLIN_NOTICES_STRICT ${MARLIN_NOTICES_STRICT})
 " COMPONENT marlin)
 install(SCRIPT cmake/BundleDependencies.cmake COMPONENT marlin)
 

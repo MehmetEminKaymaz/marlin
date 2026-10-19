@@ -1,4 +1,4 @@
-// marlin_lang doctor — kurulumun denetimi (bkz. Doctor.h).
+// marlin doctor — kurulumun denetimi (bkz. Doctor.h).
 //
 // Denetimler sırayla:
 //   1. paket       std dizini ve çalışma zamanı kütüphanesi bulunuyor mu
@@ -88,9 +88,10 @@ const llvm::Triple& host() {
 // C derleyicisi (bağlayıcı) için kurulum önerisi.
 std::string linkerHint() {
     if (host().isOSWindows())
-        return "Visual Studio Build Tools'u ('C++ ile masaustu gelistirme') ve LLVM'i kurun "
-               "(winget install Microsoft.VisualStudio.2022.BuildTools; winget install LLVM.LLVM); "
-               "clang PATH'te olmali";
+        return "Visual Studio Build Tools'u C++ ve Clang bilesenleriyle kurun: winget install "
+               "Microsoft.VisualStudio.2022.BuildTools --override \"--passive --add "
+               "Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Llvm.Clang "
+               "--includeRecommended\"";
     if (host().isOSDarwin()) return "Xcode Command Line Tools'u kurun: xcode-select --install";
     return "C derleyicisi kurun: Debian/Ubuntu 'sudo apt install build-essential', "
            "Fedora 'sudo dnf install gcc', Arch 'sudo pacman -S base-devel'";

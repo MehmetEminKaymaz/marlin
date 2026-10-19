@@ -6,11 +6,12 @@
 # İşletim sisteminin parçası olanlar kopyalanmaz.
 #
 # Girdiler (install(CODE) ile verilir):
-#   MARLIN_BUNDLE_EXECUTABLES  derleme dizinindeki marlin_lang
+#   MARLIN_BUNDLE_EXECUTABLES  derleme dizinindeki marlin
 #   MARLIN_BUNDLE_LIBRARIES    kendisi de pakete giren kütüphaneler (MoltenVK)
 #   MARLIN_BUNDLE_DIRS         bağımlılıkların aranacağı ek dizinler
 #   MARLIN_BUNDLE_DEST         hedef dizin (önekten göreli)
 #   MARLIN_BUNDLE_RPATH_BIN    bin/'den kütüphane dizinine göreli yol (Linux rpath'i)
+#   MARLIN_NOTICES_*           lisans bildirimi (bkz. aşağıda ve CMakeLists.txt)
 
 # (Kurulum betikleri projenin politikalarını almaz.)
 cmake_policy(VERSION 3.25)
@@ -55,6 +56,27 @@ foreach(dependency IN LISTS resolved)
     # (Linux'ta bulunan yol genellikle sürümlü bağlantıdır; zincir korunur.)
     file(INSTALL "${dependency}" DESTINATION "${dest}" FOLLOW_SYMLINK_CHAIN)
 endforeach()
+
+# Lisans bildirimi: pakete giren üçüncü taraf parçaların lisansları
+# (packaging/third_party_notices.py). Paket derlemesinde metni bulunamayan
+# parça hatadır.
+if(MARLIN_NOTICES_PYTHON)
+    set(strict "")
+    if(MARLIN_NOTICES_STRICT)
+        set(strict --strict)
+    endif()
+    execute_process(
+        COMMAND "${MARLIN_NOTICES_PYTHON}" "${MARLIN_NOTICES_SCRIPT}"
+                --out "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/THIRD_PARTY_NOTICES.txt"
+                --bundled ${MARLIN_BUNDLE_LIBRARIES} ${resolved}
+                --conda-static ${MARLIN_NOTICES_CONDA_STATIC}
+                --extra ${MARLIN_NOTICES_EXTRA}
+                ${strict}
+        RESULT_VARIABLE rc)
+    if(NOT rc EQUAL 0)
+        message(FATAL_ERROR "Paket: lisans bildirimi uretilemedi")
+    endif()
+endif()
 
 # Linux: kütüphaneler yalnızca paketin içinde aranmalı. CMake kurulumda
 # derleyicinin rpath'ine araç takımından gelen dizinleri (ör. conda ortamının

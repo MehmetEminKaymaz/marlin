@@ -13,11 +13,11 @@ Lisans: MIT (bkz. `LICENSE`).
 Her CI çalışması Linux, macOS ve Windows için hazır bir paket üretir (GitHub → Actions → çalışma → *Artifacts*: `marlin-<sürüm>-<sistem>-<mimari>.tar.gz` / `.zip`). Paketi istediğin dizine aç; içindeki düzen:
 
 ```
-bin/marlin_lang          derleyici (VS Code'un dil sunucusu da bu)
+bin/marlin          derleyici (VS Code'un dil sunucusu da bu)
 lib/marlin/              çalışma zamanı, standart kütüphane (std/), gerekli paylaşımlı kütüphaneler
 ```
 
-`bin` dizinini PATH'e ekle ve `marlin_lang doctor` çalıştır: kurulumu denetler (bağlayıcı, GPU, kütüphaneler), küçük programlar derleyip çalıştırır ve eksikleri kurulum komutlarıyla yazar. Derleyici programı bağlamak için sistemin C derleyicisini kullanır:
+`bin` dizinini PATH'e ekle ve `marlin doctor` çalıştır: kurulumu denetler (bağlayıcı, GPU, kütüphaneler), küçük programlar derleyip çalıştırır ve eksikleri kurulum komutlarıyla yazar. Derleyici programı bağlamak için sistemin C derleyicisini kullanır:
 
 | Sistem | Gereken |
 |---|---|
@@ -61,7 +61,7 @@ Gerçek bir Windows `.exe` üretmek mümkün, ama bunun için LLVM'in Windows he
 
 ## 2. Derleyiciyi derlemek
 
-"Derleyici" dediğimiz şey `marlin_lang` adlı programdır. Kaynak kodda (C++ dosyalarında ya da `marlin.g4`'te) bir değişiklik yaptığında onu yeniden derlemen gerekir.
+"Derleyici" dediğimiz şey `marlin` adlı programdır. Kaynak kodda (C++ dosyalarında ya da `marlin.g4`'te) bir değişiklik yaptığında onu yeniden derlemen gerekir.
 
 **CLion ile:** Her zamanki gibi Build (çekiç simgesi). CLion bunu WSL üzerinden yapar.
 
@@ -73,7 +73,7 @@ cmake --build cmake-build-debug -j 6
 
 İlk derleme birkaç dakika sürebilir, sonrakiler yalnızca değişen dosyaları derler. Sonunda iki dosya oluşur:
 
-- `cmake-build-debug/marlin_lang` — derleyici
+- `cmake-build-debug/marlin` — derleyici
 - `cmake-build-debug/libmarlinrt.a` — derlenen programlara eklenen yardımcı kütüphane (`print` bunun içinde)
 
 > Ekrana LLVM başlıklarından gelen çok uzun `TypeRange ... operator==` uyarıları basılır. Bunlar zararsızdır; bizim kodumuzla ilgili değildir. Asıl bakman gereken satır içinde `error` geçenlerdir.
@@ -104,7 +104,7 @@ func main() -> void {
 Derle ve çalıştır:
 
 ```bash
-cmake-build-debug/marlin_lang deneme.marl -o deneme
+cmake-build-debug/marlin deneme.marl -o deneme
 ./deneme
 ```
 
@@ -117,7 +117,7 @@ karekok: 3.1622776601683795
 
 `-o deneme` çıktı dosyasının adını belirler. Vermezsen dosya `a.out` adıyla oluşur.
 
-Hiç dosya vermeden `cmake-build-debug/marlin_lang` çalıştırırsan `main.cpp` içine gömülü örnek program derlenir.
+Hiç dosya vermeden `cmake-build-debug/marlin` çalıştırırsan `main.cpp` içine gömülü örnek program derlenir.
 
 ### Derleme hatası alırsan
 
@@ -157,7 +157,7 @@ Eklentiyi değiştirirsen yeniden paketlemek için (Windows PowerShell'de): `cd 
 ## 4. Derleyicinin seçenekleri
 
 ```
-marlin_lang [kaynak.marl] [secenekler]
+marlin [kaynak.marl] [secenekler]
 ```
 
 | Seçenek | Ne yapar |
@@ -193,13 +193,13 @@ Metin çıktıları `-o` verilmezse ekrana yazılır. Örnekler:
 
 ```bash
 # Üretilen MLIR'e bak
-cmake-build-debug/marlin_lang deneme.marl --emit=mlir
+cmake-build-debug/marlin deneme.marl --emit=mlir
 
 # Optimizasyondan sonra LLVM IR'ı dosyaya yaz
-cmake-build-debug/marlin_lang deneme.marl --emit=llvm-ir -O2 -o deneme.ll
+cmake-build-debug/marlin deneme.marl --emit=llvm-ir -O2 -o deneme.ll
 
 # AST'yi gör
-cmake-build-debug/marlin_lang deneme.marl --print-ast --emit=mlir
+cmake-build-debug/marlin deneme.marl --print-ast --emit=mlir
 ```
 
 ---
@@ -447,7 +447,7 @@ bash tests/pg_test_sunucu.sh dur     # işin bitince
 Sorunu aramak için o tek dosyayı elle derleyip çalıştır:
 
 ```bash
-cmake-build-debug/marlin_lang tests/deneme.marl -o /tmp/deneme && /tmp/deneme
+cmake-build-debug/marlin tests/deneme.marl -o /tmp/deneme && /tmp/deneme
 echo "cikis kodu: $?"
 ```
 
@@ -460,7 +460,7 @@ Sonuç yalnızca `-O2` ile yanlışsa (ya da yalnızca `-O0` ile), `--emit=mlir`
 **Üretilen MLIR'i incelemek.** Bir döngünün yapısal (`scf.for`, `scf.while`) mı yoksa bloklu (`cf.br`) mı üretildiğini görmek için:
 
 ```bash
-cmake-build-debug/marlin_lang tests/break_continue.marl --emit=mlir | grep -E 'scf\.|cf\.'
+cmake-build-debug/marlin tests/break_continue.marl --emit=mlir | grep -E 'scf\.|cf\.'
 ```
 
 Kural: gövdesinde `break` ya da `return` olmayan döngüler `scf` olarak üretilir. Bu, ileride GPU'ya göndereceğimiz döngülerin tanınabilmesi için önemlidir.
@@ -468,7 +468,7 @@ Kural: gövdesinde `break` ya da `return` olmayan döngüler `scf` olarak üreti
 **MLIR araçlarıyla oynamak.** LLVM derlemenle birlikte gelen araçlar `/home/emin/llvm-project/build/bin` dizinindedir. Örneğin ürettiğimiz MLIR'i `mlir-opt` ile kendin dönüştürebilirsin:
 
 ```bash
-cmake-build-debug/marlin_lang deneme.marl --emit=mlir -o deneme.mlir
+cmake-build-debug/marlin deneme.marl --emit=mlir -o deneme.mlir
 /home/emin/llvm-project/build/bin/mlir-opt deneme.mlir --convert-scf-to-cf
 ```
 
@@ -477,8 +477,8 @@ Yeni bir MLIR pass'ini derleyiciye eklemeden önce etkisini görmek için kullan
 **Optimizasyonun etkisini görmek.** Aynı programın `-O0` ve `-O2` LLVM IR'ını karşılaştır:
 
 ```bash
-cmake-build-debug/marlin_lang deneme.marl --emit=llvm-ir -O0 -o o0.ll
-cmake-build-debug/marlin_lang deneme.marl --emit=llvm-ir -O2 -o o2.ll
+cmake-build-debug/marlin deneme.marl --emit=llvm-ir -O0 -o o0.ll
+cmake-build-debug/marlin deneme.marl --emit=llvm-ir -O2 -o o2.ll
 ```
 
 **Çalışma süresini ölçmek.**
@@ -1201,7 +1201,7 @@ print("sure:", time() - once, "saniye");
 
 | Belirti | Sebep ve çözüm |
 |---|---|
-| `marlin_lang: No such file or directory` | Derleyici henüz derlenmemiş ya da yanlış dizindesin. Proje dizinine geç ve 2. bölümdeki derleme komutunu çalıştır. |
+| `marlin: No such file or directory` | Derleyici henüz derlenmemiş ya da yanlış dizindesin. Proje dizinine geç ve 2. bölümdeki derleme komutunu çalıştır. |
 | `bash: ./deneme: cannot execute` ya da Windows'ta açılmıyor | Dosya bir Linux programı. WSL terminalinde `./deneme` ile çalıştır. |
 | `run.sh: $'\r': command not found` | Dosya Windows satır sonlarıyla kaydedilmiş. Düzelt: `sed -i 's/\r$//' tests/run.sh` |
 | `Calisma zamani kutuphanesi (libmarlinrt.a) bulunamadi` | Derleyiciyi `cmake-build-debug` dışına kopyaladıysan kütüphaneyi bulamaz. Yolunu ver: `export MARLIN_RUNTIME=/mnt/c/Users/Eminf/OneDrive/Desktop/MLIRWorkspace/cmake-build-debug/libmarlinrt.a` |
@@ -1256,7 +1256,7 @@ LLVMBackend/        MLIR → çalıştırılabilir dosya
   ParallelMatmul.*    CPU'da matris çarpımını çekirdeklere dağıtır
   NativeCodegen.*     Optimizasyon, nesne dosyası, bağlama
 
-Lsp/                Dil sunucusu (marlin_lang --lsp; editör eklentisi kullanır)
+Lsp/                Dil sunucusu (marlin --lsp; editör eklentisi kullanır)
   MarlinLsp.cpp       LSP mesajları (MLIR'in LSP altyapısı üzerinde)
   MarlinCheck.cpp     belgeyi derleyicinin ön ucuyla (ModuleLoader + Sema) denetler
 
@@ -1306,7 +1306,7 @@ func main() -> void {
 
 3. Derle (ELF dosyasına çevir)
 
-cmake-build-debug/marlin_lang deneme.marl -o deneme
+cmake-build-debug/marlin deneme.marl -o deneme
 
 Hata yoksa ekrana hiçbir şey yazmaz ve dizinde deneme adında bir dosya oluşur. Bu senin çalıştırılabilir ELF dosyan.
 
@@ -1320,6 +1320,6 @@ toplam = 10
 
 Programı değiştirdiğinde 3. ve 4. adımı tekrarlarsın. İkisini tek satırda yapmak istersen:
 
-cmake-build-debug/marlin_lang deneme.marl -o deneme && ./deneme
+cmake-build-debug/marlin deneme.marl -o deneme && ./deneme
 
 3. adımda No such file or directory hatası alırsan derleyicinin kendisi henüz derlenmemiş demektir; önce CLion'da Build'e bas ya da şunu çalıştır:

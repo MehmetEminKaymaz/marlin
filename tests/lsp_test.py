@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# Dil sunucusu (marlin_lang --lsp) testi; run.sh çalıştırır.
+# Dil sunucusu (marlin --lsp) testi; run.sh çalıştırır.
 #
-#   lsp_test.py <marlin_lang>
+#   lsp_test.py <marlin>
 #
 # Bir LSP istemcisi gibi davranır: belge açar, değiştirir, kapatır ve gelen
 # tanılamaları (hataları) beklenenlerle karşılaştırır. Başarılıysa çıkış kodu 0.

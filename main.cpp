@@ -98,8 +98,8 @@ static const char* const kSampleSource = R"(
 )";
 
 static const char* const kUsage =
-    "Kullanim: marlin_lang [kaynak.marl] [secenekler]\n"
-    "          marlin_lang doctor   kurulumu denetler (baglayici, GPU, kutuphaneler)\n"
+    "Kullanim: marlin [kaynak.marl] [secenekler]\n"
+    "          marlin doctor   kurulumu denetler (baglayici, GPU, kutuphaneler)\n"
     "  kaynak.marl   derlenecek dosya (verilmezse gomulu ornek program)\n"
     "  -o <dosya>     cikti dosyasi (varsayilan: exe icin a.out, obj icin a.o,\n"
     "                 metin ciktilari icin ekran)\n"

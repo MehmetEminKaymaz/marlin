@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 // marlin dil sunucusu (Language Server Protocol)
 //
-//   marlin_lang --lsp
+//   marlin --lsp
 //
 // Editörle (VS Code eklentisi: editors/vscode) standart girdi / çıktı
 // üzerinden JSON-RPC ile konuşur. Derleyicinin kendi ön ucunu (ModuleLoader +

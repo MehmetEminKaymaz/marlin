@@ -3,7 +3,7 @@
 //   * Renklendirme, parantez / yorum davranışı ve snippet'ler package.json'da
 //     tanımlıdır (syntaxes/, language-configuration.json, snippets/); kod
 //     gerektirmez.
-//   * Dil sunucusu: derleyicinin kendisi (`marlin_lang --lsp`). Açık .marl
+//   * Dil sunucusu: derleyicinin kendisi (`marlin --lsp`). Açık .marl
 //     belgelerini yazdıkça derleyicinin ön ucuyla denetler ve hataları
 //     gösterir (bkz. Lsp/MarlinLsp.cpp).
 //   * Komutlar: Derle ve Çalıştır, Testleri Çalıştır, Dil Sunucusunu Yeniden Başlat.
@@ -25,10 +25,10 @@ function compilerPath(): string {
     const configured = vscode.workspace.getConfiguration("marlin").get<string>("compilerPath");
     if (configured) return configured;
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
-        const candidate = path.join(folder.uri.fsPath, "cmake-build-debug", "marlin_lang");
+        const candidate = path.join(folder.uri.fsPath, "cmake-build-debug", "marlin");
         if (fs.existsSync(candidate)) return candidate;
     }
-    return "marlin_lang";
+    return "marlin";
 }
 
 // Kabukta güvenli tırnaklama (bash): 'a b' → 'a b', a'b → 'a'\''b'

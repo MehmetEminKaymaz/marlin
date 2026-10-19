@@ -3,7 +3,7 @@
 
 namespace marlin {
 
-/// `marlin_lang doctor`: kurulumu denetler ve eksikleri kurulum önerileriyle
+/// `marlin doctor`: kurulumu denetler ve eksikleri kurulum önerileriyle
 /// yazar. Küçük test programlarını derleyicinin kendisiyle derleyip
 /// çalıştırır; böylece kullanıcının programlarında göreceği sonucu raporlar.
 /// Bir program derlenemiyorsa (hata) 1, değilse (uyarılar olsa da) 0 döner.

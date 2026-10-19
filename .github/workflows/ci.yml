@@ -13,6 +13,13 @@
 # çekirdekleri gerçekten çalıştırılır. Diğer platformlarda program GPU
 # bulamaz ve CPU kopyasına geçer (bkz. tests/run.sh). PostgreSQL sunucusu
 # yalnızca Linux'ta açılabildiği için postgres testi diğerlerinde atlanır.
+#
+# SÜRÜM: `v<sürüm>` etiketi (ör. v0.1.0; CMakeLists.txt'teki sürümle aynı
+# olmalı) gönderilince, bütün platformlar geçerse "release" işi paketleri,
+# SHA256SUMS'u, kurulum betiklerini (packaging/install.sh, install.ps1) ve
+# VS Code eklentisini GitHub Release olarak yayımlar. Dosya adları sürüm
+# içermez; böylece .../releases/latest/download/<ad> adresleri hep son
+# sürümü verir (site ve kurulum betikleri bu adreslere bağlanır).
 
 name: CI
 
@@ -37,8 +44,12 @@ jobs:
         include:
           - name: Linux (x86_64)
             os: ubuntu-24.04
+          - name: Linux (arm64)
+            os: ubuntu-24.04-arm
           - name: macOS (arm64)
             os: macos-14
+          - name: macOS (x86_64)
+            os: macos-15-intel
           - name: Windows (x86_64)
             os: windows-2022
 
@@ -137,8 +148,8 @@ jobs:
           [ "$RUNNER_OS" = Windows ] && root="$(cygpath -u "$root")"
           find "$root" -maxdepth 3 -not -path '*/std/*' | sort
           echo "MARLIN_PACKAGE=$pkg" >> "$GITHUB_ENV"
-          echo "MARLIN_COMPILER=$root/bin/marlin_lang$MARLIN_EXE" >> "$GITHUB_ENV"
-          "$root/bin/marlin_lang$MARLIN_EXE" --version
+          echo "MARLIN_COMPILER=$root/bin/marlin$MARLIN_EXE" >> "$GITHUB_ENV"
+          "$root/bin/marlin$MARLIN_EXE" --version
 
       - uses: actions/upload-artifact@v4
         with:
@@ -150,6 +161,31 @@ jobs:
       # (conda ortamı, derleme dizini) bağlı kalmamalı.
       - name: Paket bağımlılıkları
         run: bash tests/paket_denetle.sh "$(dirname "$(dirname "$MARLIN_COMPILER")")"
+
+      # Kullanıcının çalıştıracağı kurulum betiği, bu paketle (indirmeden):
+      # paketi açar, derleyiciyi yerleştirir ve marlin doctor'ı çalıştırır.
+      - name: Kurulum betiği
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            MARLIN_INSTALL_FROM="$(cygpath -w "$GITHUB_WORKSPACE/$MARLIN_PACKAGE")" \
+            MARLIN_HOME="$(cygpath -w "$RUNNER_TEMP/kurulum")" MARLIN_NO_MODIFY_PATH=1 \
+              pwsh -NoProfile -ExecutionPolicy Bypass -File packaging/install.ps1
+            "$RUNNER_TEMP/kurulum/bin/marlin.exe" --version
+          else
+            MARLIN_INSTALL_FROM="$GITHUB_WORKSPACE/$MARLIN_PACKAGE" MARLIN_HOME="$RUNNER_TEMP/kurulum" \
+              MARLIN_NO_MODIFY_PATH=1 sh packaging/install.sh
+            "$RUNNER_TEMP/kurulum/bin/marlin" --version
+          fi
+
+      # Paket eski dağıtımlarda da açılmalı (conda'nın derleyicisi eski bir
+      # glibc'yi hedefler). Ubuntu 20.04 (glibc 2.31) konteynerinde yalnızca C
+      # derleyicisi kurulur ve marlin doctor çalıştırılır.
+      - name: Eski Linux (Ubuntu 20.04)
+        if: runner.os == 'Linux'
+        run: |
+          root="$(dirname "$(dirname "$MARLIN_COMPILER")")"
+          docker run --rm -v "$root:/marlin:ro" ubuntu:20.04 bash -c \
+            'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq gcc > /dev/null && /marlin/bin/marlin doctor'
 
       # macOS'ta timeout komutu yok; testler takılan programı onunla durdurur.
       - name: coreutils (gtimeout)
@@ -200,13 +236,17 @@ jobs:
             fi
           fi
 
+      # (Makinede PostgreSQL kurulu değilse postgres testi atlanır.)
       - name: PostgreSQL test sunucusu
         if: runner.os == 'Linux'
         run: |
-          sudo systemctl start postgresql.service
-          sudo -u postgres psql -c "CREATE USER marlin WITH PASSWORD 'marlin';"
-          sudo -u postgres psql -c "CREATE DATABASE marlin_test OWNER marlin;"
-          echo "MARLIN_PG_TEST=host=localhost port=5432 dbname=marlin_test user=marlin password=marlin" >> "$GITHUB_ENV"
+          if sudo systemctl start postgresql.service; then
+            sudo -u postgres psql -c "CREATE USER marlin WITH PASSWORD 'marlin';"
+            sudo -u postgres psql -c "CREATE DATABASE marlin_test OWNER marlin;"
+            echo "MARLIN_PG_TEST=host=localhost port=5432 dbname=marlin_test user=marlin password=marlin" >> "$GITHUB_ENV"
+          else
+            echo "::notice::PostgreSQL yok; postgres testi atlanacak"
+          fi
 
       # Windows'ta DLL'ler PATH'te de aranır: conda ortamı PATH'te kalırsa
       # pakette eksik bir DLL fark edilmez.
@@ -233,3 +273,65 @@ jobs:
           done
           ls -la out.* || true
           [ -f out.exe ] && { ./out.exe; echo "program cikis kodu: $?"; } || true
+
+  release:
+    name: Sürüm (GitHub Release)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: paketler
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Dosyalar
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^project(marlin VERSION $version " CMakeLists.txt; then
+            echo "::error::etiket $GITHUB_REF_NAME, CMakeLists.txt'teki surumle ayni degil"; exit 1
+          fi
+          mkdir -p dist
+          # marlin-0.1.0-linux-x86_64.tar.gz -> marlin-linux-x86_64.tar.gz
+          for f in paketler/*/marlin-"$version"-*; do
+            cp "$f" "dist/marlin-${f##*/marlin-$version-}"
+          done
+          cp packaging/install.sh packaging/install.ps1 dist/
+          (cd editors/vscode && npm ci && npm run compile &&
+            npx --yes @vscode/vsce package --skip-license --allow-missing-repository -o "$GITHUB_WORKSPACE/dist/marlin-vscode.vsix")
+          (cd dist && sha256sum * > SHA256SUMS)
+          ls -la dist
+          cat dist/SHA256SUMS
+
+      - name: Yayımla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/latest/download"
+          cat > notlar.md <<EOF
+          ## Install
+
+          **Linux / macOS**
+          \`\`\`sh
+          curl -fsSL $base/install.sh | sh
+          \`\`\`
+
+          **Windows** (PowerShell)
+          \`\`\`powershell
+          irm $base/install.ps1 | iex
+          \`\`\`
+
+          Then run \`marlin doctor\` to check your setup. Programs are linked with your system's C compiler:
+          \`build-essential\` on Linux, Xcode Command Line Tools on macOS, Visual Studio Build Tools (C++ and Clang components) on Windows.
+
+          The VS Code extension is \`marlin-vscode.vsix\` (Extensions panel → … → Install from VSIX).
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* --title "Marlin $version" --notes-file notlar.md

@@ -45,10 +45,10 @@
 # denetlenir. (Aygıtın yapamadığı iş — ör. Apple'da float64 — sebebiyle
 # CPU'ya düşebilir; sebepsiz "cpu" hatadır.)
 #
-# Kullanım: tests/run.sh [marlin_lang yolu]
+# Kullanım: tests/run.sh [marlin yolu]
 
 cd "$(dirname "$0")"
-COMPILER="${1:-../cmake-build-debug/marlin_lang}"
+COMPILER="${1:-../cmake-build-debug/marlin}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -170,14 +170,14 @@ for src in *.marl; do
     done
 done
 
-# Dil sunucusu (editör eklentisinin kullandığı marlin_lang --lsp)
+# Dil sunucusu (editör eklentisinin kullandığı marlin --lsp)
 if $PY lsp_test.py "$COMPILER" > "$TMP/lsp" 2>&1; then
     ok "dil sunucusu (lsp_test.py)"
 else
     bad "dil sunucusu (lsp_test.py)" "$(cat "$TMP/lsp")"
 fi
 
-# Kurulum denetimi (marlin_lang doctor): hata satırı olmamalı. Çıktısı her
+# Kurulum denetimi (marlin doctor): hata satırı olmamalı. Çıktısı her
 # zaman gösterilir: hangi GPU arka ucunun ve kütüphanelerin bulunduğunu söyler.
 if $TIMEOUT "$COMPILER" doctor > "$TMP/doctor" 2>&1; then
     ok "kurulum denetimi (doctor)"
